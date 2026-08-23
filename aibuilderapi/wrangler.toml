@@ -22,3 +22,7 @@ binding = "ASSETS"
 
 [vars]
 OLLAMA_MODEL = "gpt-oss:120b"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
