@@ -18,10 +18,9 @@ HTML/CSS/JS app with a built-in backend (`creat.db`), live-previewed instantly.
 ## Quickstart
 
 ```sh
-cd aibuilder/server
-cp ../.env.example ../.env        # then edit: add your Ollama Cloud key
-npm install
-npm start                         # http://localhost:8787
+cd aibuilder
+cp .env.example .env               # then edit: add your Ollama Cloud key
+npm start                          # http://localhost:8787  (runs aibuilderapi/)
 ```
 
 ## How generated apps store data
@@ -42,18 +41,25 @@ Collections are created lazily — no migrations needed.
 ## Layout
 
 ```
-server/   Hono API (node @hono/node-server locally, Workers-compatible core)
-  src/index.js     entry: routes + static serving of web/
-  src/chat.js      SSE chat proxy to Ollama Cloud
+aibuilderapi/  the API — deployable standalone to Cloudflare Workers (wrangler.toml inside)
+  src/app.js       all routes: chat, projects, models, publish, discover, remix, upload
+  src/chat.js      SSE chat proxy to Ollama Cloud (per-project model selection)
   src/parser.js    streaming <<<FILE:path>>> block parser
   src/prompt.js    system prompt for the generator model
-  src/preview.js   serves generated apps + injects BaaS SDK
+  src/models.js    model catalogue proxy (/api/models)
+  src/preview.js   serves published/generated apps + injects BaaS SDK
   src/baas.js      generic CRUD backend for generated apps
-  src/db.js        SQLite storage (node:sqlite; D1 adapter drop-in later)
-web/      no-build vanilla JS SPA (chat, file tree, live iframe preview)
+  src/store.js     storage interface (async)
+  src/db.js        local backend: node:sqlite
+  src/store-d1.js  Cloudflare D1 backend (same interface)
+  src/index.js     local runner (`npm start`)
+  src/worker.js    Workers entrypoint (D1 + static assets)
+web/      no-build vanilla JS SPA: builder (index.html) + discovery feed (discover.html)
 schema.sql  shared local/D1 schema
-wrangler.toml  dormant Cloudflare config (see comments for go-live steps)
 ```
+
+The API is fully self-contained in `aibuilderapi/` so it can be split into its
+own repo or deployed straight to Workers; `web/` deploys to Pages as-is.
 
 ## Config
 

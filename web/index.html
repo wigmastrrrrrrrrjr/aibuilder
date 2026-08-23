@@ -11,6 +11,9 @@
   <aside id="sidebar">
     <div class="logo">a<span>ibuilder</span></div>
     <button id="newBtn" title="Start a new app">+ New app</button>
+    <label id="uploadBtn" for="uploadInput" title="Upload an existing HTML/JS app">⬆ Upload app</label>
+    <input type="file" id="uploadInput" multiple hidden>
+    <a id="discoverLink" href="/discover.html">🌍 Discover apps</a>
     <div id="projectList"></div>
     <div id="metaBar"></div>
   </aside>
@@ -19,7 +22,10 @@
     <section id="chatPane">
       <header id="chatHeader">
         <span id="projName">New app</span>
-        <button id="delBtn" title="Delete project" hidden>Delete</button>
+        <span class="headerBtns">
+          <button id="publishBtn" title="Publish to the discovery feed" disabled>Publish</button>
+          <button id="delBtn" title="Delete project" hidden>Delete</button>
+        </span>
       </header>
       <div id="messages">
         <div class="empty">
@@ -31,8 +37,13 @@
       </div>
       <div id="activity" hidden><span id="activityText"></span><pre id="rawStream"></pre></div>
       <div id="composer">
-        <textarea id="promptBox" rows="3" placeholder="Describe the app you want…  (Enter to send)"></textarea>
-        <button id="sendBtn">Send</button>
+        <div id="composerTop">
+          <select id="modelSel" title="Model used for generation"></select>
+        </div>
+        <div id="composerMain">
+          <textarea id="promptBox" rows="3" placeholder="Describe the app you want…  (Enter to send)"></textarea>
+          <button id="sendBtn">Send</button>
+        </div>
       </div>
     </section>
 

@@ -5,11 +5,13 @@ const $ = (id) => document.getElementById(id);
 const messagesEl = $('messages'), promptBox = $('promptBox'), sendBtn = $('sendBtn');
 const activityEl = $('activity'), activityText = $('activityText'), rawStream = $('rawStream');
 const fileChips = $('fileChips'), frame = $('previewFrame'), projName = $('projName');
+const modelSel = $('modelSel'), publishBtn = $('publishBtn');
 
 let projectId = null;
 let busy = false;
-let displayText = '';
 let dots = 0;
+let displayText = '';
+let defaultModel = 'gpt-oss:120b';
 
 /* ---------- strip <<<FILE:...>>> blocks from streamed output ---------- */
 function BlockFilter() {
@@ -51,7 +53,6 @@ function BlockFilter() {
 function stripBlocks(text) {
   return text.replace(/<<<FILE:[^>]*>>>[\s\S]*?(<<<END>>>|$)/g, '').trim();
 }
-const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 /* ---------- bubbles & UI helpers ---------- */
 function addUserBubble(text) {
@@ -82,13 +83,38 @@ function refreshPreview(bust) {
   frame.src = `/preview/${projectId}/` + (bust ? `?t=${Date.now()}` : '');
 }
 
+function currentModel() {
+  return modelSel.value || localStorage.getItem('ab.model') || defaultModel;
+}
+
 /* ---------- data loading ---------- */
 async function loadMeta() {
   try {
     const m = await (await fetch('/api/meta')).json();
-    $('metaBar').textContent =
-      `${m.model}${m.hasKey ? '' : '  ·  NO API KEY (.env)'}`;
+    if (m.model) defaultModel = m.model;
+    loadModels();
   } catch { /* ignore */ }
+}
+
+async function loadModels() {
+  try {
+    const r = await fetch('/api/models');
+    const j = await r.json();
+    const names = Array.isArray(j.models) && j.models.length
+      ? j.models
+      : ['gpt-oss:120b', 'gpt-oss:20b'];
+    modelSel.innerHTML = '';
+    for (const n of names.sort()) {
+      const o = document.createElement('option');
+      o.value = n; o.textContent = n;
+      modelSel.appendChild(o);
+    }
+    const saved = localStorage.getItem('ab.model');
+    if (saved && names.includes(saved)) modelSel.value = saved;
+    else modelSel.value = names.includes(defaultModel) ? defaultModel : names[0];
+  } catch {
+    modelSel.innerHTML = `<option>${defaultModel}</option>`;
+  }
 }
 
 async function loadProjects(selectPid) {
@@ -97,7 +123,8 @@ async function loadProjects(selectPid) {
   for (const p of list) {
     const d = document.createElement('div');
     d.className = 'proj' + (p.id === projectId ? ' active' : '');
-    d.textContent = p.name;
+    d.textContent = p.name + (p.published ? ' ·' : '');
+    d.title = p.name + (p.published ? ' (published)' : '');
     d.onclick = () => selectProject(p.id);
     el.appendChild(d);
   }
@@ -108,7 +135,13 @@ async function selectProject(pid) {
   projectId = pid;
   const data = await (await fetch(`/api/projects/${pid}`)).json();
   projName.textContent = data.project.name;
+  document.title = `${data.project.name} — aibuilder`;
+  publishBtn.disabled = false;
+  publishBtn.textContent = data.project.published ? 'Unpublish' : 'Publish';
   $('delBtn').hidden = false;
+  if (data.project.model && [...modelSel.options].some(o => o.value === data.project.model)) {
+    modelSel.value = data.project.model;
+  }
   messagesEl.innerHTML = '';
   for (const m of data.messages) {
     if (m.role === 'user') addUserBubble(m.content);
@@ -122,6 +155,9 @@ async function selectProject(pid) {
 function resetToNew() {
   projectId = null;
   projName.textContent = 'New app';
+  document.title = 'aibuilder';
+  publishBtn.disabled = true;
+  publishBtn.textContent = 'Publish';
   $('delBtn').hidden = true;
   messagesEl.innerHTML = `
     <div class="empty"><h1>Build an app by describing it</h1>
@@ -150,6 +186,9 @@ async function send() {
   activityText.textContent = 'thinking…';
   activityEl.hidden = false;
 
+  const chosen = currentModel();
+  localStorage.setItem('ab.model', chosen);
+
   let chipFiles = [];
   let previewTimer = null;
   const schedulePreview = () => {
@@ -161,7 +200,7 @@ async function send() {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ projectId, message }),
+      body: JSON.stringify({ projectId, message, model: chosen }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
 
@@ -179,15 +218,13 @@ async function send() {
         let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
 
         if (ev.type === 'meta') {
-          if (!projectId) { projectId = ev.projectId; }
+          if (!projectId) projectId = ev.projectId;
           projName.textContent = message.slice(0, 60);
           activityText.textContent = `${ev.model} is building…`;
         } else if (ev.type === 'think') {
           rawStream.textContent = (rawStream.textContent + ev.v).slice(-9000);
           rawStream.scrollTop = rawStream.scrollHeight;
-          if (activityText.textContent.startsWith('thinking')) {
-            activityText.textContent = 'thinking' + '.'.repeat(1 + (dots = (dots + 1) % 4));
-          }
+          activityText.textContent = 'thinking' + '.'.repeat(1 + (dots = (dots + 1) % 4));
         } else if (ev.type === 'token') {
           rawStream.textContent = (rawStream.textContent + ev.v).slice(-9000);
           rawStream.scrollTop = rawStream.scrollHeight;
@@ -214,20 +251,83 @@ async function send() {
   }
 }
 
-/* ---------- wire up ---------- */
-sendBtn.onclick = send;
-$('newBtn').onclick = () => { if (!busy) resetToNew(); };
-$('refreshBtn').onclick = () => refreshPreview(true);
-$('openBtn').onclick = () => projectId && window.open(`/preview/${projectId}/`, '_blank');
-$('delBtn').onclick = async () => {
+/* ---------- publish / upload / delete ---------- */
+publishBtn.addEventListener('click', async () => {
+  if (!projectId || busy) return;
+  const isPub = publishBtn.textContent === 'Unpublish';
+  let description;
+  if (!isPub) description = prompt('Short description shown on the Discover page:') || '';
+  try {
+    const r = await fetch(`/api/projects/${projectId}/publish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ publish: !isPub, description }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const updated = await r.json();
+    publishBtn.textContent = updated.published ? 'Unpublish' : 'Publish';
+    alert(updated.published
+      ? `Published! Shareable link:\n${location.origin}/preview/${updated.id}/`
+      : 'Unpublished.');
+    loadProjects();
+  } catch (e) {
+    alert(`⚠ ${e.message}`);
+  }
+});
+
+$('uploadInput').addEventListener('change', async (e) => {
+  const picked = [...e.target.files];
+  e.target.value = '';
+  if (!picked.length || busy) return;
+
+  const firstRel = picked[0].webkitRelativePath || picked[0].name;
+  const guessName = firstRel.includes('/') ? firstRel.split('/')[0] : firstRel.replace(/\.[^.]+$/, '');
+
+  busy = true;
+  try {
+    const p = await (await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: guessName }),
+    })).json();
+
+    const fd = new FormData();
+    for (const f of picked.slice(0, 300)) {
+      fd.append('files', f, f.webkitRelativePath || f.name);
+    }
+    const res = await fetch(`/api/projects/${p.id}/upload`, { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
+    const out = await res.json();
+    if (out.skipped.length) console.warn('skipped:', out.skipped);
+    resetToNew();
+    await selectProject(p.id);
+  } catch (err) {
+    alert(`⚠ ${err.message}`);
+  } finally {
+    busy = false;
+  }
+});
+
+$('delBtn').addEventListener('click', async () => {
   if (!projectId || !confirm('Delete this project?')) return;
   await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
   await loadProjects(); resetToNew();
-};
+});
+
+/* ---------- wire up ---------- */
+sendBtn.onclick = send;
+modelSel.addEventListener('change', () => localStorage.setItem('ab.model', modelSel.value));
+$('newBtn').onclick = () => { if (!busy) resetToNew(); };
+$('refreshBtn').onclick = () => refreshPreview(true);
+$('openBtn').onclick = () => projectId && window.open(`/preview/${projectId}/`, '_blank');
 promptBox.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 
 loadMeta();
 loadProjects(true);
-resetToNew();
+
+// deep-link: /index.html?project=<id> (used after Remix)
+const wanted = new URLSearchParams(location.search).get('project');
+if (wanted) selectProject(wanted);
+else resetToNew();

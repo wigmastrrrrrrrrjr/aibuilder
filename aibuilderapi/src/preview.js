@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { store } from './db.js';
+import { store } from './store.js';
 
 export const preview = new Hono();
 
@@ -77,20 +77,24 @@ async function serveFile(c, pid, rawPath) {
   if (p === null) return c.text('bad path', 400);
   const target = p === '' ? 'index.html' : p;
 
-  let row = store.getFile(pid, target);
+  let row = await store.getFile(pid, target);
   if (!row && target !== 'index.html') {
-    // directory-style request like css/style -> try common resolutions
-    row = store.getFile(pid, target + '/index.html');
+    row = await store.getFile(pid, target + '/index.html');
   }
   if (!row) {
-    if (!store.getProject(pid)) return c.text('unknown project', 404);
+    if (!(await store.getProject(pid))) return c.text('unknown project', 404);
     if (target === 'index.html') return notYet(c, pid);
     return c.text('not found', 404);
   }
 
   const ext = (target.split('.').pop() || '').toLowerCase();
   const type = MIME[ext] || 'application/octet-stream';
-  const body = type.startsWith('text/html') ? inject(row.content, pid) : row.content;
+  const content = row.encoding === 'base64'
+    ? Buffer.from(row.content, 'base64')
+    : row.content;
+  const body = type.startsWith('text/html') && row.encoding !== 'base64'
+    ? inject(row.content, pid)
+    : content;
   return c.body(body, 200, { 'content-type': type, 'cache-control': 'no-store' });
 }
 

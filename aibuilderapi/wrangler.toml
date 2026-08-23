@@ -1,0 +1,24 @@
+# Cloudflare deployment for aibuilderapi (the API package).
+# Local dev does NOT use wrangler: run `npm start` here instead.
+#
+# Deploy steps:
+#   1. npx wrangler d1 execute aibuilder --remote --file=../schema.sql
+#   2. npx wrangler secret put OLLAMA_API_KEY
+#   3. npx wrangler deploy          (API on Workers, web/ served via Assets)
+
+name = "aibuilderapi"
+main = "src/worker.js"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aibuilder"
+database_id = "637d0000-61e9-4e4d-9332-418b2669cdd1"
+
+# Serve the SPA from the same worker (no separate Pages project needed)
+[assets]
+directory = "../web"
+binding = "ASSETS"
+
+[vars]
+OLLAMA_MODEL = "gpt-oss:120b"

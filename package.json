@@ -1,0 +1,9 @@
+{
+  "name": "aibuilder",
+  "version": "0.2.0",
+  "private": true,
+  "scripts": {
+    "start": "npm --prefix aibuilderapi start",
+    "test": "node --test aibuilderapi/test/"
+  }
+}
