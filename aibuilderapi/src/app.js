@@ -5,20 +5,23 @@ import { chat } from './chat.js';
 import { baas } from './baas.js';
 import { preview, BAAS_SDK_JS } from './preview.js';
 import { models } from './models.js';
+import { getVar } from './env.js';
+import { builtinKey } from './keys.js';
+import { toBase64 } from './base64.js';
 
 export const app = new Hono();
 
 // CORS so web/ can be hosted separately (Pages) from this API (Worker)
-app.use('*', cors());
+  app.use('*', cors());
 
 // ---- meta & models ----------------------------------------------------------
 app.get('/api/meta', (c) =>
   c.json({
-    model: process.env.OLLAMA_MODEL || 'gpt-oss:120b',
-    hasKey: Boolean(process.env.OLLAMA_API_KEY && !process.env.OLLAMA_API_KEY.startsWith('your_')),
+    model: getVar('OLLAMA_MODEL') || 'gemma4:31b',
+    hasKey: Boolean(builtinKey()),
   })
 );
-app.get('/api/models', (c) => models.list(c));
+app.route('/api/models', models);
 
 // ---- projects ----------------------------------------------------------------
 app.get('/api/projects', async (c) => c.json(await store.listProjects()));
@@ -105,8 +108,8 @@ app.post('/api/projects/:pid/upload', async (c) => {
     if (!rel) { skipped.push('(invalid name)'); continue; }
     if (stripRoot) rel = rel.split('/').slice(1).join('/') || `file-${i + 1}.txt`;
     if ((incoming[i].size || 0) > 2 * 1024 * 1024) { skipped.push(rel); continue; }
-    const buf = Buffer.from(await incoming[i].arrayBuffer());
-    await store.saveFile(project.id, rel, buf.toString('base64'), 'base64');
+    const buf = new Uint8Array(await incoming[i].arrayBuffer());
+    await store.saveFile(project.id, rel, toBase64(buf), 'base64');
     saved.push(rel);
   }
   return c.json({ ok: true, saved, skipped });

@@ -1,6 +1,8 @@
 // Per-request API key resolution: user-supplied key (BYOK) wins, otherwise the
 // built-in key from .env/env vars is used. User keys are never persisted server-side.
 
+import { getVar } from './env.js';
+
 export function extractKey(...candidates) {
   for (const k of candidates) {
     if (typeof k !== 'string') continue;
@@ -11,6 +13,6 @@ export function extractKey(...candidates) {
 }
 
 export function builtinKey() {
-  const k = process.env.OLLAMA_API_KEY;
+  const k = getVar('OLLAMA_API_KEY');
   return k && !k.startsWith('your_') ? k : '';
 }

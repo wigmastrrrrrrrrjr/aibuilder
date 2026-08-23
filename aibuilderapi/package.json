@@ -1,10 +1,16 @@
 {
   "name": "aibuilderapi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy",
+    "db:init": "npx wrangler d1 execute aibuilder --remote --file=../schema.sql",
+    "db:init:local": "npx wrangler d1 execute aibuilder --local --file=../schema.sql",
+    "secret:key": "npx wrangler secret put OLLAMA_API_KEY",
+    "tail": "npx wrangler tail"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.0",

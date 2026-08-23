@@ -38,6 +38,28 @@ platform's database):
 
 Collections are created lazily — no migrations needed.
 
+## Deploy to Cloudflare (Workers + static assets)
+
+The API deploys as a single Worker with D1; `web/` is served by the same
+Worker via the assets binding (Pages-style, one origin, no CORS issues).
+
+```sh
+# one-time setup
+npx wrangler login                       # or set CLOUDFLARE_API_TOKEN
+npm run deploy                           # schema → secret → deploy
+
+# afterwards, code-only deploys are instant:
+npm run deploy:code                      # = wrangler deploy
+npm run logs                             # tail production logs
+```
+
+`npm run deploy` runs three steps (see `aibuilderapi/package.json`):
+1. `db:init` — applies `schema.sql` to your D1 database (`aibuilder`)
+2. `secret:key` — prompts for `OLLAMA_API_KEY`
+3. `deploy` — uploads the Worker + `web/` assets using `wrangler.toml`
+
+Local development stays plain Node: `npm start` (no wrangler needed).
+
 ## Layout
 
 ```

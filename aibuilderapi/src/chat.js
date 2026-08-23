@@ -3,6 +3,7 @@ import { store } from './store.js';
 import { FileStreamer } from './parser.js';
 import { systemPrompt } from './prompt.js';
 import { extractKey, builtinKey } from './keys.js';
+import { getVar } from './env.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MODEL_RE = /^[A-Za-z0-9._:+%-]{1,64}$/;
@@ -36,7 +37,7 @@ chat.post('/', async (c) => {
   // model precedence: request > stored on project > env default
   const requested = typeof body.model === 'string' && MODEL_RE.test(body.model) ? body.model : '';
   const model = requested || (project && MODEL_RE.test(project.model || '') ? project.model : '')
-    || process.env.OLLAMA_MODEL || 'gemma4:31b';
+    || getVar('OLLAMA_MODEL') || 'gemma4:31b';
   await store.setModel(pid, model);
 
   const history = (await store.history(pid)).map(m => ({ role: m.role, content: m.content }));
