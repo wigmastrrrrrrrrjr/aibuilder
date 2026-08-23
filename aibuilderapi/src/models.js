@@ -42,7 +42,17 @@ function sortForCoding(names) {
 models.get('/', async (c) => {
   const userKey = extractKey(c.req.header('x-api-key'));
   const key = userKey || builtinKey();
-  if (!key) return c.json({ error: 'OLLAMA_API_KEY missing' }, 500);
+
+  // No key configured at all? Still populate the dropdown with the known
+  // free-tier models so the UI works; chat will surface a clear error.
+  if (!key) {
+    return c.json({
+      models: sortForCoding([...FREE_MODELS]),
+      recommended: recommendedPick([...FREE_MODELS]),
+      freePlanOnly: true,
+      warning: 'server has no OLLAMA_API_KEY secret — set it via: npm --prefix aibuilderapi run secret:key',
+    });
+  }
 
   const bypassFreeFilter = Boolean(userKey) || String(getVar('ALLOW_ALL_MODELS') || '') === '1';
 
