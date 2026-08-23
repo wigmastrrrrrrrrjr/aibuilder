@@ -87,6 +87,35 @@ function currentModel() {
   return modelSel.value || localStorage.getItem('ab.model') || defaultModel;
 }
 
+/* ---------- BYOK (bring your own Ollama API key) ---------- */
+const ownKey = () => localStorage.getItem('ab.key') || '';
+
+function authHeaders(extra) {
+  const h = { ...(extra || {}) };
+  if (ownKey()) h['x-api-key'] = ownKey();
+  return h;
+}
+
+function refreshKeyBtn() {
+  $('keyBtn').classList.toggle('active', Boolean(ownKey()));
+  $('keyBtn').textContent = ownKey() ? '🔑 Own key active' : '🔑 Own API key';
+}
+
+$('keyBtn').addEventListener('click', () => {
+  const cur = ownKey();
+  const input = prompt(
+    'Your personal Ollama Cloud API key.\n' +
+    'Used per-request only, stored in this browser (localStorage), never on the server.\n\n' +
+    'Leave empty to go back to the built-in shared key:',
+    cur,
+  );
+  if (input === null) return; // cancelled
+  if (!input.trim()) localStorage.removeItem('ab.key');
+  else localStorage.setItem('ab.key', input.trim());
+  refreshKeyBtn();
+  loadModels();
+});
+
 /* ---------- data loading ---------- */
 async function loadMeta() {
   try {
@@ -94,26 +123,30 @@ async function loadMeta() {
     if (m.model) defaultModel = m.model;
     loadModels();
   } catch { /* ignore */ }
+  refreshKeyBtn();
 }
 
 async function loadModels() {
   try {
-    const r = await fetch('/api/models');
+    const r = await fetch('/api/models', { headers: authHeaders() });
     const j = await r.json();
     const names = Array.isArray(j.models) && j.models.length
       ? j.models
-      : ['gpt-oss:120b', 'gpt-oss:20b'];
+      : ['gemma4:31b', 'gpt-oss:120b', 'gpt-oss:20b'];
+    const recommended = typeof j.recommended === 'string' && names.includes(j.recommended)
+      ? j.recommended
+      : names[0];
     modelSel.innerHTML = '';
-    for (const n of names.sort()) {
+    for (const n of names) {
       const o = document.createElement('option');
       o.value = n; o.textContent = n;
       modelSel.appendChild(o);
     }
     const saved = localStorage.getItem('ab.model');
     if (saved && names.includes(saved)) modelSel.value = saved;
-    else modelSel.value = names.includes(defaultModel) ? defaultModel : names[0];
+    else modelSel.value = recommended;
   } catch {
-    modelSel.innerHTML = `<option>${defaultModel}</option>`;
+    modelSel.innerHTML = `<option>gpt-oss:120b</option>`;
   }
 }
 
@@ -199,8 +232,11 @@ async function send() {
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ projectId, message, model: chosen }),
+      headers: authHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        projectId, message, model: chosen,
+        apiKey: ownKey() || undefined,
+      }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
 

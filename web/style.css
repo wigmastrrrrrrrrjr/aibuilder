@@ -34,6 +34,12 @@ body {
   background: var(--panel2); color: var(--accent);
   border: 1px solid var(--border); font-weight: 600; margin-bottom: 4px;
 }
+#keyBtn {
+  background: none; border: 1px dashed var(--border); color: var(--muted);
+  font-weight: 600; font-size: 12px;
+}
+#keyBtn:hover { color: var(--text); border-color: var(--accent); }
+#keyBtn.active { color: var(--green); border-color: var(--green); border-style: solid; }
 #projectList { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .proj {
   padding: 7px 9px; border-radius: 7px; cursor: pointer; color: var(--muted);

@@ -63,9 +63,17 @@ own repo or deployed straight to Workers; `web/` deploys to Pages as-is.
 
 ## Config
 
-`.env` (root, gitignored): `OLLAMA_API_KEY`, `OLLAMA_MODEL` (default
-`gpt-oss:120b` — swap to `kimi-k2.7-code` / `qwen3.5:397b` after upgrading your
-Ollama plan), `PORT` (default 8787).
+`.env` (root, gitignored): `OLLAMA_API_KEY`, `OLLAMA_MODEL`, `PORT`,
+`ALLOW_ALL_MODELS`.
+
+- The built-in key powers everyone by default; `/api/models` then shows only
+  free-plan models with `gemma4:31b` auto-recommended for coding.
+- Users can click **🔑 Own API key** to bring their own Ollama Cloud key. It is
+  sent per-request (`x-api-key` header / `apiKey` chat field), kept in browser
+  localStorage, never stored server-side — and unlocks that plan's full model
+  catalogue.
+- After upgrading your Ollama plan, set `ALLOW_ALL_MODELS=1` in `.env` to show
+  every cloud model for the built-in key too.
 
 ## Roadmap
 

@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { store } from './store.js';
 import { FileStreamer } from './parser.js';
 import { systemPrompt } from './prompt.js';
+import { extractKey, builtinKey } from './keys.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MODEL_RE = /^[A-Za-z0-9._:+%-]{1,64}$/;
@@ -9,14 +10,20 @@ const MODEL_RE = /^[A-Za-z0-9._:+%-]{1,64}$/;
 export const chat = new Hono();
 
 chat.post('/', async (c) => {
-  const key = process.env.OLLAMA_API_KEY;
-  if (!key || key.startsWith('your_')) {
-    return c.json({ error: 'OLLAMA_API_KEY missing — copy .env.example to .env and fill it in' }, 500);
-  }
   const body = await c.req.json();
   const message = body?.message;
   if (!message || typeof message !== 'string') {
     return c.json({ error: 'message required' }, 400);
+  }
+
+  // BYOK: a user-supplied key (x-api-key header or body.apiKey) takes priority
+  // over the built-in platform key. It is used for this request only.
+  const key = extractKey(
+    c.req.header('x-api-key'),
+    typeof body.apiKey === 'string' ? body.apiKey : '',
+  ) || builtinKey();
+  if (!key) {
+    return c.json({ error: 'no API key — add one in the UI (🔑) or set OLLAMA_API_KEY in .env' }, 500);
   }
 
   let pid = body.projectId;
@@ -29,7 +36,7 @@ chat.post('/', async (c) => {
   // model precedence: request > stored on project > env default
   const requested = typeof body.model === 'string' && MODEL_RE.test(body.model) ? body.model : '';
   const model = requested || (project && MODEL_RE.test(project.model || '') ? project.model : '')
-    || process.env.OLLAMA_MODEL || 'gpt-oss:120b';
+    || process.env.OLLAMA_MODEL || 'gemma4:31b';
   await store.setModel(pid, model);
 
   const history = (await store.history(pid)).map(m => ({ role: m.role, content: m.content }));
