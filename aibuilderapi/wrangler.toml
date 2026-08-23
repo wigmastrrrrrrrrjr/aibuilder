@@ -12,7 +12,7 @@ compatibility_date = "2026-08-01"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "aibuilder"
+database_name = "aibuildersehdatabase"
 database_id = "637d0000-61e9-4e4d-9332-418b2669cdd1"
 
 # Serve the SPA from the same worker (no separate Pages project needed)
