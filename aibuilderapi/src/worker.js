@@ -37,11 +37,11 @@ export default {
     try {
       return await app.fetch(req, env, ctx);
     } catch (e) {
-      // TEMP: surfacing the stack until the 1101 is diagnosed.
-      return new Response(
-        'WORKER ERROR\n' + ((e && (e.stack || e.message)) || String(e)),
-        { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8' } },
-      );
+      console.error('worker error:', (e && e.stack) || e);
+      return new Response('Internal Server Error', {
+        status: 500,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      });
     }
   },
 };

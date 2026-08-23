@@ -21,7 +21,7 @@ directory = "../web"
 binding = "ASSETS"
 
 [vars]
-OLLAMA_MODEL = "gpt-oss:120b"
+OLLAMA_MODEL = "gemma4:31b"
 
 [observability]
 enabled = true

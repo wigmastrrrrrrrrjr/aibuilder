@@ -5,15 +5,20 @@
 --   );
 
 CREATE TABLE IF NOT EXISTS projects (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  model       TEXT,
+  published   INTEGER NOT NULL DEFAULT 0,
+  slug        TEXT,
+  description TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS files (
   project_id TEXT NOT NULL,
   path       TEXT NOT NULL,
   content    TEXT NOT NULL,
+  encoding   TEXT NOT NULL DEFAULT 'utf8',
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (project_id, path)
 );
