@@ -7,7 +7,7 @@
     "start": "node src/index.js",
     "dev": "npx wrangler dev",
     "deploy": "npx wrangler deploy",
-    "db:init": "npx wrangler d1 execute aibuilder --remote --file=../schema.sql",
+    "db:init": "npx wrangler d1 execute DB --remote --file=../schema.sql",
     "db:init:local": "npx wrangler d1 execute aibuilder --local --file=../schema.sql",
     "secret:key": "npx wrangler secret put OLLAMA_API_KEY",
     "tail": "npx wrangler tail"
