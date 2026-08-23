@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aibuilder</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="logo">a<span>ibuilder</span></div>
+    <button id="newBtn" title="Start a new app">+ New app</button>
+    <div id="projectList"></div>
+    <div id="metaBar"></div>
+  </aside>
+
+  <main id="main">
+    <section id="chatPane">
+      <header id="chatHeader">
+        <span id="projName">New app</span>
+        <button id="delBtn" title="Delete project" hidden>Delete</button>
+      </header>
+      <div id="messages">
+        <div class="empty">
+          <h1>Build an app by describing it</h1>
+          <p>Try: “a todo app with priorities and due dates”,<br>
+             “landing page for my bakery with an order form”,<br>
+             “kanban board with drag and drop”.</p>
+        </div>
+      </div>
+      <div id="activity" hidden><span id="activityText"></span><pre id="rawStream"></pre></div>
+      <div id="composer">
+        <textarea id="promptBox" rows="3" placeholder="Describe the app you want…  (Enter to send)"></textarea>
+        <button id="sendBtn">Send</button>
+      </div>
+    </section>
+
+    <section id="previewPane">
+      <header id="previewHeader">
+        <div id="fileChips"></div>
+        <div>
+          <button id="refreshBtn" title="Reload preview">↻</button>
+          <button id="openBtn" title="Open in new tab">↗</button>
+        </div>
+      </header>
+      <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
+              src="about:blank"></iframe>
+    </section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

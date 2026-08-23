@@ -1,0 +1,22 @@
+# Cloudflare config — DORMANT until you set up the CF integration.
+# Local dev does not use wrangler at all (plain `npm start`).
+#
+# Go-live steps when ready:
+#   1. npx wrangler d1 create aibuilder  -> paste database_id below, uncomment block
+#   2. npx wrangler d1 execute aibuilder --file=./schema.sql --remote
+#   3. Swap server/src/db.js to the D1 adapter (same SQL, D1Database binding)
+#   4. Deploy API:      npx wrangler deploy            (Workers)
+#      Deploy web/:     Pages project rooted at web/   (static, no build)
+#   5. Secrets:         npx wrangler secret put OLLAMA_API_KEY
+
+name = "aibuilder"
+compatibility_date = "2026-08-01"
+main = "server/src/index.js"
+
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "aibuilder"
+# database_id = "PASTE_AFTER_D1_CREATE"
+
+[vars]
+OLLAMA_MODEL = "gpt-oss:120b"
