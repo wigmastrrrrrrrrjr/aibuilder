@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_project ON messages (project_id, created_at);
+CREATE TABLE IF NOT EXISTS events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  pid TEXT NOT NULL, room TEXT NOT NULL, data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_events_room ON events (pid, room, seq);
 `);
 
 function ensureColumn(table, colDef) {
@@ -132,6 +137,24 @@ useStore({
       `SELECT role, content FROM messages WHERE project_id = ?
        ORDER BY created_at DESC LIMIT ?`
     ).all(pid, limit).reverse();
+  },
+
+  // ---- live event log (multiplayer) ---------------------------------------
+  async appendEvent(pid, room, data) {
+    const r = db.prepare('INSERT INTO events (pid, room, data) VALUES (?, ?, ?)')
+      .run(pid, room, JSON.stringify(data ?? {}));
+    return Number(r.lastInsertRowid);
+  },
+  async currentSeq(pid, room) {
+    const r = db.prepare(
+      'SELECT COALESCE(MAX(seq), 0) AS s FROM events WHERE pid = ? AND room = ?'
+    ).get(pid, room);
+    return r.s;
+  },
+  async eventsSince(pid, room, since) {
+    return db.prepare(
+      'SELECT seq, data FROM events WHERE pid = ? AND room = ? AND seq > ? ORDER BY seq LIMIT 60'
+    ).all(pid, room, since).map((r) => ({ ...JSON.parse(r.data), seq: r.seq }));
   },
 
   // ---- BaaS (lazy per-collection tables; JSON rows) ----------------------

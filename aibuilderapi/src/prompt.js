@@ -19,6 +19,16 @@ A backend SDK is auto-injected as global \`creat.db\`. NEVER write localStorage-
 
 Rules: collection names are lowercase letters/digits/underscore, max 40 chars. Values must be JSON-safe. Collections are created automatically on first insert — never ask the user to create them. Always handle the async calls with await and show loading/error states where sensible.
 
+## Live multiplayer (use whenever the user wants realtime/multiplayer/shared state)
+The SDK also provides live sync between everyone viewing the app at the same time:
+
+  var stop = creat.live(collection, function (evt) { ... });  // subscribe to remote events for a collection
+  stop.close();                                               // unsubscribe
+  creat.push(collection, { type: 'move', ... });              // broadcast an event to all viewers
+
+Events are delivered to EVERY connected viewer, including the one who pushed. Simplest always-correct pattern: after any creat.db insert/update/remove call creat.push(collection, { type: 'rows' }), and in the creat.live handler re-render from await creat.db.list(collection) whenever evt.type === 'rows'. For low-latency stuff (game moves, cursors) also push typed payloads ({ type:'move', ... }) and apply them directly.
+Use it for: chat apps, multiplayer games/tic-tac-toe, shared whiteboards/counters, live polls, collaborative lists, "see who else is here" indicators.
+
 ## Output protocol (CRITICAL)
 Whenever you create or modify a file, output it EXACTLY like this:
 

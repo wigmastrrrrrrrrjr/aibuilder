@@ -8,6 +8,7 @@ import { models } from './models.js';
 import { getVar } from './env.js';
 import { builtinKey } from './keys.js';
 import { toBase64 } from './base64.js';
+import { live } from './live.js';
 
 export const app = new Hono();
 
@@ -122,6 +123,7 @@ function cleanUploadPath(name) {
 }
 
 app.route('/api/chat', chat);
+app.route('/', live);
 app.route('/api/baas', baas);
 app.route('/preview', preview);
 

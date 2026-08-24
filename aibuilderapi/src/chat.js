@@ -128,6 +128,10 @@ chat.post('/', async (c) => {
         }
         if (raw.trim()) await store.addMessage(pid, 'assistant', raw);
         send({ type: 'done', projectId: pid, files: written, model });
+        // co-build: tell everyone else watching this project that it changed
+        try {
+          await store.appendEvent(pid, 'build', { type: 'refresh', sid: body.sid || '', files: written });
+        } catch { /* live layer is best-effort */ }
       } catch (e) {
         if (!ac.signal.aborted) {
           send({ type: 'error', message: String(e.message || e) });

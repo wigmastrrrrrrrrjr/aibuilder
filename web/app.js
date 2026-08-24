@@ -14,6 +14,11 @@ const modelSel = $('modelSel'), publishBtn = $('publishBtn');
 let projectId = null;
 let busy = false;
 let dots = 0;
+const SID = (() => {
+  let s = localStorage.getItem('ab.sid');
+  if (!s) { s = Math.random().toString(36).slice(2, 10); localStorage.setItem('ab.sid', s); }
+  return s;
+})();
 let displayText = '';
 let defaultModel = 'gpt-oss:120b';
 
@@ -187,6 +192,7 @@ async function selectProject(pid) {
   setChips(data.files);
   refreshPreview(false);
   loadProjects();
+  watchProject(pid);
 }
 
 function resetToNew() {
@@ -203,7 +209,21 @@ function resetToNew() {
        “kanban board with drag and drop”.</p></div>`;
   setChips([]);
   frame.src = 'about:blank';
+  watchProject(null);
   promptBox.focus();
+}
+
+/* ---------- co-build: live sync when others change this project ---------- */
+let liveSrc = null;
+function watchProject(pid) {
+  if (liveSrc) { liveSrc.close(); liveSrc = null; }
+  if (!pid || typeof EventSource === 'undefined') return;
+  liveSrc = new EventSource(`${API}/api/projects/${pid}/live/build/stream`);
+  liveSrc.onmessage = (e) => {
+    let m; try { m = JSON.parse(e.data); } catch { return; }
+    if (m.type !== 'refresh' || m.sid === SID) return;
+    if (!busy) selectProject(pid);
+  };
 }
 
 /* ---------- chat streaming ---------- */
@@ -240,6 +260,7 @@ async function send() {
       body: JSON.stringify({
         projectId, message, model: chosen,
         apiKey: ownKey() || undefined,
+        sid: SID,
       }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);

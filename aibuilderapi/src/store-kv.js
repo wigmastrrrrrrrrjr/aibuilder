@@ -161,6 +161,27 @@ export function createKvStore(kv) {
       return tail.map((m) => ({ role: m.role, content: m.content }));
     },
 
+    // ---- live event log (multiplayer) --------------------------------------
+    async appendEvent(pid, room, data) {
+      const seq = ((await kv.get(['seq', pid, room])).value ?? 0) + 1;
+      await kv.atomic()
+        .set(['seq', pid, room], seq)
+        .set(['evt', pid, room, seq], { ...(data || {}), seq })
+        .commit();
+      return seq;
+    },
+    async currentSeq(pid, room) {
+      return (await kv.get(['seq', pid, room])).value ?? 0;
+    },
+    async eventsSince(pid, room, since) {
+      const out = [];
+      for await (const e of kv.list({ prefix: ['evt', pid, room] })) {
+        if (e.value.seq > since) out.push(e.value);
+      }
+      out.sort((a, b) => a.seq - b.seq);
+      return out.slice(0, 60);
+    },
+
     baasTable(pid, coll) {
       if (!/^[a-z][a-z0-9_]{0,39}$/.test(coll)) return null;
       return `${String(pid).replace(/[^a-zA-Z0-9]/g, '')}_${coll}`;

@@ -6,6 +6,7 @@ export const preview = new Hono();
 
 export const BAAS_SDK_JS = `(function () {
   var base = '/api/baas/' + window.__CREAT_PROJECT__;
+  var pid = window.__CREAT_PROJECT__;
   function req(method, parts, body) {
     return fetch([base].concat(parts.filter(Boolean)).join('/'), {
       method: method,
@@ -26,6 +27,20 @@ export const BAAS_SDK_JS = `(function () {
       get:     function (c, id)    { return req('GET', [c, id]); },
       update:  function (c, id, p) { return req('PUT', [c, id], p); },
       remove:  function (c, id)    { return req('DELETE', [c, id]); }
+    },
+    live: function (coll, cb) {
+      var es = new EventSource('/api/projects/' + pid + '/live/baas-' + coll + '/stream');
+      es.onmessage = function (ev) {
+        try { cb(JSON.parse(ev.data)); } catch (e) {}
+      };
+      return { close: function () { es.close(); } };
+    },
+    push: function (coll, evt) {
+      fetch('/api/projects/' + pid + '/live/baas-' + coll + '/push', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(evt || {})
+      });
     }
   };
 })();`;
