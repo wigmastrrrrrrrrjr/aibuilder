@@ -162,7 +162,7 @@ async function loadProjects(selectPid) {
     d.className = 'proj' + (p.id === projectId ? ' active' : '');
     d.textContent = p.name + (p.published ? ' ·' : '');
     d.title = p.name + (p.published ? ' (published)' : '');
-    d.onclick = () => selectProject(p.id);
+    d.onclick = () => { selectProject(p.id); setDrawer(false); };
     el.appendChild(d);
   }
   if (selectPid && list.some(p => p.id === selectPid)) selectProject(selectPid);
@@ -371,3 +371,25 @@ loadProjects(true);
 const wanted = new URLSearchParams(location.search).get('project');
 if (wanted) selectProject(wanted);
 else resetToNew();
+
+/* ---------- mobile drawer: swipe from left edge (or tap ☰) for history ---------- */
+const sidebar = $('sidebar'), scrim = $('scrim'), menuBtn = $('menuBtn');
+function setDrawer(open) {
+  sidebar.classList.toggle('open', open);
+  scrim.hidden = !open;
+}
+menuBtn.onclick = () => setDrawer(!sidebar.classList.contains('open'));
+scrim.onclick = () => setDrawer(false);
+
+let edgeX = null;
+document.addEventListener('touchstart', (e) => {
+  const t = e.touches[0];
+  edgeX = t.clientX < 28 ? t.clientX : null;
+}, { passive: true });
+document.addEventListener('touchmove', (e) => {
+  if (edgeX === null) return;
+  const t = e.touches[0];
+  if (t.clientX - edgeX > 56) { setDrawer(true); edgeX = null; }
+}, { passive: true });
+document.addEventListener('touchend', () => { edgeX = null; }, { passive: true });
+document.addEventListener('touchcancel', () => { edgeX = null; }, { passive: true });

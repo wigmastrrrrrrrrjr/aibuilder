@@ -122,9 +122,27 @@ body {
 #refreshBtn:hover, #openBtn:hover { color: var(--text); border-color: var(--accent); }
 #previewFrame { flex: 1; border: 0; background: #fff; width: 100%; }
 
+/* ---------- mobile / landscape drawer ---------- */
+#menuBtn {
+  display: none;
+  background: none; border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 3px 9px; font-size: 14px; cursor: pointer;
+}
+#scrim {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 40;
+}
+
 @media (max-width: 900px) {
-  #sidebar { display: none; }
   #chatPane { min-width: 45%; }
+  #sidebar {
+    display: flex; position: fixed; top: 0; left: 0; bottom: 0;
+    width: 240px; min-width: 0; z-index: 50;
+    transform: translateX(-103%);
+    transition: transform .22s ease;
+    box-shadow: 0 0 34px rgba(0,0,0,.55);
+  }
+  #sidebar.open { transform: none; }
+  #menuBtn { display: inline-block; }
 }
 
 /* ---------- discover page ---------- */
