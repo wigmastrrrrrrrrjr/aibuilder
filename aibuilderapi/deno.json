@@ -2,6 +2,7 @@
   "imports": {
     "hono/": "npm:hono/"
   },
+  "unstable": ["kv"],
   "lint": { "include": ["src/"] },
   "fmt": { "lineWidth": 100 }
 }
