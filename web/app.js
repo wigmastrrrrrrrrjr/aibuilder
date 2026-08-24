@@ -102,8 +102,67 @@ const ownKey = () => localStorage.getItem('ab.key') || '';
 function authHeaders(extra) {
   const h = { ...(extra || {}) };
   if (ownKey()) h['x-api-key'] = ownKey();
+  if (sessTok()) h['x-ab-sess'] = sessTok();
   return h;
 }
+
+/* ---------- account / sign-up gate ---------- */
+const sessTok = () => localStorage.getItem('ab.tok') || '';
+const sessName = () => localStorage.getItem('ab.user') || '';
+let authMode = 'signup';
+
+async function doAuth(e) {
+  e.preventDefault();
+  const username = $('authUser').value.trim();
+  const password = $('authPass').value;
+  $('authErr').textContent = '';
+  $('authGo').disabled = true;
+  try {
+    const r = await fetch(`${API}/api/auth/${authMode}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    localStorage.setItem('ab.tok', d.token);
+    localStorage.setItem('ab.user', d.username);
+    location.reload();
+  } catch (err) {
+    $('authErr').textContent = err.message;
+    $('authGo').disabled = false;
+  }
+}
+$('authForm').addEventListener('submit', doAuth);
+$('authSwitch').addEventListener('click', () => {
+  authMode = authMode === 'signup' ? 'login' : 'signup';
+  $('authTitle').textContent = authMode === 'signup' ? 'Create your account' : 'Welcome back';
+  $('authSub').textContent = authMode === 'signup'
+    ? 'Sign up free to build apps with AI — it takes 10 seconds.'
+    : 'Log in to keep building.';
+  $('authGo').textContent = authMode === 'signup' ? 'Sign up' : 'Log in';
+  $('authSwitch').textContent = authMode === 'signup'
+    ? 'Already have an account? Log in'
+    : 'New here? Create an account';
+  $('authErr').textContent = '';
+});
+
+const whoBtn = $('whoBtn');
+if (!sessTok()) {
+  $('authGate').hidden = false;
+} else {
+  whoBtn.hidden = false;
+  whoBtn.textContent = `👤 ${sessName()}`;
+}
+whoBtn.addEventListener('click', async () => {
+  if (!confirm(`Log out of ${sessName()}?`)) return;
+  try {
+    await fetch(`${API}/api/auth/logout`, { method: 'POST', headers: authHeaders() });
+  } catch { /* ignore */ }
+  localStorage.removeItem('ab.tok');
+  localStorage.removeItem('ab.user');
+  location.href = 'index.html';
+});
 
 function refreshKeyBtn() {
   $('keyBtn').classList.toggle('active', Boolean(ownKey()));
@@ -321,7 +380,7 @@ publishBtn.addEventListener('click', async () => {
   try {
     const r = await fetch(`${API}/api/projects/${projectId}/publish`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: authHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ publish: !isPub, description }),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -348,7 +407,7 @@ $('uploadInput').addEventListener('change', async (e) => {
   try {
     const p = await (await fetch(`${API}/api/projects`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: authHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ name: guessName }),
     })).json();
 
@@ -356,7 +415,11 @@ $('uploadInput').addEventListener('change', async (e) => {
     for (const f of picked.slice(0, 300)) {
       fd.append('files', f, f.webkitRelativePath || f.name);
     }
-    const res = await fetch(`${API}/api/projects/${p.id}/upload`, { method: 'POST', body: fd });
+    const res = await fetch(`${API}/api/projects/${p.id}/upload`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    });
     if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
     const out = await res.json();
     if (out.skipped.length) console.warn('skipped:', out.skipped);
@@ -371,7 +434,10 @@ $('uploadInput').addEventListener('change', async (e) => {
 
 $('delBtn').addEventListener('click', async () => {
   if (!projectId || !confirm('Delete this project?')) return;
-  await fetch(`${API}/api/projects/${projectId}`, { method: 'DELETE' });
+  await fetch(`${API}/api/projects/${projectId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
   await loadProjects(); resetToNew();
 });
 

@@ -4,6 +4,7 @@ import { FileStreamer } from './parser.js';
 import { systemPrompt } from './prompt.js';
 import { extractKey, builtinKey } from './keys.js';
 import { getVar } from './env.js';
+import { getUser } from './auth.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MODEL_RE = /^[A-Za-z0-9._:+%-]{1,64}$/;
@@ -11,6 +12,9 @@ const MODEL_RE = /^[A-Za-z0-9._:+%-]{1,64}$/;
 export const chat = new Hono();
 
 chat.post('/', async (c) => {
+  const user = await getUser(c);
+  if (!user) return c.json({ error: 'sign up required' }, 401);
+
   const body = await c.req.json();
   const message = body?.message;
   if (!message || typeof message !== 'string') {

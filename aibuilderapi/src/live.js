@@ -3,10 +3,11 @@
 
 import { Hono } from 'hono';
 import { store } from './store.js';
+import { requireUser } from './auth.js';
 
 export const live = new Hono();
 
-live.post('/api/projects/:pid/live/:room/push', async (c) => {
+live.post('/api/projects/:pid/live/:room/push', requireUser, async (c) => {
   const { pid, room } = c.req.param();
   if (!/^[A-Za-z0-9:_-]{1,64}$/.test(room)) return c.json({ error: 'bad room' }, 400);
   const evt = await c.req.json().catch(() => ({}));
@@ -14,7 +15,7 @@ live.post('/api/projects/:pid/live/:room/push', async (c) => {
   return c.json({ ok: true, seq });
 });
 
-live.get('/api/projects/:pid/live/:room/stream', (c) => {
+live.get('/api/projects/:pid/live/:room/stream', requireUser, (c) => {
   const { pid, room } = c.req.param();
   if (!/^[A-Za-z0-9:_-]{1,64}$/.test(room)) return c.json({ error: 'bad room' }, 400);
 

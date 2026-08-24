@@ -28,6 +28,7 @@ The SDK also provides live sync between everyone viewing the app at the same tim
 
 Events are delivered to EVERY connected viewer, including the one who pushed. Simplest always-correct pattern: after any creat.db insert/update/remove call creat.push(collection, { type: 'rows' }), and in the creat.live handler re-render from await creat.db.list(collection) whenever evt.type === 'rows'. For low-latency stuff (game moves, cursors) also push typed payloads ({ type:'move', ... }) and apply them directly.
 Use it for: chat apps, multiplayer games/tic-tac-toe, shared whiteboards/counters, live polls, collaborative lists, "see who else is here" indicators.
+Viewer sign-in for live features is handled automatically by the SDK (a sign-up popup appears when needed). NEVER build your own login/signup screens or user accounts inside the app.
 
 ## Output protocol (CRITICAL)
 Whenever you create or modify a file, output it EXACTLY like this:

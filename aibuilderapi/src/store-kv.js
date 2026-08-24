@@ -182,6 +182,42 @@ export function createKvStore(kv) {
       return out.slice(0, 60);
     },
 
+    // ---- accounts & sessions -----------------------------------------------
+    async createUser({ name, phash }) {
+      const id = crypto.randomUUID();
+      const uname = name.toLowerCase();
+      let committed = false;
+      await kv.atomic()
+        .check({ key: ['uname', uname], versionstamp: null })
+        .set(['uname', uname], id)
+        .set(['user', id], { id, name, phash, created_at: Date.now() })
+        .commit()
+        .then(() => { committed = true; })
+        .catch(() => {});
+      if (!committed) throw new Error('username already taken');
+      return { id, name };
+    },
+    async findUserByName(name) {
+      const id = (await kv.get(['uname', name.toLowerCase()])).value;
+      if (!id) return null;
+      return (await kv.get(['user', id])).value;
+    },
+    async createSession(userId, days = 30) {
+      const token = [...crypto.getRandomValues(new Uint8Array(24))]
+        .map((b) => b.toString(16).padStart(2, '0')).join('');
+      await kv.set(['sess', token], { userId, exp: Date.now() + days * 86400000 });
+      return token;
+    },
+    async getSession(token) {
+      const s = (await kv.get(['sess', token])).value;
+      if (!s || s.exp < Date.now()) return null;
+      const u = (await kv.get(['user', s.userId])).value;
+      return u ? { userId: u.id, name: u.name } : null;
+    },
+    async deleteSession(token) {
+      await kv.delete(['sess', token]);
+    },
+
     baasTable(pid, coll) {
       if (!/^[a-z][a-z0-9_]{0,39}$/.test(coll)) return null;
       return `${String(pid).replace(/[^a-zA-Z0-9]/g, '')}_${coll}`;

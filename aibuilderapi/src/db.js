@@ -34,6 +34,17 @@ CREATE TABLE IF NOT EXISTS events (
   pid TEXT NOT NULL, room TEXT NOT NULL, data TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_room ON events (pid, room, seq);
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  name TEXT UNIQUE NOT NULL,
+  phash TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  exp INTEGER NOT NULL
+);
 `);
 
 function ensureColumn(table, colDef) {
@@ -151,11 +162,43 @@ useStore({
     ).get(pid, room);
     return r.s;
   },
-  async eventsSince(pid, room, since) {
-    return db.prepare(
-      'SELECT seq, data FROM events WHERE pid = ? AND room = ? AND seq > ? ORDER BY seq LIMIT 60'
-    ).all(pid, room, since).map((r) => ({ ...JSON.parse(r.data), seq: r.seq }));
-  },
+    async eventsSince(pid, room, since) {
+      return db.prepare(
+        'SELECT seq, data FROM events WHERE pid = ? AND room = ? AND seq > ? ORDER BY seq LIMIT 60'
+      ).all(pid, room, since).map((r) => ({ ...JSON.parse(r.data), seq: r.seq }));
+    },
+
+    // ---- accounts & sessions -----------------------------------------------
+    async createUser({ name, phash }) {
+      const id = crypto.randomUUID();
+      try {
+        db.prepare('INSERT INTO users (id, name, phash, created_at) VALUES (?, ?, ?, ?)')
+          .run(id, name, phash, Date.now());
+      } catch {
+        throw new Error('username already taken');
+      }
+      return { id, name };
+    },
+    async findUserByName(name) {
+      const r = db.prepare('SELECT * FROM users WHERE name = ?').get(name);
+      return r ? { id: r.id, name: r.name, phash: r.phash } : null;
+    },
+    async createSession(userId, days = 30) {
+      const token = [...crypto.getRandomValues(new Uint8Array(24))]
+        .map((b) => b.toString(16).padStart(2, '0')).join('');
+      db.prepare('INSERT INTO sessions (token, user_id, exp) VALUES (?, ?, ?)')
+        .run(token, userId, Date.now() + days * 86400000);
+      return token;
+    },
+    async getSession(token) {
+      const s = db.prepare('SELECT * FROM sessions WHERE token = ?').get(token);
+      if (!s || s.exp < Date.now()) return null;
+      const u = db.prepare('SELECT id, name FROM users WHERE id = ?').get(s.user_id);
+      return u ? { userId: u.id, name: u.name } : null;
+    },
+    async deleteSession(token) {
+      db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+    },
 
   // ---- BaaS (lazy per-collection tables; JSON rows) ----------------------
   baasTable(pid, coll) {

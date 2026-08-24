@@ -9,6 +9,7 @@ import { getVar } from './env.js';
 import { builtinKey } from './keys.js';
 import { toBase64 } from './base64.js';
 import { live } from './live.js';
+import { auth, requireUser } from './auth.js';
 
 export const app = new Hono();
 
@@ -27,7 +28,7 @@ app.route('/api/models', models);
 // ---- projects ----------------------------------------------------------------
 app.get('/api/projects', async (c) => c.json(await store.listProjects()));
 
-app.post('/api/projects', async (c) => {
+app.post('/api/projects', requireUser, async (c) => {
   const { name } = await c.req.json().catch(() => ({}));
   return c.json(await store.createProject(name), 201);
 });
@@ -42,7 +43,7 @@ app.get('/api/projects/:pid', async (c) => {
   });
 });
 
-app.delete('/api/projects/:pid', async (c) => {
+app.delete('/api/projects/:pid', requireUser, async (c) => {
   const pid = c.req.param('pid');
   if (!(await store.getProject(pid))) return c.json({ error: 'not found' }, 404);
   await store.deleteProject(pid);
@@ -50,7 +51,7 @@ app.delete('/api/projects/:pid', async (c) => {
 });
 
 // publish / unpublish to the discovery feed
-app.post('/api/projects/:pid/publish', async (c) => {
+app.post('/api/projects/:pid/publish', requireUser, async (c) => {
   const pid = c.req.param('pid');
   if (!(await store.getProject(pid))) return c.json({ error: 'not found' }, 404);
   const body = await c.req.json().catch(() => ({}));
@@ -64,7 +65,7 @@ app.post('/api/projects/:pid/publish', async (c) => {
 });
 
 // remix = copy a published app into a new editable project
-app.post('/api/projects/:pid/remix', async (c) => {
+app.post('/api/projects/:pid/remix', requireUser, async (c) => {
   const src = await store.getProject(c.req.param('pid'));
   if (!src) return c.json({ error: 'not found' }, 404);
   return c.json(await store.remix(src.id), 201);
@@ -74,7 +75,7 @@ app.post('/api/projects/:pid/remix', async (c) => {
 app.get('/api/discover', async (c) => c.json(await store.discover()));
 
 // upload an existing app (multipart: repeatable field "files")
-app.post('/api/projects/:pid/upload', async (c) => {
+app.post('/api/projects/:pid/upload', requireUser, async (c) => {
   const project = await store.getProject(c.req.param('pid'));
   if (!project) return c.json({ error: 'not found' }, 404);
 
@@ -122,6 +123,7 @@ function cleanUploadPath(name) {
   return segs.slice(0, 8).join('/').slice(0, 200);
 }
 
+app.route('/', auth);
 app.route('/api/chat', chat);
 app.route('/', live);
 app.route('/api/baas', baas);
