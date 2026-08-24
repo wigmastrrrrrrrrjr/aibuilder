@@ -3,24 +3,25 @@
 
 import { Hono } from 'hono';
 import { store } from './store.js';
-import { requireUser } from './auth.js';
+import { getUser } from './auth.js';
 
 export const live = new Hono();
 
-live.post('/api/projects/:pid/live/:room/push', requireUser, async (c) => {
+live.post('/api/projects/:pid/live/:room/push', async (c) => {
   const { pid, room } = c.req.param();
   if (!/^[A-Za-z0-9:_-]{1,64}$/.test(room)) return c.json({ error: 'bad room' }, 400);
   const evt = await c.req.json().catch(() => ({}));
-  const u = c.get('user');
-  // identity is stamped by the SERVER from the signed-in account — clients
-  // can never spoof who sent an event
+  const u = await getUser(c);
+  // identity is stamped by the SERVER. Signed-in users get their real name;
+  // anonymous users get their provided anonId or a random one.
+  const identity = u ? u.name : (evt.anonId ? `anon #${evt.anonId}` : `anon #${crypto.randomUUID().slice(0,8)}`);
   const seq = await store.appendEvent(pid, room, {
-    ...(evt || {}), user: u ? u.name : '', ts: Date.now(),
+    ...(evt || {}), user: identity, ts: Date.now(),
   });
   return c.json({ ok: true, seq });
 });
 
-live.get('/api/projects/:pid/live/:room/stream', requireUser, (c) => {
+live.get('/api/projects/:pid/live/:room/stream', async (c) => {
   const { pid, room } = c.req.param();
   if (!/^[A-Za-z0-9:_-]{1,64}$/.test(room)) return c.json({ error: 'bad room' }, 400);
 

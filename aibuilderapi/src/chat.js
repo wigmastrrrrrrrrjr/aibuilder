@@ -48,11 +48,12 @@ chat.post('/', async (c) => {
   const model = requested || (project && MODEL_RE.test(project.model || '') ? project.model : '')
     || getVar('OLLAMA_MODEL') || 'gemma4:31b';
 
-  // BYOK users ride their own key — no shared-quota usage counted
+  // BYOK users ride their own key — no shared-quota usage counted.
+  // Ai_Dev (the builder) gets unlimited generations on the shared key too.
   const hasOwnKey = Boolean(
     extractKey(c.req.header('x-api-key'), typeof body.apiKey === 'string' ? body.apiKey : ''),
   );
-  if (!hasOwnKey) {
+  if (!hasOwnKey && user.name.toLowerCase() !== 'ai_dev') {
     const day = new Date().toISOString().slice(0, 10);
     const used = await store.incrUsage(user.name, day);
     const limit = Number(getVar('DAILY_LIMIT')) || 30;

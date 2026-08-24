@@ -28,9 +28,9 @@ export const BAAS_SDK_JS = `(function () {
     d.innerHTML =
       '<div style="width:min(92vw,360px);background:#12141f;color:#e8eaf6;border:1px solid #2a2d44;' +
       'border-radius:16px;padding:26px;box-shadow:0 24px 80px rgba(0,0,0,.55);box-sizing:border-box">' +
-      '<h2 style="margin:0 0 6px;font-size:20px">Sign up to go live</h2>' +
+      '<h2 style="margin:0 0 6px;font-size:20px">Create an account</h2>' +
       '<p style="margin:0 0 18px;font-size:13px;color:#9aa0c3;line-height:1.45">' +
-      'This app uses realtime multiplayer. Create a free account to join in.</p>' +
+      'Sign up to generate apps and save your projects.</p>' +
       '<input id="__ab_u" placeholder="username" autocomplete="username" style="width:100%;box-sizing:border-box;' +
       'margin-bottom:10px;padding:11px 12px;border-radius:10px;border:1px solid #2a2d44;' +
       'background:#0c0e18;color:#fff;font-size:14px">' +
@@ -48,14 +48,21 @@ export const BAAS_SDK_JS = `(function () {
     var u = document.getElementById('__ab_u'), p = document.getElementById('__ab_p');
     var e = document.getElementById('__ab_e'), go = document.getElementById('__ab_go');
     var sw = document.getElementById('__ab_sw');
-    sw.onclick = function () {
-      mode = mode === 'signup' ? 'login' : 'signup';
-      go.textContent = mode === 'signup' ? 'Create account' : 'Log in';
+    function paint() {
+      go.textContent = mode === 'signup' ? 'Create account' : mode === 'login' ? 'Log in' : 'Reset & sign in';
+      p.placeholder = mode === 'reset' ? 'new password (min 6 chars)' : 'password (min 6 chars)';
       sw.textContent = mode === 'signup'
         ? 'I already have an account — log in'
-        : 'New here? Create an account';
+        : mode === 'login'
+          ? 'Forgot password?'
+          : 'New here? Create an account';
       e.textContent = '';
+    }
+    sw.onclick = function () {
+      mode = mode === 'signup' ? 'login' : mode === 'login' ? 'reset' : 'signup';
+      paint();
     };
+    paint();
     function submit() {
       go.disabled = true;
       fetch('/api/auth/' + mode, {

@@ -38,13 +38,19 @@ Events are delivered to EVERY connected viewer, including the one who pushed. Si
 Use for: chat apps, multiplayer games, shared whiteboards/counters, live polls, presence indicators.
 
 ## User identity (STRICT RULE)
-Identity ALWAYS comes from the account system. NEVER show a "type your name" input, never invent nicknames or guest names, never store player names in creat.db. Instead:
+Identity ALWAYS comes from the account system. NEVER show a "type your name" input, never invent nicknames or guest names, never build your own login/signup/join screens or modals (the SDK already shows its own sign-in popup when needed). While identity is loading or missing, show a neutral waiting state like "Connecting…". Never store player names in creat.db. Use EXACTLY this pattern — creat.me() CAN return null, so guard it:
 
-  var me = await creat.me();            // -> {username:'alice'} | null (opens sign-up popup if needed)
+  var me = await creat.me().catch(function () { return null; });
+  var myName = (me && me.username) || null;   // null while signed out / loading
+  if (!myName) {
+    // show "Connecting…" state; do NOT prompt for a name and do NOT touch myName.username
+  }
+
   // every received event is stamped by the server with the sender's account:
-  evt.user                              // e.g. 'alice'
+  evt.user                                    // e.g. 'alice'
 
-Show me.username as the local player's name and evt.user as the name of whoever sent an event.
+NEVER write \`me.username\` without the null guard above — \`creat.me()\` resolves to null for signed-out users and reading \`.username\` on it crashes the app.
+When rendering other players, always use evt.user (server-verified), never any name field inside evt data.
 
 ## Serverless functions (pure compute, project-private)
 Create files under functions/, e.g. functions/score.js. Each exports/defines main(input):

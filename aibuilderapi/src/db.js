@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS usage (
   count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (name, day)
 );
+CREATE TABLE IF NOT EXISTS meta (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL
+);
 `);
 
 function ensureColumn(table, colDef) {
@@ -63,6 +67,7 @@ ensureColumn('projects', 'model TEXT');
 ensureColumn('projects', 'plan TEXT');
 ensureColumn('projects', "owner TEXT NOT NULL DEFAULT ''");
 ensureColumn('files', "encoding TEXT NOT NULL DEFAULT 'utf8'");
+ensureColumn('users', "ip TEXT NOT NULL DEFAULT ''");
 
 function slugify(name) {
   const s = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -196,15 +201,37 @@ useStore({
     },
 
     // ---- accounts & sessions -----------------------------------------------
-    async createUser({ name, phash }) {
+    async createUser({ name, phash, ip }) {
       const id = crypto.randomUUID();
       try {
-        db.prepare('INSERT INTO users (id, name, phash, created_at) VALUES (?, ?, ?, ?)')
-          .run(id, name, phash, Date.now());
+        db.prepare('INSERT INTO users (id, name, phash, created_at, ip) VALUES (?, ?, ?, ?, ?)')
+          .run(id, name, phash, Date.now(), ip || '');
       } catch {
         throw new Error('username already taken');
       }
       return { id, name };
+    },
+    async ipUsed(ip) {
+      if (!ip) return null;
+      const r = db.prepare("SELECT name FROM users WHERE ip = ? LIMIT 1").get(ip);
+      return r ? r.name : null;
+    },
+    async resetPassword(name, phash) {
+      const r = db.prepare('UPDATE users SET phash = ? WHERE name = ?').run(phash, name);
+      if (!r.changes) return null;
+      return db.prepare('SELECT * FROM users WHERE name = ?').get(name);
+    },
+    async updateUserIp(name, ipHash) {
+      // backfill on login so pre-existing accounts become resettable
+      db.prepare("UPDATE users SET ip = ? WHERE name = ? AND ip = ''").run(ipHash, name);
+    },
+    async metaGet(key) {
+      const r = db.prepare('SELECT v FROM meta WHERE k = ?').get(key);
+      return r ? r.v : null;
+    },
+    async metaSet(key, val) {
+      db.prepare(`INSERT INTO meta (k, v) VALUES (?, ?)
+                  ON CONFLICT (k) DO UPDATE SET v = excluded.v`).run(key, String(val));
     },
     async findUserByName(name) {
       const r = db.prepare('SELECT * FROM users WHERE name = ?').get(name);

@@ -209,19 +209,49 @@ export function createKvStore(kv) {
     },
 
     // ---- accounts & sessions -----------------------------------------------
-    async createUser({ name, phash }) {
+    async createUser({ name, phash, ip }) {
       const id = crypto.randomUUID();
       const uname = name.toLowerCase();
       let committed = false;
-      await kv.atomic()
-        .check({ key: ['uname', uname], versionstamp: null })
+      const atomic = kv.atomic()
+        .check({ key: ['uname', uname], versionstamp: null });
+      if (ip) atomic.check({ key: ['ipused', ip], versionstamp: null }).set(['ipused', ip], id);
+      await atomic
         .set(['uname', uname], id)
-        .set(['user', id], { id, name, phash, created_at: Date.now() })
+        .set(['user', id], { id, name, phash, ip: ip || '', created_at: Date.now() })
         .commit()
         .then(() => { committed = true; })
         .catch(() => {});
       if (!committed) throw new Error('username already taken');
       return { id, name };
+    },
+    async ipUsed(ip) {
+      if (!ip) return null;
+      const id = (await kv.get(['ipused', ip])).value;
+      if (!id) return null;
+      const u = (await kv.get(['user', id])).value;
+      return u ? u.name : null;
+    },
+    async resetPassword(name, phash) {
+      const id = (await kv.get(['uname', name.toLowerCase()])).value;
+      if (!id) return null;
+      const cur = (await kv.get(['user', id])).value;
+      if (!cur) return null;
+      await kv.set(['user', id], { ...cur, phash });
+      return { ...cur, phash };
+    },
+    async updateUserIp(name, ipTag) {
+      // backfill on login so pre-existing accounts become resettable
+      const id = (await kv.get(['uname', name.toLowerCase()])).value;
+      if (!id) return;
+      const cur = (await kv.get(['user', id])).value;
+      if (cur && !cur.ip) await kv.set(['user', id], { ...cur, ip: ipTag });
+    },
+    async metaGet(key) {
+      return (await kv.get(['meta', key])).value ?? null;
+    },
+    async metaSet(key, val) {
+      await kv.set(['meta', key], String(val));
     },
     async findUserByName(name) {
       const id = (await kv.get(['uname', name.toLowerCase()])).value;

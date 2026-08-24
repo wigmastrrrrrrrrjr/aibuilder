@@ -144,18 +144,24 @@ async function doAuth(e) {
   }
 }
 $('authForm').addEventListener('submit', doAuth);
+function paintAuth() {
+  const t = {
+    signup: ['Create your account', 'Sign up free to build apps with AI — it takes 10 seconds.', 'Sign up', 'Already have an account? Log in'],
+    login: ['Welcome back', 'Log in to keep building.', 'Log in', 'Forgot password?'],
+    reset: ['Reset password', 'Works only from the same network that created the account.', 'Reset & sign in', 'New here? Create an account'],
+  }[authMode];
+  $('authTitle').textContent = t[0];
+  $('authSub').textContent = t[1];
+  $('authGo').textContent = t[2];
+  $('authSwitch').textContent = t[3];
+  $('authPass').placeholder = authMode === 'reset' ? 'new password (min 6 chars)' : 'password (min 6 chars)';
+}
 $('authSwitch').addEventListener('click', () => {
-  authMode = authMode === 'signup' ? 'login' : 'signup';
-  $('authTitle').textContent = authMode === 'signup' ? 'Create your account' : 'Welcome back';
-  $('authSub').textContent = authMode === 'signup'
-    ? 'Sign up free to build apps with AI — it takes 10 seconds.'
-    : 'Log in to keep building.';
-  $('authGo').textContent = authMode === 'signup' ? 'Sign up' : 'Log in';
-  $('authSwitch').textContent = authMode === 'signup'
-    ? 'Already have an account? Log in'
-    : 'New here? Create an account';
+  authMode = authMode === 'signup' ? 'login' : authMode === 'login' ? 'reset' : 'signup';
+  paintAuth();
   $('authErr').textContent = '';
 });
+paintAuth();
 
 const whoBtn = $('whoBtn');
 function setPub(published) {
