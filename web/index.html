@@ -4,17 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>aibuilder</title>
-<link rel="stylesheet" href="style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
+<link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
 <div id="app">
   <aside id="sidebar">
     <div class="logo">a<span>ibuilder</span></div>
-    <button id="newBtn" title="Start a new app">+ New app</button>
-    <label id="uploadBtn" for="uploadInput" title="Upload an existing HTML/JS app">⬆ Upload app</label>
+    <button id="newBtn" title="Start a new app"><span class="ms">add</span> New app</button>
+    <label id="uploadBtn" for="uploadInput" title="Upload an existing HTML/JS app"><span class="ms">upload</span> Upload app</label>
     <input type="file" id="uploadInput" multiple hidden>
-    <a id="discoverLink" href="discover.html">🌍 Discover apps</a>
-    <button id="keyBtn" title="Use your own Ollama API key">🔑 Own API key</button>
+    <a id="discoverLink" href="discover.html"><span class="ms">explore</span> Discover apps</a>
+    <button id="keyBtn" title="Use your own Ollama API key"><span class="ms">key</span> <i id="keyLbl" style="font-style:normal">Own API key</i></button>
     <div id="projectList"></div>
     <div id="metaBar"></div>
   </aside>
@@ -23,21 +25,23 @@
     <section id="chatPane">
       <header id="chatHeader">
         <span class="headerBtns">
-          <button id="menuBtn" title="Show history">☰</button>
+          <button id="menuBtn" title="Show history"><span class="ms">menu</span></button>
         </span>
         <span id="projName">New app</span>
         <span class="headerBtns">
-          <button id="publishBtn" title="Publish to the discovery feed" disabled>Publish</button>
-          <button id="delBtn" title="Delete project" hidden>Delete</button>
+          <button id="planBtn" title="Plan" hidden><span class="ms">checklist</span><em id="planCount"></em></button>
+          <button id="publishBtn" title="Publish to the discovery feed" disabled><span class="ms">publish</span><i id="pubLbl" style="font-style:normal">Publish</i></button>
+          <button id="delBtn" title="Delete project" hidden><span class="ms">delete</span></button>
           <button id="whoBtn" title="Account — click to log out" hidden></button>
         </span>
       </header>
+      <div id="refactorBar" hidden><span class="ms">autorenew</span> Refactoring code structure…</div>
       <div id="messages">
         <div class="empty">
           <h1>Build an app by describing it</h1>
           <p>Try: “a todo app with priorities and due dates”,<br>
              “landing page for my bakery with an order form”,<br>
-             “kanban board with drag and drop”.</p>
+             “multiplayer tic-tac-toe with a lobby server”.</p>
         </div>
       </div>
       <div id="activity" hidden><span id="activityText"></span><pre id="rawStream"></pre></div>
@@ -47,7 +51,7 @@
         </div>
         <div id="composerMain">
           <textarea id="promptBox" rows="3" placeholder="Describe the app you want…  (Enter to send)"></textarea>
-          <button id="sendBtn">Send</button>
+          <button id="sendBtn"><span class="ms">send</span></button>
         </div>
       </div>
     </section>
@@ -56,16 +60,33 @@
       <header id="previewHeader">
         <div id="fileChips"></div>
         <div>
-          <button id="refreshBtn" title="Reload preview">↻</button>
-          <button id="openBtn" title="Open in new tab">↗</button>
+          <button id="refreshBtn" title="Reload preview"><span class="ms">refresh</span></button>
+          <button id="openBtn" title="Open in new tab"><span class="ms">open_in_new</span></button>
         </div>
       </header>
       <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
               src="about:blank"></iframe>
+
+      <!-- plan sidebar: docked rail on desktop, slide-over on mobile -->
+      <aside id="planPane" hidden>
+        <header><span class="ms">checklist</span> Plan
+          <button id="planClose" title="Close"><span class="ms">close</span></button>
+        </header>
+        <ul id="planList"></ul>
+      </aside>
     </section>
   </main>
 </div>
+
+<!-- error notification tray -->
+<button id="notifBadge" hidden title="Problems"><span class="ms">priority_high</span><em id="notifCount">0</em></button>
+<div id="notifPanel" hidden>
+  <header><span class="ms">warning</span> Problems</header>
+  <div id="notifList"></div>
+</div>
+
 <div id="scrim" hidden></div>
+
 <div id="authGate" hidden>
   <form id="authForm" autocomplete="on">
     <div class="logo">a<span>ibuilder</span></div>
@@ -78,6 +99,6 @@
     <button id="authSwitch" type="button">Already have an account? Log in</button>
   </form>
 </div>
-<script src="app.js"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

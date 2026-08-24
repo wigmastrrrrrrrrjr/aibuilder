@@ -1,17 +1,53 @@
 // Streaming parser for the generator protocol:
-//   <<<FILE:index.html>>>
-//   <full file content>
-//   <<<END>>>
-// Feed chunks via feed(); yields {type:'text'|'file', ...} events as they complete.
+//   <<<FILE:index.html>>>   full file content            <<<END>>>
+//   <<<EDIT:js/app.js>>>    search/replace hunks         <<<END>>>
+//   <<<DELETE:old.js>>>     (no content needed)          <<<END>>>
+//   <<<PLAN>>>              markdown checklist lines      <<<END>>>
+// EDIT bodies use:
+//   <<<<<<< SEARCH
+//   old text
+//   =======
+//   new text
+//   >>>>>>> REPLACE
+// Feed chunks via feed(); yields {type:'text'|'file'|'edit'|'delete'|'plan'} events.
 
-const START = '<<<FILE:';
-const START_END = '>>>';
-const END = '<<<END>>>';
+const TAG_OPEN = '<<<';
+const TAG_CLOSE = '>>>';
+const END_TAG = '<<<END>>>';
+const S_MARK = '<<<<<<< SEARCH';
+const R_MARK = '>>>>>>> REPLACE';
+const M_MARK = '=======';
+
+function parsePlan(body) {
+  const items = [];
+  for (let line of String(body || '').split('\n')) {
+    line = line.trim();
+    const m = line.match(/^[-*]\s*\[( |x|X)\]\s*(.+)$/);
+    if (m) items.push({ text: m[2].trim(), done: m[1].toLowerCase() === 'x' });
+  }
+  return items;
+}
+
+function parseEditHunks(body) {
+  const hunks = [];
+  let idx = 0;
+  while ((idx = body.indexOf(S_MARK, idx)) !== -1) {
+    idx += S_MARK.length;
+    const mid = body.indexOf(M_MARK, idx);
+    const end = body.indexOf(R_MARK, mid === -1 ? idx : mid);
+    if (mid === -1 || end === -1) break;
+    const search = stripFences(body.slice(idx, mid)).replace(/^\n+/, '').replace(/\n$/, '');
+    const replace = stripFences(body.slice(mid + M_MARK.length, end)).replace(/^\n+/, '').replace(/\n$/, '');
+    hunks.push({ search, replace });
+    idx = end + R_MARK.length;
+  }
+  return hunks;
+}
 
 export class FileStreamer {
   constructor() {
     this.buf = '';
-    this.path = null;   // non-null while inside a file block ('' = header not closed yet)
+    this.tag = null;     // null = outside, '' = tag name incomplete, else {kind,path}
     this.body = '';
   }
 
@@ -19,11 +55,10 @@ export class FileStreamer {
     const events = [];
     this.buf += chunk;
     for (;;) {
-      if (this.path === null) {
-        const i = this.buf.indexOf(START);
+      if (this.tag === null) {
+        const i = this.buf.indexOf(TAG_OPEN);
         if (i === -1) {
-          // emit everything except a possible partial marker at the tail
-          const keep = Math.max(0, this.buf.length - (START.length - 1));
+          const keep = Math.max(0, this.buf.length - (TAG_OPEN.length - 1));
           if (keep > 0) {
             events.push({ type: 'text', v: this.buf.slice(0, keep) });
             this.buf = this.buf.slice(keep);
@@ -31,33 +66,57 @@ export class FileStreamer {
           break;
         }
         if (i > 0) events.push({ type: 'text', v: this.buf.slice(0, i) });
-        this.buf = this.buf.slice(i + START.length);
-        const j = this.buf.indexOf(START_END);
-        if (j === -1) { this.path = ''; break; } // header not complete yet
-        this.path = this.buf.slice(0, j).trim();
-        this.buf = this.buf.slice(j + START_END.length);
+        this.buf = this.buf.slice(i + TAG_OPEN.length);
+        this.tag = '';
         this.body = '';
-      } else if (this.path === '') {
-        const j = this.buf.indexOf(START_END);
-        if (j === -1) break;
-        this.path = this.buf.slice(0, j).trim();
-        this.buf = this.buf.slice(j + START_END.length);
+      } else if (this.tag === '') {
+        const j = this.buf.indexOf(TAG_CLOSE);
+        // '<<<END' could still be forming a close tag — wait for more input
+        if (j === -1) {
+          if (END_TAG.startsWith(TAG_OPEN + this.buf.slice(0, END_TAG.length - TAG_OPEN.length)) ||
+              this.buf.length < END_TAG.length) break;
+          // not an END tag forming and no '>' yet — keep waiting (harmless)
+          break;
+        }
+        const raw = this.buf.slice(0, j).trim();
+        this.buf = this.buf.slice(j + TAG_CLOSE.length);
+        if (raw.toUpperCase() === 'END') { this.tag = null; continue; }
+        const c = raw.indexOf(':');
+        const kind = (c === -1 ? raw : raw.slice(0, c)).trim().toUpperCase();
+        const path = c === -1 ? '' : raw.slice(c + 1).trim();
+        if (!['FILE', 'EDIT', 'DELETE', 'PLAN'].includes(kind)) {
+          this.tag = null; // unknown tag — treat as plain text next round
+          events.push({ type: 'text', v: TAG_OPEN + raw + TAG_CLOSE });
+          continue;
+        }
+        this.tag = { kind, path };
+        this.body = '';
+        if (kind === 'DELETE') {
+          events.push({ type: 'delete', path });
+          this.tag = null;
+        }
       } else {
-        const k = this.buf.indexOf(END);
+        const k = this.buf.indexOf(END_TAG);
         if (k === -1) {
-          const keep = Math.max(0, this.buf.length - (END.length - 1));
+          const keep = Math.max(0, this.buf.length - (END_TAG.length - 1));
           if (keep > 0) {
             this.body += this.buf.slice(0, keep);
             this.buf = this.buf.slice(keep);
           }
           break;
         }
-        const fpath = this.path;
-        const content = stripFences((this.body + this.buf.slice(0, k)).trim());
-        this.buf = this.buf.slice(k + END.length);
-        this.path = null;
+        this.body += this.buf.slice(0, k);
+        this.buf = this.buf.slice(k + END_TAG.length);
+        const { kind, path } = this.tag;
+        this.tag = null;
+        if (kind === 'FILE') {
+          events.push({ type: 'file', path, content: stripFences(this.body.trim()) });
+        } else if (kind === 'EDIT') {
+          events.push({ type: 'edit', path, hunks: parseEditHunks(this.body) });
+        } else if (kind === 'PLAN') {
+          events.push({ type: 'plan', items: parsePlan(this.body) });
+        }
         this.body = '';
-        events.push({ type: 'file', path: fpath, content });
       }
     }
     return events;
@@ -65,15 +124,15 @@ export class FileStreamer {
 
   flush() {
     const out = [];
-    if (this.path !== null && this.path !== '') {
-      out.push({
-        type: 'file', path: this.path,
-        content: stripFences((this.body + this.buf).trim()), truncated: true,
-      });
-    } else if (this.buf && this.path === null) {
+    if (this.tag && typeof this.tag === 'object') {
+      const { kind, path } = this.tag;
+      if (kind === 'FILE') out.push({ type: 'file', path, content: stripFences(this.body.trim()), truncated: true });
+      else if (kind === 'EDIT') out.push({ type: 'edit', path, hunks: parseEditHunks(this.body), truncated: true });
+      else if (kind === 'PLAN') out.push({ type: 'plan', items: parsePlan(this.body) });
+    } else if (this.buf && this.tag === null) {
       out.push({ type: 'text', v: this.buf });
     }
-    this.buf = ''; this.body = ''; this.path = null;
+    this.buf = ''; this.body = ''; this.tag = null;
     return out;
   }
 }

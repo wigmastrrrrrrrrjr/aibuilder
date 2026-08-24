@@ -10,6 +10,9 @@ import { builtinKey } from './keys.js';
 import { toBase64 } from './base64.js';
 import { live } from './live.js';
 import { auth, requireUser } from './auth.js';
+import { fn } from './fn.js';
+
+const FRONTEND_URL = 'https://wigmastrrrrrrrrjr.github.io/aibuilder/';
 
 export const app = new Hono();
 
@@ -126,8 +129,24 @@ function cleanUploadPath(name) {
 app.route('/', auth);
 app.route('/api/chat', chat);
 app.route('/', live);
+app.route('/', fn);
 app.route('/api/baas', baas);
 app.route('/preview', preview);
+
+// 404s: API callers get JSON, browsers get bounced to the site with a notice
+app.notFound((c) => {
+  const accept = c.req.header('accept') || '';
+  if (accept.includes('text/html')) {
+    const to = `${FRONTEND_URL}?nf=${encodeURIComponent(c.req.path)}`;
+    return c.html(
+      `<!doctype html><meta charset="utf-8"><title>404 not found</title>` +
+      `<meta http-equiv="refresh" content="0;url=${to}">` +
+      `<body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:grid;place-items:center;height:100vh;margin:0">` +
+      `<p>404 not found — taking you home…</p><script>location.replace(${JSON.stringify(to)})</script>`,
+    );
+  }
+  return c.json({ error: '404 not found' }, 404);
+});
 
 // BaaS SDK for generated apps (absolute path so any page depth can load it)
 app.get('/__baas.js', (c) =>

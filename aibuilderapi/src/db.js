@@ -54,6 +54,7 @@ ensureColumn('projects', 'published INTEGER NOT NULL DEFAULT 0');
 ensureColumn('projects', 'slug TEXT');
 ensureColumn('projects', "description TEXT NOT NULL DEFAULT ''");
 ensureColumn('projects', 'model TEXT');
+ensureColumn('projects', 'plan TEXT');
 ensureColumn('files', "encoding TEXT NOT NULL DEFAULT 'utf8'");
 
 function slugify(name) {
@@ -137,6 +138,15 @@ useStore({
     return db.prepare(
       'SELECT path, updated_at FROM files WHERE project_id = ? ORDER BY path'
     ).all(pid);
+  },
+  async deleteFile(pid, fpath) {
+    db.prepare('DELETE FROM files WHERE project_id = ? AND path = ?').run(pid, fpath);
+    return { ok: true };
+  },
+  async setPlan(pid, plan) {
+    // plan: array of {text, done} — stored as JSON on the project row
+    db.prepare('UPDATE projects SET plan = ? WHERE id = ?')
+      .run(plan == null ? null : JSON.stringify(plan), pid);
   },
   async addMessage(pid, role, content) {
     db.prepare(

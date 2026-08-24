@@ -22,30 +22,30 @@ const SID = (() => {
 let displayText = '';
 let defaultModel = 'gpt-oss:120b';
 
-/* ---------- strip <<<FILE:...>>> blocks from streamed output ---------- */
+/* ---------- strip generator blocks (FILE/EDIT/DELETE/PLAN) from output ---------- */
 function BlockFilter() {
-  let buf = '', state = 0; // 0=out 1=header 2=in-file
+  let buf = '', state = 0; // 0=out 1=header 2=in-block
   this.push = function (chunk) {
     buf += chunk;
     let out = '';
     for (;;) {
       if (state === 0) {
-        const i = buf.indexOf('<<<FILE:');
+        const i = buf.search(/<<<(FILE|EDIT|DELETE|PLAN):?/);
         if (i === -1) {
-          const keep = Math.max(0, buf.length - 8);
+          const keep = Math.max(0, buf.length - 12);
           out += buf.slice(0, keep); buf = buf.slice(keep);
           break;
         }
         out += buf.slice(0, i);
-        buf = buf.slice(i + 8); state = 1;
-      } else if (state === 1) {
+        buf = buf.slice(i);
         const j = buf.indexOf('>>>');
         if (j === -1) { buf = ''; break; }
-        buf = buf.slice(j + 3); state = 2;
-      } else {
+        buf = buf.slice(j + 3); state = 1;
+      } else if (state === 1) state = 2;
+      else {
         const k = buf.indexOf('<<<END>>>');
         if (k === -1) {
-          const keep = Math.max(0, buf.length - 8);
+          const keep = Math.max(0, buf.length - 9);
           buf = buf.slice(keep); break;
         }
         buf = buf.slice(k + 9); state = 0;
@@ -60,7 +60,9 @@ function BlockFilter() {
 }
 
 function stripBlocks(text) {
-  return text.replace(/<<<FILE:[^>]*>>>[\s\S]*?(<<<END>>>|$)/g, '').trim();
+  return String(text || '')
+    .replace(/<<<(FILE|EDIT|DELETE|PLAN)[^>]*>>>[\s\S]*?(<<<END>>>|$)/g, '')
+    .trim();
 }
 
 /* ---------- bubbles & UI helpers ---------- */
@@ -117,20 +119,28 @@ async function doAuth(e) {
   const password = $('authPass').value;
   $('authErr').textContent = '';
   $('authGo').disabled = true;
+  const finish = () => { $('authGo').disabled = false; };
   try {
+    if (!username || !password) throw new Error('enter a username and password');
     const r = await fetch(`${API}/api/auth/${authMode}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-    localStorage.setItem('ab.tok', d.token);
-    localStorage.setItem('ab.user', d.username);
+    if (!r.ok || !d.token) throw new Error(d.error || `server error ${r.status}`);
+    try {
+      localStorage.setItem('ab.tok', d.token);
+      localStorage.setItem('ab.user', d.username);
+    } catch (storeErr) {
+      throw new Error('browser storage is blocked — disable private mode / allow cookies');
+    }
+    $('authErr').textContent = '';
     location.reload();
   } catch (err) {
-    $('authErr').textContent = err.message;
-    $('authGo').disabled = false;
+    $('authErr').textContent = err.message || String(err);
+    console.error('[aibuilder auth]', err);
+    finish();
   }
 }
 $('authForm').addEventListener('submit', doAuth);
@@ -148,25 +158,33 @@ $('authSwitch').addEventListener('click', () => {
 });
 
 const whoBtn = $('whoBtn');
+function setPub(published) {
+  const lbl = $('pubLbl');
+  if (lbl) lbl.textContent = published ? 'Unpublish' : 'Publish';
+}
 if (!sessTok()) {
   $('authGate').hidden = false;
 } else {
   whoBtn.hidden = false;
-  whoBtn.textContent = `👤 ${sessName()}`;
+  const ic = document.createElement('span'); ic.className = 'ms'; ic.textContent = 'person';
+  whoBtn.append(ic, document.createTextNode(sessName()));
 }
 whoBtn.addEventListener('click', async () => {
   if (!confirm(`Log out of ${sessName()}?`)) return;
   try {
     await fetch(`${API}/api/auth/logout`, { method: 'POST', headers: authHeaders() });
   } catch { /* ignore */ }
-  localStorage.removeItem('ab.tok');
-  localStorage.removeItem('ab.user');
+  try {
+    localStorage.removeItem('ab.tok');
+    localStorage.removeItem('ab.user');
+  } catch { /* ignore */ }
   location.href = 'index.html';
 });
 
 function refreshKeyBtn() {
   $('keyBtn').classList.toggle('active', Boolean(ownKey()));
-  $('keyBtn').textContent = ownKey() ? '🔑 Own key active' : '🔑 Own API key';
+  const lbl = $('keyLbl');
+  if (lbl) lbl.textContent = ownKey() ? 'Own key active' : 'Own API key';
 }
 
 $('keyBtn').addEventListener('click', () => {
@@ -238,7 +256,7 @@ async function selectProject(pid) {
   projName.textContent = data.project.name;
   document.title = `${data.project.name} — aibuilder`;
   publishBtn.disabled = false;
-  publishBtn.textContent = data.project.published ? 'Unpublish' : 'Publish';
+  setPub(data.project.published);
   $('delBtn').hidden = false;
   if (data.project.model && [...modelSel.options].some(o => o.value === data.project.model)) {
     modelSel.value = data.project.model;
@@ -248,6 +266,9 @@ async function selectProject(pid) {
     if (m.role === 'user') addUserBubble(m.content);
     else addAiBubble(stripBlocks(m.content));
   }
+  let plan = [];
+  try { plan = typeof data.project.plan === 'string' ? JSON.parse(data.project.plan) : (data.project.plan || []); } catch { plan = []; }
+  renderPlan(plan);
   setChips(data.files);
   refreshPreview(false);
   loadProjects();
@@ -259,7 +280,7 @@ function resetToNew() {
   projName.textContent = 'New app';
   document.title = 'aibuilder';
   publishBtn.disabled = true;
-  publishBtn.textContent = 'Publish';
+  setPub(false);
   $('delBtn').hidden = true;
   messagesEl.innerHTML = `
     <div class="empty"><h1>Build an app by describing it</h1>
@@ -268,8 +289,91 @@ function resetToNew() {
        “kanban board with drag and drop”.</p></div>`;
   setChips([]);
   frame.src = 'about:blank';
+  renderPlan([]);
   watchProject(null);
   promptBox.focus();
+}
+
+/* ---------- plan sidebar ---------- */
+function renderPlan(items) {
+  const list = $('planList'), pane = $('planPane'), btn = $('planBtn');
+  list.innerHTML = '';
+  for (const it of items || []) {
+    const li = document.createElement('li');
+    const mark = document.createElement('span');
+    mark.className = 'ms mark' + (it.done ? ' done' : '');
+    mark.textContent = it.done ? 'check_circle' : 'radio_button_unchecked';
+    li.appendChild(mark);
+    li.appendChild(document.createTextNode(it.text));
+    list.appendChild(li);
+  }
+  btn.hidden = !(items && items.length);
+  $('planCount').textContent = items && items.length
+    ? `${items.filter(i => i.done).length}/${items.length}` : '';
+  if (!items || !items.length) { pane.hidden = true; return; }
+  // auto-open on desktop once a plan exists
+  if (window.innerWidth > 1100) pane.hidden = false;
+}
+$('planBtn').addEventListener('click', () => {
+  const pane = $('planPane');
+  pane.hidden = !pane.hidden;
+});
+$('planClose').addEventListener('click', () => { $('planPane').hidden = true; });
+
+/* ---------- error notifications tray ---------- */
+const notifs = [];
+function notify(title, message) {
+  notifs.push({ title, message: String(message || ''), ts: Date.now() });
+  if (notifs.length > 30) notifs.shift();
+  renderNotifs();
+}
+function renderNotifs() {
+  const badge = $('notifBadge'), panel = $('notifPanel'), list = $('notifList');
+  badge.hidden = !notifs.length;
+  $('notifCount').textContent = String(notifs.length);
+  list.innerHTML = '';
+  for (let i = notifs.length - 1; i >= 0; i--) {
+    const n = notifs[i];
+    const row = document.createElement('div');
+    row.className = 'notif';
+    const head = document.createElement('div');
+    head.className = 'nTitle';
+    head.textContent = n.title;
+    const body = document.createElement('div');
+    body.className = 'nMsg';
+    body.textContent = n.message;
+    const send = document.createElement('button');
+    send.className = 'nSend';
+    send.innerHTML = '<span class="ms">smart_toy</span> Send to AI';
+    send.onclick = () => {
+      panel.hidden = true;
+      promptBox.value = `Something broke in my app — please fix it.\n\nError (${n.title}): ${n.message}`;
+      promptBox.focus();
+      if (!busy) sendBtn.click();
+    };
+    row.append(head, body, send);
+    list.appendChild(row);
+  }
+}
+$('notifBadge').addEventListener('click', () => {
+  $('notifPanel').hidden = !$('notifPanel').hidden;
+});
+window.addEventListener('error', (e) => notify('Page error', e.message));
+window.addEventListener('unhandledrejection', (e) =>
+  notify('Promise rejection', e.reason?.message || String(e.reason)));
+// runtime errors inside the generated app (injected hook posts these over)
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (d && d.__ab === 'error' && d.message) notify('App error', d.message);
+});
+
+/* ---------- 404 bounce notice (?nf=<path>) ---------- */
+{
+  const nf = new URLSearchParams(location.search).get('nf');
+  if (nf) {
+    history.replaceState(null, '', location.pathname.replace(/index\.html$/, '') || '/');
+    notify('404 Not Found', `"${nf}" does not exist — you were redirected to the homepage.`);
+  }
 }
 
 /* ---------- co-build: live sync when others change this project ---------- */
@@ -354,17 +458,44 @@ async function send() {
           setChips(chipFiles, chipFiles);
           activityText.textContent = `wrote ${ev.path}`;
           schedulePreview();
+        } else if (ev.type === 'edit') {
+          chipFiles.push(ev.path);
+          setChips(chipFiles, chipFiles);
+          activityText.textContent = `edited ${ev.path}`;
+          schedulePreview();
+        } else if (ev.type === 'delete') {
+          chipFiles = chipFiles.filter((p) => p !== ev.path);
+          setChips(chipFiles);
+          activityText.textContent = `deleted ${ev.path}`;
+          schedulePreview();
+        } else if (ev.type === 'plan') {
+          renderPlan(ev.items || []);
+        } else if (ev.type === 'refactor') {
+          $('refactorBar').hidden = false;
+          activityText.textContent = 'refactoring code structure…';
+        } else if (ev.type === 'warn') {
+          notify('Generator warning', ev.message);
         } else if (ev.type === 'error') {
           throw new Error(ev.message);
         } else if (ev.type === 'done') {
+          $('refactorBar').hidden = true;
           addAiBubble((displayText + filter.drain()).trim());
+          if ((ev.edited || []).length || (ev.deleted || []).length) {
+            const bits = [];
+            if (ev.files?.length) bits.push(`${ev.files.length} written`);
+            if (ev.edited.length) bits.push(`${ev.edited.length} edited`);
+            if (ev.deleted.length) bits.push(`${ev.deleted.length} deleted`);
+            addAiBubble(`✓ ${bits.join(', ')}`);
+          }
         }
       }
     }
   } catch (e) {
     addAiBubble(`⚠ ${e.message}`);
+    notify('Generation failed', e.message);
   } finally {
     activityEl.hidden = true;
+    $('refactorBar').hidden = true;
     busy = false; sendBtn.disabled = false;
     promptBox.focus();
     loadProjects();
@@ -374,7 +505,7 @@ async function send() {
 /* ---------- publish / upload / delete ---------- */
 publishBtn.addEventListener('click', async () => {
   if (!projectId || busy) return;
-  const isPub = publishBtn.textContent === 'Unpublish';
+  const isPub = ($('pubLbl')?.textContent || 'Publish') === 'Unpublish';
   let description;
   if (!isPub) description = prompt('Short description shown on the Discover page:') || '';
   try {
@@ -385,7 +516,7 @@ publishBtn.addEventListener('click', async () => {
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const updated = await r.json();
-    publishBtn.textContent = updated.published ? 'Unpublish' : 'Publish';
+    setPub(updated.published);
     alert(updated.published
       ? `Published! Shareable link:\n${API || location.origin}/preview/${updated.id}/`
       : 'Unpublished.');

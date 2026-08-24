@@ -45,8 +45,9 @@ chat.post('/', async (c) => {
   await store.setModel(pid, model);
 
   const history = (await store.history(pid)).map(m => ({ role: m.role, content: m.content }));
+  const fileCtx = await buildFileContext(pid);
   const messages = [
-    { role: 'system', content: systemPrompt() },
+    { role: 'system', content: systemPrompt() + fileCtx },
     ...history,
     { role: 'user', content: message },
   ];
@@ -91,6 +92,52 @@ chat.post('/', async (c) => {
 
       const parser = new FileStreamer();
       const written = [];
+      const edited = [];
+      const deleted = [];
+      let ops = 0;
+      let refactorSent = false;
+      const maybeRefactor = () => {
+        if (!refactorSent && (deleted.length >= 2 || edited.length >= 3 || ops >= 6)) {
+          refactorSent = true;
+          send({ type: 'refactor' });
+        }
+      };
+
+      // apply one generator op; returns an SSE event for the client
+      const handleGen = async (ev) => {
+        if (ev.type === 'file' && ev.path) {
+          await store.saveFile(pid, ev.path, ev.content);
+          written.push(ev.path);
+          ops++;
+          maybeRefactor();
+          send({ type: 'file', path: ev.path });
+        } else if (ev.type === 'edit' && ev.path) {
+          const res = await applyEdit(pid, ev.path, ev.hunks || []);
+          if (res.ok) {
+            edited.push(ev.path);
+            ops++;
+            maybeRefactor();
+            send({ type: 'edit', path: ev.path });
+          } else {
+            send({ type: 'warn', message: `edit failed on ${ev.path}: ${res.error}` });
+          }
+        } else if (ev.type === 'delete' && ev.path) {
+          try {
+            await store.deleteFile(pid, ev.path);
+            deleted.push(ev.path);
+            ops++;
+            maybeRefactor();
+            send({ type: 'delete', path: ev.path });
+          } catch (e) {
+            send({ type: 'warn', message: `delete failed on ${ev.path}: ${e.message}` });
+          }
+        } else if (ev.type === 'plan') {
+          try {
+            await store.setPlan(pid, ev.items || []);
+            send({ type: 'plan', items: ev.items || [] });
+          } catch { /* plan is cosmetic */ }
+        }
+      };
       let raw = '';
 
       try {
@@ -115,23 +162,15 @@ chat.post('/', async (c) => {
             raw += tok;
             send({ type: 'token', v: tok });
             for (const ev of parser.feed(tok)) {
-              if (ev.type === 'file' && ev.path) {
-                await store.saveFile(pid, ev.path, ev.content);
-                written.push(ev.path);
-                send({ type: 'file', path: ev.path });
-              }
+              await handleGen(ev);
             }
           }
         }
         for (const ev of parser.flush()) {
-          if (ev.type === 'file' && ev.path) {
-            await store.saveFile(pid, ev.path, ev.content);
-            written.push(ev.path);
-            send({ type: 'file', path: ev.path });
-          }
+          await handleGen(ev);
         }
         if (raw.trim()) await store.addMessage(pid, 'assistant', raw);
-        send({ type: 'done', projectId: pid, files: written, model });
+        send({ type: 'done', projectId: pid, files: written, edited, deleted, model });
         // co-build: tell everyone else watching this project that it changed
         try {
           await store.appendEvent(pid, 'build', { type: 'refresh', sid: body.sid || '', files: written });
@@ -151,3 +190,51 @@ chat.post('/', async (c) => {
     'cache-control': 'no-cache',
   });
 });
+
+// ---- generator op helpers ---------------------------------------------------
+
+async function applyEdit(pid, fpath, hunks) {
+  if (!hunks.length) return { error: 'no SEARCH/REPLACE hunks found' };
+  const row = await store.getFile(pid, fpath);
+  if (!row) return { error: 'file not found' };
+  if (row.encoding && row.encoding !== 'utf8') return { error: 'binary file — rewrite with FILE instead' };
+  let text = String(row.content ?? '');
+  for (const h of hunks) {
+    const i = text.indexOf(h.search);
+    if (i === -1) {
+      return { error: `search text not found: ${JSON.stringify(String(h.search).slice(0, 60))}` };
+    }
+    text = text.slice(0, i) + h.replace + text.slice(i + h.search.length);
+  }
+  await store.saveFile(pid, fpath, text);
+  return { ok: true };
+}
+
+// Give the model eyes on the current project: full file list plus contents
+// of the most important files within a token budget.
+const CTX_BUDGET = 20000;
+
+async function buildFileContext(pid) {
+  let files = [];
+  try { files = await store.listFiles(pid); } catch { return ''; }
+  if (!files || !files.length) return '';
+  const names = files.map((f) => f.path).join(', ');
+  const parts = [
+    `\n\n## Current state of this project`,
+    `Files present: ${names}`,
+  ];
+  const prio = (p) => (p === 'index.html' ? 0 : /\.js$/.test(p) ? 1 : /\.css$/.test(p) ? 2 : 3);
+  let budget = CTX_BUDGET;
+  for (const f of [...files].sort((a, b) => prio(a.path) - prio(b.path))) {
+    if (budget <= 200) break;
+    try {
+      const row = await store.getFile(pid, f.path);
+      if (!row || (row.encoding && row.encoding !== 'utf8')) continue;
+      let c = String(row.content ?? '');
+      if (c.length > budget) c = c.slice(0, budget) + '\n…(truncated)';
+      budget -= c.length;
+      parts.push(`--- ${f.path} ---\n${c}`);
+    } catch { /* skip unreadable */ }
+  }
+  return '\n' + parts.join('\n');
+}

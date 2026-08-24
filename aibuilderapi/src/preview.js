@@ -120,6 +120,55 @@ export const BAAS_SDK_JS = `(function () {
       }).then(function (r) {
         if (r.status === 401) showSignup();
       }).catch(function () {});
+    },
+    server: function (name) {
+      if (!/^[a-z0-9_-]{1,32}$/.test(name)) throw new Error('server name: a-z0-9-_ max 32 chars');
+      var base = '/api/projects/' + pid + '/live/srv-' + name;
+      var subs = [], es = null;
+      function connect() {
+        var u = base + '/stream';
+        if (tok()) u += '?tok=' + encodeURIComponent(tok());
+        es = new EventSource(u);
+        es.onmessage = function (ev) {
+          try {
+            var d = JSON.parse(ev.data);
+            for (var i = 0; i < subs.length; i++) subs[i](d);
+          } catch (e) {}
+        };
+        es.onerror = function () {
+          fetch('/api/auth/me', authHeaders())
+            .then(function (r) { if (r.status === 401) showSignup(); })
+            .catch(function () {});
+        };
+      }
+      connect();
+      return {
+        push: function (evt) {
+          fetch(base + '/push', {
+            method: 'POST',
+            headers: authHeaders({ 'content-type': 'application/json' }),
+            body: JSON.stringify(evt || {})
+          }).then(function (r) { if (r.status === 401) showSignup(); }).catch(function () {});
+        },
+        subscribe: function (cb) {
+          subs.push(cb);
+          return function () { subs = subs.filter(function (f) { return f !== cb; }); };
+        },
+        close: function () { if (es) es.close(); subs = []; }
+      };
+    },
+    call: function (name, input) {
+      return fetch('/api/projects/' + pid + '/fn/' + name, {
+        method: 'POST',
+        headers: authHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ input: input === undefined ? null : input })
+      }).then(function (r) {
+        return r.text().then(function (t) {
+          var j = t ? JSON.parse(t) : {};
+          if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+          return j.result;
+        });
+      });
     }
   };
 })();`;
@@ -154,7 +203,10 @@ function safePath(raw) {
 }
 
 function inject(html, pid) {
-  const tag = `<script>window.__CREAT_PROJECT__='${pid}';</script><script src='/__baas.js'></script>`;
+  const errHook = `<script>(function(){function r(m){try{parent.postMessage({__ab:'error',message:String(m).slice(0,300)},'*')}catch(e){}}` +
+    `window.addEventListener('error',function(e){r(e.message||'script error')});` +
+    `window.addEventListener('unhandledrejection',function(e){var x=e.reason;r('Unhandled promise rejection: '+(x&&x.message||x))});})();</script>`;
+  const tag = `<script>window.__CREAT_PROJECT__='${pid}';</script><script src='/__baas.js'></script>${errHook}`;
   if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${tag}</head>`);
   return tag + html;
 }
@@ -170,7 +222,12 @@ function notYet(c, pid) {
 async function serveFile(c, pid, rawPath) {
   const p = safePath(rawPath);
   if (p === null) return c.text('bad path', 400);
-  const target = p === '' ? 'index.html' : p;
+  let target = p === '' ? 'index.html' : p;
+
+  // functions/ are server-side only — never served as web pages
+  if (target === 'functions' || target.startsWith('functions/')) {
+    return c.text('not found', 404);
+  }
 
   let row = await store.getFile(pid, target);
   if (!row && target !== 'index.html') {

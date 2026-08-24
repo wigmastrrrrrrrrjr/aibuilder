@@ -161,6 +161,17 @@ export function createKvStore(kv) {
       return tail.map((m) => ({ role: m.role, content: m.content }));
     },
 
+    async deleteFile(pid, fpath) {
+      await kv.delete(['file', pid, fpath]);
+      return { ok: true };
+    },
+    async setPlan(pid, plan) {
+      const key = ['project', pid];
+      const cur = (await kv.get(key)).value;
+      if (!cur) throw new Error('not found');
+      await kv.set(key, { ...cur, plan: plan == null ? null : JSON.stringify(plan) });
+    },
+
     // ---- live event log (multiplayer) --------------------------------------
     async appendEvent(pid, room, data) {
       const seq = ((await kv.get(['seq', pid, room])).value ?? 0) + 1;
