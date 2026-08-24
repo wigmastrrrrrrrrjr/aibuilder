@@ -1,6 +1,9 @@
 'use strict';
 
 const grid = document.getElementById('discoverGrid');
+// Backend lives on Cloudflare Workers when this page is served from GitHub Pages.
+const WORKER_ORIGIN = 'https://aibuilderapi.csomeone301.workers.dev';
+const API = location.hostname.endsWith('github.io') ? WORKER_ORIGIN : '';
 
 function card(app) {
   const d = document.createElement('article');
@@ -16,7 +19,7 @@ function card(app) {
 
   const open = document.createElement('a');
   open.className = 'cardBtn primary';
-  open.href = `/preview/${app.id}/`;
+  open.href = `${API}/preview/${app.id}/`;
   open.target = '_blank';
   open.rel = 'noopener';
   open.textContent = 'Open ↗';
@@ -27,10 +30,10 @@ function card(app) {
   remix.onclick = async () => {
     remix.disabled = true; remix.textContent = 'Remixing…';
     try {
-      const r = await fetch(`/api/projects/${app.id}/remix`, { method: 'POST' });
+      const r = await fetch(`${API}/api/projects/${app.id}/remix`, { method: 'POST' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const copy = await r.json();
-      location.href = `/index.html?project=${copy.id}`;
+      location.href = `index.html?project=${copy.id}`;
     } catch (e) {
       alert(`⚠ ${e.message}`);
       remix.disabled = false; remix.textContent = 'Remix ✎';
@@ -48,11 +51,11 @@ function card(app) {
 async function load() {
   grid.innerHTML = '<div class="empty">Loading…</div>';
   try {
-    const apps = await (await fetch('/api/discover')).json();
+    const apps = await (await fetch(`${API}/api/discover`)).json();
     grid.innerHTML = '';
     if (!apps.length) {
       grid.innerHTML = `<div class="empty"><h1>No published apps yet</h1>
-        <p>Build something in the <a href="/index.html">builder</a> and hit Publish.</p></div>`;
+        <p>Build something in the <a href="index.html">builder</a> and hit Publish.</p></div>`;
       return;
     }
     for (const a of apps) grid.appendChild(card(a));

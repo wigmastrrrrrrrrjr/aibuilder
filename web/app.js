@@ -2,6 +2,10 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
+// When hosted on GitHub Pages the backend lives on Cloudflare Workers;
+// same-origin (local Node or Workers assets hosting) needs no prefix.
+const WORKER_ORIGIN = 'https://aibuilderapi.csomeone301.workers.dev';
+const API = location.hostname.endsWith('github.io') ? WORKER_ORIGIN : '';
 const messagesEl = $('messages'), promptBox = $('promptBox'), sendBtn = $('sendBtn');
 const activityEl = $('activity'), activityText = $('activityText'), rawStream = $('rawStream');
 const fileChips = $('fileChips'), frame = $('previewFrame'), projName = $('projName');
@@ -80,7 +84,7 @@ function setChips(files, markNew) {
 
 function refreshPreview(bust) {
   if (!projectId) return;
-  frame.src = `/preview/${projectId}/` + (bust ? `?t=${Date.now()}` : '');
+  frame.src = `${API}/preview/${projectId}/` + (bust ? `?t=${Date.now()}` : '');
 }
 
 function currentModel() {
@@ -119,7 +123,7 @@ $('keyBtn').addEventListener('click', () => {
 /* ---------- data loading ---------- */
 async function loadMeta() {
   try {
-    const m = await (await fetch('/api/meta')).json();
+    const m = await (await fetch(`${API}/api/meta`)).json();
     if (m.model) defaultModel = m.model;
     loadModels();
   } catch { /* ignore */ }
@@ -128,7 +132,7 @@ async function loadMeta() {
 
 async function loadModels() {
   try {
-    const r = await fetch('/api/models', { headers: authHeaders() });
+    const r = await fetch(`${API}/api/models`, { headers: authHeaders() });
     const j = await r.json();
     const names = Array.isArray(j.models) && j.models.length
       ? j.models
@@ -151,7 +155,7 @@ async function loadModels() {
 }
 
 async function loadProjects(selectPid) {
-  const list = await (await fetch('/api/projects')).json();
+  const list = await (await fetch(`${API}/api/projects`)).json();
   const el = $('projectList'); el.innerHTML = '';
   for (const p of list) {
     const d = document.createElement('div');
@@ -166,7 +170,7 @@ async function loadProjects(selectPid) {
 
 async function selectProject(pid) {
   projectId = pid;
-  const data = await (await fetch(`/api/projects/${pid}`)).json();
+  const data = await (await fetch(`${API}/api/projects/${pid}`)).json();
   projName.textContent = data.project.name;
   document.title = `${data.project.name} — aibuilder`;
   publishBtn.disabled = false;
@@ -230,7 +234,7 @@ async function send() {
   };
 
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch(`${API}/api/chat`, {
       method: 'POST',
       headers: authHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({
@@ -294,7 +298,7 @@ publishBtn.addEventListener('click', async () => {
   let description;
   if (!isPub) description = prompt('Short description shown on the Discover page:') || '';
   try {
-    const r = await fetch(`/api/projects/${projectId}/publish`, {
+    const r = await fetch(`${API}/api/projects/${projectId}/publish`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ publish: !isPub, description }),
@@ -303,7 +307,7 @@ publishBtn.addEventListener('click', async () => {
     const updated = await r.json();
     publishBtn.textContent = updated.published ? 'Unpublish' : 'Publish';
     alert(updated.published
-      ? `Published! Shareable link:\n${location.origin}/preview/${updated.id}/`
+      ? `Published! Shareable link:\n${API || location.origin}/preview/${updated.id}/`
       : 'Unpublished.');
     loadProjects();
   } catch (e) {
@@ -321,7 +325,7 @@ $('uploadInput').addEventListener('change', async (e) => {
 
   busy = true;
   try {
-    const p = await (await fetch('/api/projects', {
+    const p = await (await fetch(`${API}/api/projects`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: guessName }),
@@ -331,7 +335,7 @@ $('uploadInput').addEventListener('change', async (e) => {
     for (const f of picked.slice(0, 300)) {
       fd.append('files', f, f.webkitRelativePath || f.name);
     }
-    const res = await fetch(`/api/projects/${p.id}/upload`, { method: 'POST', body: fd });
+    const res = await fetch(`${API}/api/projects/${p.id}/upload`, { method: 'POST', body: fd });
     if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
     const out = await res.json();
     if (out.skipped.length) console.warn('skipped:', out.skipped);
@@ -346,7 +350,7 @@ $('uploadInput').addEventListener('change', async (e) => {
 
 $('delBtn').addEventListener('click', async () => {
   if (!projectId || !confirm('Delete this project?')) return;
-  await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+  await fetch(`${API}/api/projects/${projectId}`, { method: 'DELETE' });
   await loadProjects(); resetToNew();
 });
 
@@ -355,7 +359,7 @@ sendBtn.onclick = send;
 modelSel.addEventListener('change', () => localStorage.setItem('ab.model', modelSel.value));
 $('newBtn').onclick = () => { if (!busy) resetToNew(); };
 $('refreshBtn').onclick = () => refreshPreview(true);
-$('openBtn').onclick = () => projectId && window.open(`/preview/${projectId}/`, '_blank');
+$('openBtn').onclick = () => projectId && window.open(`${API}/preview/${projectId}/`, '_blank');
 promptBox.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
