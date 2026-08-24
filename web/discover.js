@@ -2,7 +2,7 @@
 
 const grid = document.getElementById('discoverGrid');
 // Backend lives on Cloudflare Workers when this page is served from GitHub Pages.
-const WORKER_ORIGIN = 'https://aibuilder.deno.dev';
+const WORKER_ORIGIN = 'https://aibuilder.wigmastrrrrrrrrjr.deno.net';
 const API = location.hostname.endsWith('github.io') ? WORKER_ORIGIN : '';
 
 function card(app) {
