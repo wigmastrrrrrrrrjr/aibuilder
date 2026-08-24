@@ -1,14 +1,6 @@
-name: Deploy aibuilder
+name: Deploy aibuilder to Cloudflare (manual only — primary host is now Deno Deploy)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'aibuilderapi/**'
-      - 'web/**'
-      - 'schema.sql'
-      - 'wrangler.toml'
-      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 jobs:

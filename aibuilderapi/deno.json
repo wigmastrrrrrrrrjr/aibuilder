@@ -1,0 +1,7 @@
+{
+  "imports": {
+    "hono/": "npm:hono/"
+  },
+  "lint": { "include": ["src/"] },
+  "fmt": { "lineWidth": 100 }
+}
