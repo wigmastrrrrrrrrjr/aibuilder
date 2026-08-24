@@ -53,6 +53,18 @@ app.delete('/api/projects/:pid', requireUser, async (c) => {
   return c.json({ ok: true });
 });
 
+app.post('/api/projects/:pid/rename', requireUser, async (c) => {
+  const pid = c.req.param('pid');
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body.name || '').trim().slice(0, 60);
+  if (!name) return c.json({ error: 'name required' }, 400);
+  try {
+    return c.json(await store.rename(pid, name));
+  } catch (e) {
+    return c.json({ error: String(e.message || e) }, 404);
+  }
+});
+
 // publish / unpublish to the discovery feed
 app.post('/api/projects/:pid/publish', requireUser, async (c) => {
   const pid = c.req.param('pid');

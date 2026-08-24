@@ -171,6 +171,14 @@ export function createKvStore(kv) {
       if (!cur) throw new Error('not found');
       await kv.set(key, { ...cur, plan: plan == null ? null : JSON.stringify(plan) });
     },
+    async rename(pid, name) {
+      const key = ['project', pid];
+      const cur = (await kv.get(key)).value;
+      if (!cur) throw new Error('not found');
+      const updated = { ...cur, name };
+      await kv.set(key, updated);
+      return updated;
+    },
 
     // ---- live event log (multiplayer) --------------------------------------
     async appendEvent(pid, room, data) {

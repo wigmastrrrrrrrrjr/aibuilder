@@ -11,7 +11,12 @@ live.post('/api/projects/:pid/live/:room/push', requireUser, async (c) => {
   const { pid, room } = c.req.param();
   if (!/^[A-Za-z0-9:_-]{1,64}$/.test(room)) return c.json({ error: 'bad room' }, 400);
   const evt = await c.req.json().catch(() => ({}));
-  const seq = await store.appendEvent(pid, room, { ...(evt || {}), ts: Date.now() });
+  const u = c.get('user');
+  // identity is stamped by the SERVER from the signed-in account — clients
+  // can never spoof who sent an event
+  const seq = await store.appendEvent(pid, room, {
+    ...(evt || {}), user: u ? u.name : '', ts: Date.now(),
+  });
   return c.json({ ok: true, seq });
 });
 

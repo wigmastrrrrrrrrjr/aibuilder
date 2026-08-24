@@ -169,6 +169,14 @@ export const BAAS_SDK_JS = `(function () {
           return j.result;
         });
       });
+    },
+    me: function () {
+      return fetch('/api/auth/me', authHeaders())
+        .then(function (r) {
+          if (r.status === 401) { showSignup(); return null; }
+          return r.json().then(function (j) { return { username: j.username }; });
+        })
+        .catch(function () { return null; });
     }
   };
 })();`;

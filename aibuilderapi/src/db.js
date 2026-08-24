@@ -148,6 +148,11 @@ useStore({
     db.prepare('UPDATE projects SET plan = ? WHERE id = ?')
       .run(plan == null ? null : JSON.stringify(plan), pid);
   },
+  async rename(pid, name) {
+    const r = db.prepare('UPDATE projects SET name = ? WHERE id = ?').run(name, pid);
+    if (!r.changes) throw new Error('not found');
+    return db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  },
   async addMessage(pid, role, content) {
     db.prepare(
       'INSERT INTO messages (project_id, role, content, created_at) VALUES (?, ?, ?, ?)'

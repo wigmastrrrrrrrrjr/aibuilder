@@ -71,11 +71,11 @@ button .ms { margin-right: 2px; }
   padding: 0 12px; border-bottom: 1px solid var(--border); gap: 8px;
 }
 #projName { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#delBtn, #planBtn {
+#delBtn, #planBtn, #renameBtn {
   background: none; border: 1px solid var(--border); color: var(--muted);
   border-radius: 6px; cursor: pointer; padding: 3px 8px;
 }
-#delBtn:hover, #planBtn:hover { color: var(--text); border-color: var(--accent); }
+#delBtn:hover, #planBtn:hover, #renameBtn:hover { color: var(--text); border-color: var(--accent); }
 #delBtn .ms { color: var(--red); }
 #planCount { font-style: normal; font-size: 11px; margin-left: 3px; color: var(--green); }
 #refactorBar {

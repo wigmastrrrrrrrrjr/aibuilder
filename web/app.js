@@ -258,6 +258,7 @@ async function selectProject(pid) {
   publishBtn.disabled = false;
   setPub(data.project.published);
   $('delBtn').hidden = false;
+  $('renameBtn').hidden = false;
   if (data.project.model && [...modelSel.options].some(o => o.value === data.project.model)) {
     modelSel.value = data.project.model;
   }
@@ -282,6 +283,7 @@ function resetToNew() {
   publishBtn.disabled = true;
   setPub(false);
   $('delBtn').hidden = true;
+  $('renameBtn').hidden = true;
   messagesEl.innerHTML = `
     <div class="empty"><h1>Build an app by describing it</h1>
     <p>Try: “a todo app with priorities and due dates”,<br>
@@ -501,6 +503,33 @@ async function send() {
     loadProjects();
   }
 }
+
+/* ---------- rename project (the owner names it — not the prompt) ---------- */
+async function doRename() {
+  if (!projectId || busy) return;
+  const cur = projName.textContent;
+  const name = prompt('Name this project:', cur === 'New app' ? '' : cur);
+  if (name === null) return;
+  const clean = name.trim().slice(0, 60);
+  if (!clean || clean === cur) return;
+  try {
+    const r = await fetch(`${API}/api/projects/${projectId}/rename`, {
+      method: 'POST',
+      headers: authHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ name: clean }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    const p = await r.json();
+    projName.textContent = p.name;
+    document.title = `${p.name} — aibuilder`;
+    loadProjects();
+  } catch (e) {
+    notify('Rename failed', e.message);
+    alert(`⚠ ${e.message}`);
+  }
+}
+$('renameBtn').addEventListener('click', doRename);
+projName.addEventListener('click', () => { if (!$('renameBtn').hidden) doRename(); });
 
 /* ---------- publish / upload / delete ---------- */
 publishBtn.addEventListener('click', async () => {

@@ -35,7 +35,8 @@ chat.post('/', async (c) => {
   let project = null;
   if (pid) project = await store.getProject(pid);
   if (!project) {
-    pid = (await store.createProject(String(message).slice(0, 60))).id;
+    // the owner names the project themselves — never name it after the prompt
+    pid = (await store.createProject()).id;
   }
 
   // model precedence: request > stored on project > env default

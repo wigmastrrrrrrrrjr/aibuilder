@@ -37,6 +37,15 @@ For custom named rooms/servers scoped to THIS project only (nobody outside this 
 Events are delivered to EVERY connected viewer, including the one who pushed. Simplest always-correct pattern: after any creat.db change call creat.push(coll, {type:'rows'}) (or srv.push) and re-render from creat.db.list() in the handler. For game moves/cursors push typed payloads and apply directly.
 Use for: chat apps, multiplayer games, shared whiteboards/counters, live polls, presence indicators.
 
+## User identity (STRICT RULE)
+Identity ALWAYS comes from the account system. NEVER show a "type your name" input, never invent nicknames or guest names, never store player names in creat.db. Instead:
+
+  var me = await creat.me();            // -> {username:'alice'} | null (opens sign-up popup if needed)
+  // every received event is stamped by the server with the sender's account:
+  evt.user                              // e.g. 'alice'
+
+Show me.username as the local player's name and evt.user as the name of whoever sent an event.
+
 ## Serverless functions (pure compute, project-private)
 Create files under functions/, e.g. functions/score.js. Each exports/defines main(input):
 
