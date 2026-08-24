@@ -10,10 +10,11 @@ const newId = () => crypto.randomUUID().replace(/-/g, '').slice(0, 20);
 
 export function createKvStore(kv) {
   return {
-    async createProject(name) {
+    async createProject(name, owner) {
       const p = {
         id: newId(),
         name: name || 'Untitled app',
+        owner: owner || '',
         created_at: Date.now(),
         model: '',
         published: 0,
@@ -178,6 +179,12 @@ export function createKvStore(kv) {
       const updated = { ...cur, name };
       await kv.set(key, updated);
       return updated;
+    },
+    async incrUsage(name, day) {
+      const key = ['usage', name, day];
+      let n = ((await kv.get(key)).value ?? 0) + 1;
+      await kv.set(key, n);
+      return n;
     },
 
     // ---- live event log (multiplayer) --------------------------------------

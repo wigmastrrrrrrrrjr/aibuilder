@@ -40,6 +40,12 @@ export async function requireUser(c, next) {
   await next();
 }
 
+// legacy projects have no owner and stay writable for compat;
+// owned projects may only be modified by their owner
+export function canWrite(project, user) {
+  return !project || !project.owner || Boolean(user && user.name === project.owner);
+}
+
 const NAME_RE = /^[a-zA-Z0-9_-]{3,24}$/;
 
 export const auth = new Hono();

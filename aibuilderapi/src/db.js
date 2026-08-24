@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id TEXT NOT NULL,
   exp INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS usage (
+  name TEXT NOT NULL,
+  day TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (name, day)
+);
 `);
 
 function ensureColumn(table, colDef) {
@@ -55,6 +61,7 @@ ensureColumn('projects', 'slug TEXT');
 ensureColumn('projects', "description TEXT NOT NULL DEFAULT ''");
 ensureColumn('projects', 'model TEXT');
 ensureColumn('projects', 'plan TEXT');
+ensureColumn('projects', "owner TEXT NOT NULL DEFAULT ''");
 ensureColumn('files', "encoding TEXT NOT NULL DEFAULT 'utf8'");
 
 function slugify(name) {
@@ -63,10 +70,10 @@ function slugify(name) {
 }
 
 useStore({
-  async createProject(name) {
+  async createProject(name, owner) {
     const p = { id: crypto.randomUUID().replace(/-/g, '').slice(0, 20), name: name || 'Untitled app', created_at: Date.now() };
-    db.prepare('INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)')
-      .run(p.id, p.name, p.created_at);
+    db.prepare('INSERT INTO projects (id, name, created_at, owner) VALUES (?, ?, ?, ?)')
+      .run(p.id, p.name, p.created_at, owner || '');
     return p;
   },
   async listProjects() {
@@ -109,12 +116,12 @@ useStore({
        WHERE published = 1 ORDER BY created_at DESC`
     ).all();
   },
-  async remix(srcPid) {
+  async remix(srcPid, owner) {
     const src = db.prepare('SELECT * FROM projects WHERE id = ?').get(srcPid);
     if (!src) return null;
     const copy = { id: crypto.randomUUID().replace(/-/g, '').slice(0, 20), name: `${src.name} (remix)`, created_at: Date.now() };
-    db.prepare('INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)')
-      .run(copy.id, copy.name, copy.created_at);
+    db.prepare('INSERT INTO projects (id, name, created_at, owner) VALUES (?, ?, ?, ?)')
+      .run(copy.id, copy.name, copy.created_at, owner || '');
     db.prepare(`INSERT INTO files (project_id, path, content, encoding, updated_at)
                 SELECT ?, path, content, encoding, ? FROM files WHERE project_id = ?`)
       .run(copy.id, Date.now(), srcPid);
@@ -152,6 +159,11 @@ useStore({
     const r = db.prepare('UPDATE projects SET name = ? WHERE id = ?').run(name, pid);
     if (!r.changes) throw new Error('not found');
     return db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  },
+  async incrUsage(name, day) {
+    db.prepare(`INSERT INTO usage (name, day, count) VALUES (?, ?, 1)
+                ON CONFLICT (name, day) DO UPDATE SET count = count + 1`).run(name, day);
+    return db.prepare('SELECT count FROM usage WHERE name = ? AND day = ?').get(name, day).count;
   },
   async addMessage(pid, role, content) {
     db.prepare(

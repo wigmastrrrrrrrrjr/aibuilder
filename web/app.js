@@ -237,7 +237,10 @@ async function loadModels() {
 }
 
 async function loadProjects(selectPid) {
-  const list = await (await fetch(`${API}/api/projects`)).json();
+  const all = await (await fetch(`${API}/api/projects`)).json();
+  // sidebar = my projects (legacy owner-less ones stay visible for compat)
+  const me = sessName();
+  const list = all.filter((p) => !p.owner || p.owner === me);
   const el = $('projectList'); el.innerHTML = '';
   for (const p of list) {
     const d = document.createElement('div');
@@ -257,8 +260,9 @@ async function selectProject(pid) {
   document.title = `${data.project.name} — aibuilder`;
   publishBtn.disabled = false;
   setPub(data.project.published);
-  $('delBtn').hidden = false;
-  $('renameBtn').hidden = false;
+  const mine = !data.project.owner || data.project.owner === sessName();
+  $('delBtn').hidden = !mine;
+  $('renameBtn').hidden = !mine;
   if (data.project.model && [...modelSel.options].some(o => o.value === data.project.model)) {
     modelSel.value = data.project.model;
   }

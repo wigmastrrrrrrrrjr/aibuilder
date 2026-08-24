@@ -9,7 +9,7 @@ import { getVar } from './env.js';
 import { builtinKey } from './keys.js';
 import { toBase64 } from './base64.js';
 import { live } from './live.js';
-import { auth, requireUser } from './auth.js';
+import { auth, requireUser, canWrite } from './auth.js';
 import { fn } from './fn.js';
 
 const FRONTEND_URL = 'https://wigmastrrrrrrrrjr.github.io/aibuilder/';
@@ -33,7 +33,7 @@ app.get('/api/projects', async (c) => c.json(await store.listProjects()));
 
 app.post('/api/projects', requireUser, async (c) => {
   const { name } = await c.req.json().catch(() => ({}));
-  return c.json(await store.createProject(name), 201);
+  return c.json(await store.createProject(name, c.get('user').name), 201);
 });
 
 app.get('/api/projects/:pid', async (c) => {
@@ -48,13 +48,18 @@ app.get('/api/projects/:pid', async (c) => {
 
 app.delete('/api/projects/:pid', requireUser, async (c) => {
   const pid = c.req.param('pid');
-  if (!(await store.getProject(pid))) return c.json({ error: 'not found' }, 404);
+  const project = await store.getProject(pid);
+  if (!project) return c.json({ error: 'not found' }, 404);
+  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
   await store.deleteProject(pid);
   return c.json({ ok: true });
 });
 
 app.post('/api/projects/:pid/rename', requireUser, async (c) => {
   const pid = c.req.param('pid');
+  const project = await store.getProject(pid);
+  if (!project) return c.json({ error: 'not found' }, 404);
+  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
   const body = await c.req.json().catch(() => ({}));
   const name = String(body.name || '').trim().slice(0, 60);
   if (!name) return c.json({ error: 'name required' }, 400);
@@ -68,7 +73,9 @@ app.post('/api/projects/:pid/rename', requireUser, async (c) => {
 // publish / unpublish to the discovery feed
 app.post('/api/projects/:pid/publish', requireUser, async (c) => {
   const pid = c.req.param('pid');
-  if (!(await store.getProject(pid))) return c.json({ error: 'not found' }, 404);
+  const project = await store.getProject(pid);
+  if (!project) return c.json({ error: 'not found' }, 404);
+  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
   const body = await c.req.json().catch(() => ({}));
   const publish = body.publish !== false;
   const description = typeof body.description === 'string' ? body.description.slice(0, 300) : undefined;
@@ -79,11 +86,11 @@ app.post('/api/projects/:pid/publish', requireUser, async (c) => {
   }
 });
 
-// remix = copy a published app into a new editable project
+// remix = copy a published app into a new editable project owned by the remixer
 app.post('/api/projects/:pid/remix', requireUser, async (c) => {
   const src = await store.getProject(c.req.param('pid'));
   if (!src) return c.json({ error: 'not found' }, 404);
-  return c.json(await store.remix(src.id), 201);
+  return c.json(await store.remix(src.id, c.get('user').name), 201);
 });
 
 // discovery feed
@@ -93,6 +100,7 @@ app.get('/api/discover', async (c) => c.json(await store.discover()));
 app.post('/api/projects/:pid/upload', requireUser, async (c) => {
   const project = await store.getProject(c.req.param('pid'));
   if (!project) return c.json({ error: 'not found' }, 404);
+  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
 
   let form;
   try {

@@ -4,7 +4,7 @@ import { FileStreamer } from './parser.js';
 import { systemPrompt } from './prompt.js';
 import { extractKey, builtinKey } from './keys.js';
 import { getVar } from './env.js';
-import { getUser } from './auth.js';
+import { getUser, canWrite } from './auth.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MODEL_RE = /^[A-Za-z0-9._:+%-]{1,64}$/;
@@ -33,16 +33,35 @@ chat.post('/', async (c) => {
 
   let pid = body.projectId;
   let project = null;
-  if (pid) project = await store.getProject(pid);
+  if (pid) {
+    project = await store.getProject(pid);
+    if (!project) pid = null;
+    else if (!canWrite(project, user)) return c.json({ error: "you don't own this project" }, 403);
+  }
   if (!project) {
     // the owner names the project themselves — never name it after the prompt
-    pid = (await store.createProject()).id;
+    pid = (await store.createProject(undefined, user.name)).id;
   }
 
   // model precedence: request > stored on project > env default
   const requested = typeof body.model === 'string' && MODEL_RE.test(body.model) ? body.model : '';
   const model = requested || (project && MODEL_RE.test(project.model || '') ? project.model : '')
     || getVar('OLLAMA_MODEL') || 'gemma4:31b';
+
+  // BYOK users ride their own key — no shared-quota usage counted
+  const hasOwnKey = Boolean(
+    extractKey(c.req.header('x-api-key'), typeof body.apiKey === 'string' ? body.apiKey : ''),
+  );
+  if (!hasOwnKey) {
+    const day = new Date().toISOString().slice(0, 10);
+    const used = await store.incrUsage(user.name, day);
+    const limit = Number(getVar('DAILY_LIMIT')) || 30;
+    if (used > limit) {
+      return c.json({
+        error: `Daily free limit reached (${limit} prompts/day). Add your own Ollama API key (🔑) for unlimited use.`,
+      }, 429);
+    }
+  }
   await store.setModel(pid, model);
 
   const history = (await store.history(pid)).map(m => ({ role: m.role, content: m.content }));
