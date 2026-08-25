@@ -177,6 +177,27 @@ export const BAAS_SDK_JS = `(function () {
         });
       });
     },
+    lib: {
+      _loaded: {},
+      _registry: {
+        physics: { url: 'https://cdn.jsdelivr.net/npm/planck@1.0.50/dist/planck.min.js', global: 'planck' }
+      },
+      load: function (name) {
+        if (window.creat.lib._loaded[name]) return Promise.resolve(window[window.creat.lib._registry[name].global]);
+        var info = window.creat.lib._registry[name];
+        if (!info) return Promise.reject(new Error('Unknown library: ' + name + '. Available: ' + Object.keys(window.creat.lib._registry).join(', ')));
+        return new Promise(function (resolve, reject) {
+          var s = document.createElement('script');
+          s.src = info.url;
+          s.onload = function () {
+            window.creat.lib._loaded[name] = true;
+            resolve(window[info.global]);
+          };
+          s.onerror = function () { reject(new Error('Failed to load library: ' + name)); };
+          document.head.appendChild(s);
+        });
+      }
+    },
     me: function () {
       return fetch('/api/auth/me', authHeaders())
         .then(function (r) {

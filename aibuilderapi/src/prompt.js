@@ -95,6 +95,38 @@ For app-specific rooms like game lobbies, chat rooms, or team channels:
 - If null, the user is anonymous. Their pushes are labeled "anon #<random-id>" by the server.
 - Do NOT call creat.me() in a tight loop — it makes a network request. Call once on load, then cache.
 
+### creat.lib.load — Lazy-load third-party libraries
+
+  var planck = await creat.lib.load('physics');  // -> planck global
+
+Libraries are loaded on-demand from CDN — only fetched when you call load(), never on page load.
+Each library exposes its own global after loading. Available libraries:
+
+  'physics' -> planck.js (2D physics engine, Box2D port)
+    After loading, the global \`planck\` is available. Use it for rigid-body physics, collisions, joints.
+    Docs: https://piqnt.com/planck.js/docs
+
+    Example — create a world with gravity and a falling box:
+      var planck = await creat.lib.load('physics');
+      var world = planck.World(planck.Vec2(0, -10));
+      var ground = world.createBody();
+      ground.createFixture(planck.Edge(planck.Vec2(-20, 0), planck.Vec2(20, 0)));
+      var box = world.createDynamicBody({ position: planck.Vec2(0, 10) });
+      box.createFixture(planck.Box(1, 1));
+
+    To run the simulation in a loop:
+      function loop() {
+        world.step(1 / 60);
+        // read box.getPosition() to render
+        requestAnimationFrame(loop);
+      }
+      loop();
+
+    CAUTION: planck is pure computation — it does NOT render. You must draw the bodies yourself
+    using canvas or DOM elements. Read each body's position/angle after world.step() and update visuals.
+
+To add more libraries in the future, register them in the SDK's lib._registry with a CDN URL and global name.
+
 ---
 
 ## Common pitfalls — DO NOT DO THESE
