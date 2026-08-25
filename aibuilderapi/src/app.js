@@ -11,6 +11,7 @@ import { toBase64 } from './base64.js';
 import { live } from './live.js';
 import { auth, requireUser, canWrite } from './auth.js';
 import { fn } from './fn.js';
+import { rateLimit } from './rate-limit.js';
 
 const FRONTEND_URL = 'https://wigmastrrrrrrrrjr.github.io/aibuilder/';
 
@@ -18,6 +19,13 @@ export const app = new Hono();
 
 // CORS so web/ can be hosted separately (Pages) from this API (Worker)
   app.use('*', cors());
+
+// ---- rate limits (stricter = safer) -----------------------------------------
+const globalLimit = rateLimit({ windowMs: 60000, max: 60 });   // 60 req/min per IP
+const chatLimit   = rateLimit({ windowMs: 60000, max: 5 });    // 5 chat req/min per IP
+const authLimit   = rateLimit({ windowMs: 60000, max: 3 });    // 3 auth attempts/min per IP
+const fnLimit     = rateLimit({ windowMs: 60000, max: 10 });   // 10 function calls/min per IP
+const uploadLimit = rateLimit({ windowMs: 60000, max: 3 });    // 3 uploads/min per IP
 
 // ---- meta & models ----------------------------------------------------------
 app.get('/api/meta', (c) =>
@@ -27,6 +35,9 @@ app.get('/api/meta', (c) =>
   })
 );
 app.route('/api/models', models);
+
+// ---- global rate limit -------------------------------------------------------
+app.use('/api/*', globalLimit);
 
 // ---- projects ----------------------------------------------------------------
 app.get('/api/projects', async (c) => c.json(await store.listProjects()));
@@ -146,6 +157,10 @@ function cleanUploadPath(name) {
   return segs.slice(0, 8).join('/').slice(0, 200);
 }
 
+app.use('/api/auth/*', authLimit);
+app.use('/api/chat', chatLimit);
+app.use('/api/projects/*/fn/*', fnLimit);
+app.use('/api/projects/*/upload', uploadLimit);
 app.route('/', auth);
 app.route('/api/chat', chat);
 app.route('/', live);
