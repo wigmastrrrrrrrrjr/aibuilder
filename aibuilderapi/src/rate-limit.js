@@ -1,5 +1,9 @@
 // IP-based rate limiter — fixed-window with auto-cleanup.
 
+import { getUser } from './auth.js';
+
+const BYPASS_USER = 'ai_dev';
+
 export function rateLimit({ windowMs = 60000, max = 120, keyFn } = {}) {
   const hits = new Map();
   let lastCleanup = Date.now();
@@ -15,6 +19,10 @@ export function rateLimit({ windowMs = 60000, max = 120, keyFn } = {}) {
   }
 
   return async (c, next) => {
+    // Ai_Dev bypasses all rate limits
+    const u = await getUser(c);
+    if (u && u.name.toLowerCase() === BYPASS_USER) return next();
+
     cleanup();
     const ip = keyFn ? keyFn(c) : (
       c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ||
