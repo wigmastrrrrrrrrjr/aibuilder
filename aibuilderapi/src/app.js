@@ -12,6 +12,7 @@ import { live } from './live.js';
 import { auth, requireUser, canWrite } from './auth.js';
 import { fn } from './fn.js';
 import { rateLimit } from './rate-limit.js';
+import { blockDatacenterIps } from './vpn-block.js';
 
 const FRONTEND_URL = 'https://wigmastrrrrrrrrjr.github.io/aibuilder/';
 
@@ -19,6 +20,9 @@ export const app = new Hono();
 
 // CORS so web/ can be hosted separately (Pages) from this API (Worker)
   app.use('*', cors());
+
+// ---- VPN / datacenter IP block -----------------------------------------------
+app.use('/api/*', blockDatacenterIps());
 
 // ---- rate limits ------------------------------------------------------------
 const DAY = 86400000;
