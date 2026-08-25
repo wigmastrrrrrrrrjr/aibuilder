@@ -389,16 +389,17 @@ window.addEventListener('message', (e) => {
 }
 
 /* ---------- co-build: live sync when others change this project ---------- */
-let liveSrc = null;
+let liveChannel = null;
 function watchProject(pid) {
-  if (liveSrc) { liveSrc.close(); liveSrc = null; }
-  if (!pid || typeof EventSource === 'undefined') return;
-  liveSrc = new EventSource(`${API}/api/projects/${pid}/live/build/stream`);
-  liveSrc.onmessage = (e) => {
-    let m; try { m = JSON.parse(e.data); } catch { return; }
+  if (liveChannel) { liveChannel.unsubscribe(); liveChannel = null; }
+  if (!pid || !window.supabase) return;
+  const sb = window.supabase.createClient(window.__SB_URL, window.__SB_KEY);
+  liveChannel = sb.channel('build:' + pid);
+  liveChannel.on('broadcast', { event: 'evt' }, (payload) => {
+    const m = payload.payload;
     if (m.type !== 'refresh' || m.sid === SID) return;
     if (!busy) selectProject(pid);
-  };
+  }).subscribe();
 }
 
 /* ---------- chat streaming ---------- */

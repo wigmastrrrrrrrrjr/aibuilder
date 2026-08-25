@@ -1,6 +1,7 @@
 {
   "imports": {
-    "hono/": "npm:hono/"
+    "hono/": "npm:hono/",
+    "@supabase/supabase-js": "npm:@supabase/supabase-js"
   },
   "unstable": ["kv"],
   "lint": { "include": ["src/"] },

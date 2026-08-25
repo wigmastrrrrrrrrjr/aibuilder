@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { store } from './store.js';
 import { fromBase64 } from './base64.js';
+import { getVar } from './env.js';
 
 export const preview = new Hono();
 
-export const BAAS_SDK_JS = `(function () {
+let BAAS_SDK_RAW = `(function () {
   var base = '/api/baas/' + window.__CREAT_PROJECT__;
   var pid = window.__CREAT_PROJECT__;
   var TOK_KEY = 'ab_app_tok';
@@ -96,6 +97,29 @@ export const BAAS_SDK_JS = `(function () {
       });
     });
   }
+  /* ---- Supabase Realtime (broadcast channels, instant delivery) ---- */
+  var SB_URL = '__SUPABASE_URL__';
+  var SB_KEY = '__SUPABASE_ANON_KEY__';
+  var _sbClient = null;
+  function getSB() {
+    if (_sbClient) return _sbClient;
+    if (typeof window.supabase === 'undefined') throw new Error('Supabase client not loaded yet');
+    _sbClient = window.supabase.createClient(SB_URL, SB_KEY);
+    return _sbClient;
+  }
+  var _meCache = null;
+  function getIdentity() {
+    return new Promise(function (resolve) {
+      if (_meCache) return resolve(_meCache);
+      fetch('/api/auth/me', authHeaders())
+        .then(function (r) {
+          if (r.status === 401) return resolve('anon #' + Math.random().toString(36).slice(2, 8));
+          return r.json().then(function (j) { _meCache = j.username || ('anon #' + Math.random().toString(36).slice(2, 8)); resolve(_meCache); });
+        })
+        .catch(function () { resolve('anon #' + Math.random().toString(36).slice(2, 8)); });
+    });
+  }
+
   window.creat = {
     db: {
       list:    function (c)        { return req('GET', [c]); },
@@ -105,31 +129,20 @@ export const BAAS_SDK_JS = `(function () {
       remove:  function (c, id)    { return req('DELETE', [c, id]); }
     },
     live: function (coll, cb) {
-      // WebSocket-based realtime — instant delivery, no polling.
-      var wsUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host +
-        '/api/projects/' + pid + '/live/baas-' + coll + '/ws';
-      if (tok()) wsUrl += '?tok=' + encodeURIComponent(tok());
+      var chName = 'live:' + pid + ':' + coll;
+      var sb = getSB();
       var subs = [cb];
       var myName = null;
-      var ws = null;
-      var closed = false;
-
-      function connect() {
-        if (closed) return;
-        ws = new WebSocket(wsUrl);
-        ws.onmessage = function (e) {
-          try {
-            var msg = JSON.parse(e.data);
-            if (msg.type === 'identity') { myName = msg.name; return; }
-            for (var i = 0; i < subs.length; i++) subs[i](msg);
-          } catch {}
-        };
-        ws.onclose = function () {
-          if (!closed) setTimeout(connect, 1000);
-        };
-        ws.onerror = function () { ws.close(); };
-      }
-      connect();
+      var channel = sb.channel(chName);
+      channel.on('broadcast', { event: 'evt' }, function (payload) {
+        for (var i = 0; i < subs.length; i++) {
+          try { subs[i](payload.payload); } catch {}
+        }
+      }).subscribe(function (status) {
+        if (status === 'SUBSCRIBED') {
+          getIdentity().then(function (name) { myName = name; });
+        }
+      });
 
       return {
         myName: function () { return myName; },
@@ -137,55 +150,60 @@ export const BAAS_SDK_JS = `(function () {
           subs.push(fn);
           return function () { subs = subs.filter(function (f) { return f !== fn; }); };
         },
-        close: function () { closed = true; if (ws) ws.close(); subs = []; }
+        close: function () { sb.removeChannel(channel); subs = []; }
       };
     },
     push: function (coll, evt) {
-      // Push through WebSocket if connected, otherwise fall back to POST.
-      // The live() call creates the WS; if none exists, use HTTP.
-      fetch('/api/projects/' + pid + '/live/baas-' + coll + '/push', {
-        method: 'POST',
-        headers: authHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify(evt || {})
-      }).catch(function () {});
+      var chName = 'live:' + pid + ':' + coll;
+      var sb = getSB();
+      getIdentity().then(function (name) {
+        var ch = sb.channel(chName);
+        ch.send({
+          type: 'broadcast',
+          event: 'evt',
+          payload: { type: 'message', user: name, data: evt || {}, ts: Date.now() }
+        });
+        // also POST to server for backward compat (server-side persistence / co-build)
+        fetch('/api/projects/' + pid + '/live/baas-' + coll + '/push', {
+          method: 'POST',
+          headers: authHeaders({ 'content-type': 'application/json' }),
+          body: JSON.stringify({ ...(evt || {}), _user: name })
+        }).catch(function () {});
+      });
     },
     server: function (name) {
       if (!/^[a-z0-9_-]{1,32}$/.test(name)) throw new Error('server name: a-z0-9-_ max 32 chars');
-      var wsUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host +
-        '/api/projects/' + pid + '/live/srv-' + name + '/ws';
-      if (tok()) wsUrl += '?tok=' + encodeURIComponent(tok());
+      var chName = 'srv:' + pid + ':' + name;
+      var sb = getSB();
       var subs = [];
       var myName = null;
-      var ws = null;
-      var closed = false;
-
-      function connect() {
-        if (closed) return;
-        ws = new WebSocket(wsUrl);
-        ws.onmessage = function (e) {
-          try {
-            var msg = JSON.parse(e.data);
-            if (msg.type === 'identity') { myName = msg.name; return; }
-            for (var i = 0; i < subs.length; i++) subs[i](msg);
-          } catch {}
-        };
-        ws.onclose = function () {
-          if (!closed) setTimeout(connect, 1000);
-        };
-        ws.onerror = function () { ws.close(); };
-      }
-      connect();
+      var channel = sb.channel(chName);
+      channel.on('broadcast', { event: 'evt' }, function (payload) {
+        for (var i = 0; i < subs.length; i++) {
+          try { subs[i](payload.payload); } catch {}
+        }
+      }).subscribe(function (status) {
+        if (status === 'SUBSCRIBED') {
+          getIdentity().then(function (name) { myName = name; });
+        }
+      });
 
       return {
         myName: function () { return myName; },
         push: function (evt) {
-          if (ws && ws.readyState === 1) ws.send(JSON.stringify(evt));
+          getIdentity().then(function (name) {
+            channel.send({
+              type: 'broadcast',
+              event: 'evt',
+              payload: { type: 'message', user: name, data: evt || {}, ts: Date.now() }
+            });
+          });
         },
         subscribe: function (cb) {
           subs.push(cb);
           return function () { subs = subs.filter(function (f) { return f !== cb; }); };
         },
-        close: function () { closed = true; if (ws) ws.close(); subs = []; }
+        close: function () { sb.removeChannel(channel); subs = []; }
       };
     },
     call: function (name, input) {
@@ -233,6 +251,10 @@ export const BAAS_SDK_JS = `(function () {
   };
 })();`;
 
+export const BAAS_SDK_JS = BAAS_SDK_RAW
+  .replace('__SUPABASE_URL__', getVar('SUPABASE_URL') || '')
+  .replace('__SUPABASE_ANON_KEY__', getVar('SUPABASE_ANON_KEY') || '');
+
 const MIME = {
   html: 'text/html; charset=utf-8',
   htm: 'text/html; charset=utf-8',
@@ -266,7 +288,7 @@ function inject(html, pid) {
   const errHook = `<script>(function(){function r(m){try{parent.postMessage({__ab:'error',message:String(m).slice(0,300)},'*')}catch(e){}}` +
     `window.addEventListener('error',function(e){r(e.message||'script error')});` +
     `window.addEventListener('unhandledrejection',function(e){var x=e.reason;r('Unhandled promise rejection: '+(x&&x.message||x))});})();</script>`;
-  const tag = `<script>window.__CREAT_PROJECT__='${pid}';</script><script src='/__baas.js'></script>${errHook}`;
+  const tag = `<script>window.__CREAT_PROJECT__='${pid}';</script><script src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js'></script><script src='/__baas.js'></script>${errHook}`;
   if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${tag}</head>`);
   return tag + html;
 }

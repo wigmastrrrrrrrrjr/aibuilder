@@ -30,7 +30,7 @@ Rules:
 - Values must be JSON-safe (strings, numbers, booleans, arrays, plain objects — no functions, no Dates, no undefined).
 - ALWAYS try/catch or handle errors. Show loading spinners for slow operations.
 
-### creat.push — Broadcast event to ALL viewers
+### creat.push — Broadcast event to ALL viewers (Supabase Realtime)
 
   creat.push(collection, { type: 'move', x: 5, y: 10 });
 
@@ -38,15 +38,14 @@ Rules:
 - collection = same rules as db collection names.
 - payload = any JSON-safe object. Include a "type" field so receivers know what to do.
 - This is a FIRE-AND-FORGET call — no return value, no await needed (but await is fine).
-- The server automatically stamps every event with { user: 'username' } — do NOT set user yourself.
+- Events are stamped with { user: 'username' } via /api/auth/me — do NOT set user yourself.
 
-### creat.live — Subscribe to broadcast events (WebSocket, instant delivery)
+### creat.live — Subscribe to broadcast events (Supabase Realtime, instant delivery)
 
   var room = creat.live(collection, function (evt) {
-    // evt = { type, user, data, ts }
-    // type 'message' = a creat.push() call; evt.data is the payload you pushed
-    // type 'join'/'leave' = player connected/disconnected; evt.count = current players
-    // evt.user = sender's username (server-verified, cannot be spoofed)
+    // evt = { type: 'message', user, data, ts }
+    // evt.user = sender's username (fetched from auth, or 'anon #xxxx')
+    // evt.data = whatever was passed to creat.push()
   });
 
   room.myName();                    // -> your username (or 'anon #xxxx')
@@ -56,15 +55,14 @@ Rules:
 
 - collection = the SAME collection name used in creat.push.
 - The callback fires for EVERY event, INCLUDING your own pushes.
-- For 'message' events: evt.data = whatever was passed to creat.push().
-- Connection auto-reconnects if dropped — you do NOT need to handle reconnection.
+- Connection auto-reconnects via Supabase — you do NOT need to handle reconnection.
 
 IMPORTANT:
-- You do NOT need to "connect" or "open" anything. creat.live() handles the WebSocket.
+- You do NOT need to "connect" or "open" anything. creat.live() handles the Supabase channel.
 - You do NOT need to call creat.push() before creat.live(). You can subscribe first, then push later.
 - Multiple creat.live() calls to the same collection each get their own callback — no conflict.
 
-### creat.server — Custom named rooms (scoped to this project only, WebSocket)
+### creat.server — Custom named rooms (Supabase Realtime, scoped to this project)
 
 For app-specific rooms like game lobbies, chat rooms, or team channels:
 
@@ -80,7 +78,6 @@ For app-specific rooms like game lobbies, chat rooms, or team channels:
 - Events arrive with evt.type, evt.user, evt.data — same shape as creat.live events.
 - subscribe() returns an unsubscribe function — call it to stop listening.
 - You can have multiple servers open at once (e.g. one for chat, one for game state).
-- You do NOT need to "join" a room — connecting automatically joins it.
 
 ### creat.call — Run a serverless function
 
@@ -142,11 +139,11 @@ To add more libraries in the future, register them in the SDK's lib._registry wi
 1. **"I need to connect/open a server before using it"** — WRONG. creat.push/creat.live/creat.server just work. No connect step.
 2. **"I need to subscribe before I can push"** — WRONG. creat.push works immediately. creat.live() can be called before or after.
 3. **"creat.me() will always have a username"** — WRONG. It returns null for anonymous users. ALWAYS null-check.
-4. **"I'll store player names in the database"** — WRONG. Use evt.user (server-stamped). Never invent names.
+4. **"I'll store player names in the database"** — WRONG. Use evt.user (fetched from auth). Never invent names.
 5. **"I need to build a login screen"** — WRONG by default. The SDK shows a popup when needed. Only build custom auth if the user explicitly asks.
 6. **"creat.server returns a promise"** — WRONG. It returns the server object synchronously. No await needed.
-7. **"Events from creat.push don't include the sender"** — WRONG. The server stamps evt.user on every event. The sender receives their own events too. Events have format: {type, user, data, ts}.
-8. **"I need to manage WebSocket connections or handle reconnection"** — WRONG. The SDK handles all connections, reconnection, and cleanup internally. Just call creat.live() or creat.server() and use the callbacks.
+7. **"Events from creat.push don't include the sender"** — WRONG. The sender receives their own events too. Events have format: {type, user, data, ts}.
+8. **"I need to manage connections or handle reconnection"** — WRONG. The SDK uses Supabase Realtime under the hood and handles all reconnection and cleanup internally.
 9. **"creat.db operations are instant"** — WRONG. They are async network calls. ALWAYS await them and show loading states.
 10. **"I'll use localStorage for data"** — WRONG. NEVER use localStorage for app data. Always use creat.db. localStorage is per-browser and lost on clear.
 

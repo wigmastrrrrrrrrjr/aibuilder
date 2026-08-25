@@ -5,6 +5,7 @@ import { systemPrompt } from './prompt.js';
 import { extractKey, builtinKey } from './keys.js';
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
+import { createClient } from '@supabase/supabase-js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MODEL_RE = /^[A-Za-z0-9._:+%-]{1,64}$/;
@@ -194,7 +195,14 @@ chat.post('/', async (c) => {
         send({ type: 'done', projectId: pid, files: written, edited, deleted, model });
         // co-build: tell everyone else watching this project that it changed
         try {
-          await store.appendEvent(pid, 'build', { type: 'refresh', sid: body.sid || '', files: written });
+          const sbUrl = getVar('SUPABASE_URL') || '';
+          const sbKey = getVar('SUPABASE_SERVICE_KEY') || '';
+          if (sbUrl && sbKey) {
+            const sb = createClient(sbUrl, sbKey);
+            const ch = sb.channel('build:' + pid);
+            await ch.send({ type: 'broadcast', event: 'evt', payload: { type: 'refresh', sid: body.sid || '', files: written } });
+            setTimeout(() => { try { sb.removeChannel(ch); } catch {} }, 100);
+          }
         } catch { /* live layer is best-effort */ }
       } catch (e) {
         if (!ac.signal.aborted) {
