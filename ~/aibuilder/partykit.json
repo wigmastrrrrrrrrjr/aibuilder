@@ -1,0 +1,10 @@
+{
+  "$schema": "https://www.partykit.io/schema.json",
+  "name": "aibuilder",
+  "main": "src/server.js",
+  "compatibilityDate": "2026-08-25",
+  "serve": {
+    "path": "public",
+    "build": "src/client.js"
+  }
+}

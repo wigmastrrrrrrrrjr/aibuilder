@@ -40,39 +40,47 @@ Rules:
 - This is a FIRE-AND-FORGET call — no return value, no await needed (but await is fine).
 - The server automatically stamps every event with { user: 'username' } — do NOT set user yourself.
 
-### creat.live — Subscribe to broadcast events
+### creat.live — Subscribe to broadcast events (WebSocket, instant delivery)
 
-  var unsub = creat.live(collection, function (evt) {
-    // evt is whatever was passed to creat.push(collection, evt)
-    // evt.user is the sender's username (server-verified, cannot be spoofed)
+  var room = creat.live(collection, function (evt) {
+    // evt = { type, user, data, ts }
+    // type 'message' = a creat.push() call; evt.data is the payload you pushed
+    // type 'join'/'leave' = player connected/disconnected; evt.count = current players
+    // evt.user = sender's username (server-verified, cannot be spoofed)
   });
 
+  room.myName();                    // -> your username (or 'anon #xxxx')
+  var off = room.subscribe(fn);     // add another listener
+  off();                            // remove that listener
+  room.close();                     // disconnect entirely
+
 - collection = the SAME collection name used in creat.push.
-- The callback fires for EVERY event pushed to that collection, INCLUDING your own.
-- Returns an unsubscribe function — call it to stop listening:
-    unsub();   // stops receiving events
+- The callback fires for EVERY event, INCLUDING your own pushes.
+- For 'message' events: evt.data = whatever was passed to creat.push().
+- Connection auto-reconnects if dropped — you do NOT need to handle reconnection.
 
 IMPORTANT:
-- You do NOT need to "connect" or "open" anything. creat.live() handles the connection.
+- You do NOT need to "connect" or "open" anything. creat.live() handles the WebSocket.
 - You do NOT need to call creat.push() before creat.live(). You can subscribe first, then push later.
 - Multiple creat.live() calls to the same collection each get their own callback — no conflict.
 
-### creat.server — Custom named rooms (scoped to this project only)
+### creat.server — Custom named rooms (scoped to this project only, WebSocket)
 
 For app-specific rooms like game lobbies, chat rooms, or team channels:
 
   var srv = creat.server('my-lobby');   // name: a-z0-9-_, max 32 chars
 
-  srv.push({ type: 'chat', text: 'hello' });            // broadcast to everyone in this room
-  var off = srv.subscribe(function (evt) { ... });       // listen for events in this room
-  off();                                                 // stop listening
-  srv.close();                                           // close the connection entirely
+  srv.myName();                         // -> your username
+  srv.push({ type: 'chat', text: 'hi' });        // broadcast to everyone in this room
+  var off = srv.subscribe(function (evt) { ... }); // listen for events in this room
+  off();                                           // stop listening
+  srv.close();                                     // close the connection entirely
 
 - Room names are scoped to the CURRENT project. Other projects cannot see these rooms.
-- Events are stamped with evt.user by the server (same as creat.push/live).
+- Events arrive with evt.type, evt.user, evt.data — same shape as creat.live events.
 - subscribe() returns an unsubscribe function — call it to stop listening.
 - You can have multiple servers open at once (e.g. one for chat, one for game state).
-- You do NOT need to "join" a room — subscribe() does that automatically.
+- You do NOT need to "join" a room — connecting automatically joins it.
 
 ### creat.call — Run a serverless function
 
@@ -137,8 +145,8 @@ To add more libraries in the future, register them in the SDK's lib._registry wi
 4. **"I'll store player names in the database"** — WRONG. Use evt.user (server-stamped). Never invent names.
 5. **"I need to build a login screen"** — WRONG by default. The SDK shows a popup when needed. Only build custom auth if the user explicitly asks.
 6. **"creat.server returns a promise"** — WRONG. It returns the server object synchronously. No await needed.
-7. **"Events from creat.push don't include the sender"** — WRONG. The server stamps evt.user on every event. The sender receives their own events too.
-8. **"I need to manage WebSocket connections"** — WRONG. The SDK handles all connections, reconnection, and cleanup internally.
+7. **"Events from creat.push don't include the sender"** — WRONG. The server stamps evt.user on every event. The sender receives their own events too. Events have format: {type, user, data, ts}.
+8. **"I need to manage WebSocket connections or handle reconnection"** — WRONG. The SDK handles all connections, reconnection, and cleanup internally. Just call creat.live() or creat.server() and use the callbacks.
 9. **"creat.db operations are instant"** — WRONG. They are async network calls. ALWAYS await them and show loading states.
 10. **"I'll use localStorage for data"** — WRONG. NEVER use localStorage for app data. Always use creat.db. localStorage is per-browser and lost on clear.
 

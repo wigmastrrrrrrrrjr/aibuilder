@@ -105,63 +105,87 @@ export const BAAS_SDK_JS = `(function () {
       remove:  function (c, id)    { return req('DELETE', [c, id]); }
     },
     live: function (coll, cb) {
-      var url = '/api/projects/' + pid + '/live/baas-' + coll + '/stream';
-      if (tok()) url += '?tok=' + encodeURIComponent(tok());
-      var es = new EventSource(url);
-      es.onmessage = function (ev) {
-        try { cb(JSON.parse(ev.data)); } catch (e) {}
+      // WebSocket-based realtime — instant delivery, no polling.
+      var wsUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host +
+        '/api/projects/' + pid + '/live/baas-' + coll + '/ws';
+      if (tok()) wsUrl += '?tok=' + encodeURIComponent(tok());
+      var subs = [cb];
+      var myName = null;
+      var ws = null;
+      var closed = false;
+
+      function connect() {
+        if (closed) return;
+        ws = new WebSocket(wsUrl);
+        ws.onmessage = function (e) {
+          try {
+            var msg = JSON.parse(e.data);
+            if (msg.type === 'identity') { myName = msg.name; return; }
+            for (var i = 0; i < subs.length; i++) subs[i](msg);
+          } catch {}
+        };
+        ws.onclose = function () {
+          if (!closed) setTimeout(connect, 1000);
+        };
+        ws.onerror = function () { ws.close(); };
+      }
+      connect();
+
+      return {
+        myName: function () { return myName; },
+        subscribe: function (fn) {
+          subs.push(fn);
+          return function () { subs = subs.filter(function (f) { return f !== fn; }); };
+        },
+        close: function () { closed = true; if (ws) ws.close(); subs = []; }
       };
-      es.onerror = function () {
-        // 401 means "needs an account" — anything else is just a flaky connection
-        fetch('/api/auth/me', authHeaders())
-          .then(function (r) { if (r.status === 401) showSignup(); })
-          .catch(function () {});
-      };
-      return { close: function () { es.close(); } };
     },
     push: function (coll, evt) {
+      // Push through WebSocket if connected, otherwise fall back to POST.
+      // The live() call creates the WS; if none exists, use HTTP.
       fetch('/api/projects/' + pid + '/live/baas-' + coll + '/push', {
         method: 'POST',
         headers: authHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify(evt || {})
-      }).then(function (r) {
-        if (r.status === 401) showSignup();
       }).catch(function () {});
     },
     server: function (name) {
       if (!/^[a-z0-9_-]{1,32}$/.test(name)) throw new Error('server name: a-z0-9-_ max 32 chars');
-      var base = '/api/projects/' + pid + '/live/srv-' + name;
-      var subs = [], es = null;
+      var wsUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host +
+        '/api/projects/' + pid + '/live/srv-' + name + '/ws';
+      if (tok()) wsUrl += '?tok=' + encodeURIComponent(tok());
+      var subs = [];
+      var myName = null;
+      var ws = null;
+      var closed = false;
+
       function connect() {
-        var u = base + '/stream';
-        if (tok()) u += '?tok=' + encodeURIComponent(tok());
-        es = new EventSource(u);
-        es.onmessage = function (ev) {
+        if (closed) return;
+        ws = new WebSocket(wsUrl);
+        ws.onmessage = function (e) {
           try {
-            var d = JSON.parse(ev.data);
-            for (var i = 0; i < subs.length; i++) subs[i](d);
-          } catch (e) {}
+            var msg = JSON.parse(e.data);
+            if (msg.type === 'identity') { myName = msg.name; return; }
+            for (var i = 0; i < subs.length; i++) subs[i](msg);
+          } catch {}
         };
-        es.onerror = function () {
-          fetch('/api/auth/me', authHeaders())
-            .then(function (r) { if (r.status === 401) showSignup(); })
-            .catch(function () {});
+        ws.onclose = function () {
+          if (!closed) setTimeout(connect, 1000);
         };
+        ws.onerror = function () { ws.close(); };
       }
       connect();
+
       return {
+        myName: function () { return myName; },
         push: function (evt) {
-          fetch(base + '/push', {
-            method: 'POST',
-            headers: authHeaders({ 'content-type': 'application/json' }),
-            body: JSON.stringify(evt || {})
-          }).then(function (r) { if (r.status === 401) showSignup(); }).catch(function () {});
+          if (ws && ws.readyState === 1) ws.send(JSON.stringify(evt));
         },
         subscribe: function (cb) {
           subs.push(cb);
           return function () { subs = subs.filter(function (f) { return f !== cb; }); };
         },
-        close: function () { if (es) es.close(); subs = []; }
+        close: function () { closed = true; if (ws) ws.close(); subs = []; }
       };
     },
     call: function (name, input) {
