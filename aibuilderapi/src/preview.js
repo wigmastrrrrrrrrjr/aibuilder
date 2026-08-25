@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { store } from './store.js';
 import { fromBase64 } from './base64.js';
-import { getVar } from './env.js';
 
 export const preview = new Hono();
 
@@ -98,8 +97,8 @@ let BAAS_SDK_RAW = `(function () {
     });
   }
   /* ---- Supabase Realtime (broadcast channels, instant delivery) ---- */
-  var SB_URL = '__SUPABASE_URL__';
-  var SB_KEY = '__SUPABASE_ANON_KEY__';
+  var SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
+  var SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
   var _sbClient = null;
   function getSB() {
     if (_sbClient) return _sbClient;
@@ -251,9 +250,7 @@ let BAAS_SDK_RAW = `(function () {
   };
 })();`;
 
-export const BAAS_SDK_JS = BAAS_SDK_RAW
-  .replace('__SUPABASE_URL__', getVar('SUPABASE_URL') || '')
-  .replace('__SUPABASE_ANON_KEY__', getVar('SUPABASE_ANON_KEY') || '');
+export const BAAS_SDK_JS = BAAS_SDK_RAW;
 
 const MIME = {
   html: 'text/html; charset=utf-8',

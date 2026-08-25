@@ -14,7 +14,7 @@ export const live = new Hono();
 let _sb = null;
 function sb() {
   if (_sb) return _sb;
-  const url = getVar('SUPABASE_URL') || '';
+  const url = getVar('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co';
   const key = getVar('SUPABASE_SERVICE_KEY') || '';
   if (!url || !key) return null;
   _sb = createClient(url, key);

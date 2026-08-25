@@ -195,7 +195,7 @@ chat.post('/', async (c) => {
         send({ type: 'done', projectId: pid, files: written, edited, deleted, model });
         // co-build: tell everyone else watching this project that it changed
         try {
-          const sbUrl = getVar('SUPABASE_URL') || '';
+          const sbUrl = getVar('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co';
           const sbKey = getVar('SUPABASE_SERVICE_KEY') || '';
           if (sbUrl && sbKey) {
             const sb = createClient(sbUrl, sbKey);

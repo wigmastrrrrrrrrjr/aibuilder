@@ -14,6 +14,9 @@ function envVars() {
     OLLAMA_MODEL: Deno.env.get('OLLAMA_MODEL') || 'gemma4:31b',
     ALLOW_ALL_MODELS: Deno.env.get('ALLOW_ALL_MODELS') || '',
     PORT: Deno.env.get('PORT') || '8000',
+    SUPABASE_URL: Deno.env.get('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co',
+    SUPABASE_ANON_KEY: Deno.env.get('SUPABASE_ANON_KEY') || '',
+    SUPABASE_SERVICE_KEY: Deno.env.get('SUPABASE_SERVICE_KEY') || '',
   };
 }
 
