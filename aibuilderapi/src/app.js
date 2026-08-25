@@ -20,13 +20,14 @@ export const app = new Hono();
 // CORS so web/ can be hosted separately (Pages) from this API (Worker)
   app.use('*', cors());
 
-// ---- rate limits (daily windows — resets each UTC day) ----------------------
+// ---- rate limits ------------------------------------------------------------
 const DAY = 86400000;
+const MIN = 60000;
 const globalLimit = rateLimit({ windowMs: DAY, max: 200 });   // 200 API calls/day per IP
 const chatLimit   = rateLimit({ windowMs: DAY, max: 30 });    // 30 chats/day per IP
-const authLimit   = rateLimit({ windowMs: DAY, max: 10 });    // 10 auth attempts/day per IP
+const authLimit   = rateLimit({ windowMs: MIN, max: 3 });     // 3 auth attempts/min per IP
 const fnLimit     = rateLimit({ windowMs: DAY, max: 50 });    // 50 function calls/day per IP
-const uploadLimit = rateLimit({ windowMs: DAY, max: 10 });    // 10 uploads/day per IP
+const uploadLimit = rateLimit({ windowMs: MIN, max: 3 });     // 3 uploads/min per IP
 
 // ---- meta & models ----------------------------------------------------------
 app.get('/api/meta', (c) =>
