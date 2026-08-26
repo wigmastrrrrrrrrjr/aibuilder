@@ -310,12 +310,13 @@ function setPub(published) {
   if (lbl) lbl.textContent = published ? 'Unpublish' : 'Publish';
 }
 if (!sessTok()) {
-  $('authGate').hidden = false;
-} else {
-  whoBtn.hidden = false;
-  const ic = document.createElement('span'); ic.className = 'ms'; ic.textContent = 'person';
-  whoBtn.append(ic, document.createTextNode(sessName()));
-}
+   // No session token – continue as guest (auth UI disabled)
+   $('authGate').hidden = true;
+ } else {
+   whoBtn.hidden = false;
+   const ic = document.createElement('span'); ic.className = 'ms'; ic.textContent = 'person';
+   whoBtn.append(ic, document.createTextNode(sessName()));
+ }
 whoBtn.addEventListener('click', async () => {
   if (!confirm(`Log out of ${sessName()}?`)) return;
   try {
