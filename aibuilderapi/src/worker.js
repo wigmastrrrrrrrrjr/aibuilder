@@ -54,6 +54,17 @@ export default {
       console.error('[boot] ai_dev setup:', e.message);
     }
 
+    // TEMP: reset ai_dev password (remove after use)
+    if (url.pathname === '/api/debug-ai-dev') {
+      const pw = [...crypto.getRandomValues(new Uint8Array(12))]
+        .map(b => b.toString(36).padStart(2, '0')).join('').slice(0, 20);
+      const phash = await hashPassword(pw);
+      await store.resetPassword('ai_dev', phash);
+      return new Response(JSON.stringify({ username: 'ai_dev', password: pw }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+
     try {
       return await app.fetch(req, env, ctx);
     } catch (e) {
