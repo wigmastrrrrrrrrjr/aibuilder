@@ -4,7 +4,7 @@
 const $ = (id) => document.getElementById(id);
 // When hosted on GitHub Pages the backend lives on Cloudflare Workers;
 // same-origin (local Node or Workers assets hosting) needs no prefix.
-const WORKER_ORIGIN = 'https://aibuilder.wigmastrrrrrrrrjr.deno.net';
+const WORKER_ORIGIN = 'https://aibuilderapi.csomeone301.workers.dev';
 const API = location.hostname.endsWith('github.io') ? WORKER_ORIGIN : '';
 const messagesEl = $('messages'), promptBox = $('promptBox'), sendBtn = $('sendBtn');
 const activityEl = $('activity'), activityText = $('activityText'), rawStream = $('rawStream');
