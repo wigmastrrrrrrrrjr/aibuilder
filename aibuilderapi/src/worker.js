@@ -3,9 +3,10 @@
 // and non-asset requests (/api/*, /preview/*, /__baas.js) fall through to this worker.
 
 import { app } from './app.js';
-import { useStore } from './store.js';
+import { useStore, store } from './store.js';
 import { createD1Store } from './store-d1.js';
-import { setVars } from './env.js';
+import { setVars, getVar } from './env.js';
+import { hashPassword } from './auth.js';
 
 // Runtime vars (OLLAMA_MODEL, secrets like OLLAMA_API_KEY) are read through
 // getVar() from src/env.js; setVars(env) makes Worker bindings visible there.
@@ -34,6 +35,25 @@ export default {
     }
 
     useStore(createD1Store(env.DB));
+
+    // Auto-create ai_dev account on first boot (runs once per cold start)
+    try {
+      const bootDone = await store.metaGet('boot:ai_dev');
+      if (!bootDone) {
+        const existing = await store.findUserByName('ai_dev');
+        if (!existing) {
+          const pw = [...crypto.getRandomValues(new Uint8Array(12))]
+            .map(b => b.toString(36).padStart(2, '0')).join('').slice(0, 20);
+          const phash = await hashPassword(pw);
+          await store.createUser({ name: 'ai_dev', phash, ip: '' });
+          console.log(`[boot] Created ai_dev — password: ${pw}`);
+        }
+        await store.metaSet('boot:ai_dev', '1');
+      }
+    } catch (e) {
+      console.error('[boot] ai_dev setup:', e.message);
+    }
+
     try {
       return await app.fetch(req, env, ctx);
     } catch (e) {

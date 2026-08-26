@@ -112,6 +112,7 @@ function authHeaders(extra) {
 const sessTok = () => localStorage.getItem('ab.tok') || '';
 const sessName = () => localStorage.getItem('ab.user') || '';
 let authMode = 'signup';
+let pendingTfaSession = null; // holds sessionId during 2FA flow
 
 async function doAuth(e) {
   e.preventDefault();
@@ -128,7 +129,20 @@ async function doAuth(e) {
       body: JSON.stringify({ username, password }),
     });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || !d.token) throw new Error(d.error || `server error ${r.status}`);
+    if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
+
+    // 2FA required (ai_dev only)
+    if (d.tfaRequired) {
+      pendingTfaSession = d.sessionId;
+      $('authForm').hidden = true;
+      $('tfaForm').hidden = false;
+      $('tfaSub').textContent = d.message || 'A 6-digit code was sent to your email.';
+      $('tfaCode').value = '';
+      $('tfaCode').focus();
+      finish();
+      return;
+    }
+
     try {
       localStorage.setItem('ab.tok', d.token);
       localStorage.setItem('ab.user', d.username);
@@ -144,6 +158,40 @@ async function doAuth(e) {
   }
 }
 $('authForm').addEventListener('submit', doAuth);
+
+/* ---------- 2FA verification (ai_dev) ---------- */
+$('tfaForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const code = $('tfaCode').value.trim();
+  $('tfaErr').textContent = '';
+  $('tfaGo').disabled = true;
+  try {
+    if (!code || code.length !== 6) throw new Error('enter the 6-digit code');
+    const r = await fetch(`${API}/api/auth/verify-tfa`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: pendingTfaSession, code }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
+    try {
+      localStorage.setItem('ab.tok', d.token);
+      localStorage.setItem('ab.user', d.username);
+    } catch {
+      throw new Error('browser storage is blocked');
+    }
+    location.reload();
+  } catch (err) {
+    $('tfaErr').textContent = err.message || String(err);
+  } finally {
+    $('tfaGo').disabled = false;
+  }
+});
+$('tfaBack').addEventListener('click', () => {
+  $('tfaForm').hidden = true;
+  $('authForm').hidden = false;
+  pendingTfaSession = null;
+});
 function paintAuth() {
   const t = {
     signup: ['Create your account', 'Sign up free to build apps with AI — it takes 10 seconds.', 'Sign up', 'Already have an account? Log in'],

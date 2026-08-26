@@ -155,6 +155,9 @@ export function createD1Store(d1) {
     async findUserByName(name) {
       return await d1.prepare('SELECT * FROM users WHERE name = ?').bind(name).first() || null;
     },
+    async findUserById(id) {
+      return await d1.prepare('SELECT * FROM users WHERE id = ?').bind(id).first() || null;
+    },
     async createSession(userId, days = 30) {
       const token = [...crypto.getRandomValues(new Uint8Array(24))]
         .map((b) => b.toString(16).padStart(2, '0')).join('');

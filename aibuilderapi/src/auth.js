@@ -1,10 +1,16 @@
 // Accounts: PBKDF2-hashed passwords + opaque bearer sessions.
 // Session travels in the 'x-ab-sess' header (builder) or ?tok= query
 // param (EventSource can't send headers).
+//
+// Ai_ (ai_dev) has mandatory email 2FA:
+//   1. Normal login → returns { tfaRequired: true, sessionId }
+//   2. Client calls /api/auth/verify-tfa with the 6-digit code
+//   3. Server verifies → returns session token
 
 import { Hono } from 'hono';
 import { store } from './store.js';
 import { getVar } from './env.js';
+import { sendEmail } from './email.js';
 
 const enc = new TextEncoder();
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -78,6 +84,28 @@ export async function ipTag(c) {
   return hex(sig).slice(0, 32);
 }
 
+// ---- 2FA helpers -----------------------------------------------------------
+const TFA_USER = 'ai_dev';
+const TFA_EMAIL = 'csomeone301@gmail.com';
+const TFA_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+
+function generateTfaCode() {
+  // 6-digit numeric code
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+async function sendTfaEmail(code) {
+  return sendEmail({
+    to: TFA_EMAIL,
+    subject: 'aibuilder 2FA Code',
+    text: `Your verification code is: ${code}\n\nThis code expires in 10 minutes.\nIf you didn't request this, ignore this email.`,
+  });
+}
+
+function isTfaUser(name) {
+  return String(name || '').toLowerCase() === TFA_USER;
+}
+
 export const auth = new Hono();
 
 auth.post('/api/auth/signup', async (c) => {
@@ -89,6 +117,9 @@ auth.post('/api/auth/signup', async (c) => {
     return c.json({ error: 'password must be at least 6 characters' }, 400);
   if (await store.findUserByName(name))
     return c.json({ error: 'username already taken' }, 409);
+  // Ai_ account cannot be created via signup — it's pre-seeded
+  if (isTfaUser(name))
+    return c.json({ error: 'this username is reserved' }, 403);
   const tag = await ipTag(c);
   if (tag) {
     const takenBy = await store.ipUsed(tag);
@@ -112,13 +143,73 @@ auth.post('/api/auth/login', async (c) => {
   const user = await store.findUserByName(String(username || '').trim());
   if (!user || !(await verifyPassword(String(password || ''), user.phash)))
     return c.json({ error: 'wrong username or password' }, 401);
-  // backfill network tag on first login so pre-existing accounts become resettable
+
+  // backfill network tag on first login
   try {
     const tag = await ipTag(c);
     if (tag && !user.ip) await store.updateUserIp(user.name, tag);
   } catch { /* non-fatal */ }
+
+  // ---- 2FA required for ai_dev ----
+  if (isTfaUser(user.name)) {
+    const code = generateTfaCode();
+    const expires = Date.now() + TFA_EXPIRY_MS;
+    // Store pending 2FA session in meta table
+    await store.metaSet(`tfa:${user.id}`, JSON.stringify({ code, expires, userId: user.id }));
+    // Send the code via email (fire-and-forget — don't block login response)
+    sendTfaEmail(code).catch(e => console.error('[tfa] email failed:', e.message));
+    return c.json({
+      tfaRequired: true,
+      sessionId: user.id,
+      message: `Verification code sent to ${TFA_EMAIL}`,
+    });
+  }
+
+  // Normal account — issue session immediately
   const token = await store.createSession(user.id);
   return c.json({ token, username: user.name });
+});
+
+// ---- 2FA verification endpoint ----
+auth.post('/api/auth/verify-tfa', async (c) => {
+  const { sessionId, code } = await c.req.json().catch(() => ({}));
+  if (!sessionId || !code)
+    return c.json({ error: 'sessionId and code required' }, 400);
+
+  const pending = await store.metaGet(`tfa:${sessionId}`);
+  if (!pending)
+    return c.json({ error: 'no pending 2FA — log in again' }, 400);
+
+  let data;
+  try { data = JSON.parse(pending); } catch {
+    return c.json({ error: 'invalid 2FA state' }, 400);
+  }
+
+  // Check expiry
+  if (Date.now() > data.expires) {
+    await store.metaSet(`tfa:${sessionId}`, ''); // clear
+    return c.json({ error: 'code expired — log in again' }, 400);
+  }
+
+  // Verify code (constant-time comparison)
+  const codeStr = String(code).trim();
+  const expected = String(data.code).trim();
+  if (codeStr.length !== expected.length) {
+    return c.json({ error: 'wrong code' }, 401);
+  }
+  let mismatch = 0;
+  for (let i = 0; i < codeStr.length; i++) {
+    mismatch |= codeStr.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  if (mismatch !== 0) {
+    return c.json({ error: 'wrong code' }, 401);
+  }
+
+  // Code valid — clear pending and issue session
+  await store.metaSet(`tfa:${sessionId}`, '');
+  const token = await store.createSession(sessionId);
+  const user = await store.findUserById(sessionId);
+  return c.json({ token, username: user ? user.name : 'ai_dev' });
 });
 
 auth.post('/api/auth/reset', async (c) => {
