@@ -222,8 +222,12 @@ auth.post('/api/auth/signup', async (c) => {
   const pending = { name, phash, email: mail, ip: tag, codeHash, expires: Date.now() + CODE_EXPIRY_MS };
   await store.metaSet(`signup:${name}`, JSON.stringify(pending));
 
-  // Send verification email (fire-and-forget)
-  sendCodeEmail(mail, code, name).catch(e => console.error('[signup] email failed:', e.message));
+  // Send verification email (await so the Worker stays alive)
+  try {
+    await sendCodeEmail(mail, code, name);
+  } catch (e) {
+    console.error('[signup] email failed:', e.message);
+  }
 
   return c.json({ verifyRequired: true, username: name, message: `Code sent to ${mail}` });
 });
@@ -281,7 +285,7 @@ auth.post('/api/auth/login', async (c) => {
   if (isTfaUser(user.name)) {
     const code = generateCode();
     await storeVerifyCode(`tfa:${user.id}`, code);
-    sendCodeEmail(TFA_EMAIL, code, 'aibuilder').catch(e => console.error('[tfa] email failed:', e.message));
+    try { await sendCodeEmail(TFA_EMAIL, code, 'aibuilder'); } catch (e) { console.error('[tfa] email failed:', e.message); }
     return c.json({ tfaRequired: true, sessionId: user.id, message: `Code sent to ${TFA_EMAIL}` });
   }
 
@@ -319,7 +323,7 @@ auth.post('/api/auth/resend-code', async (c) => {
     pending.codeHash = await hashCode(code);
     pending.expires = Date.now() + CODE_EXPIRY_MS;
     await store.metaSet(`signup:${name}`, JSON.stringify(pending));
-    sendCodeEmail(pending.email, code, name).catch(() => {});
+    try { await sendCodeEmail(pending.email, code, name); } catch {}
     return c.json({ ok: true, message: `Code resent to ${pending.email}` });
   }
 
@@ -328,7 +332,7 @@ auth.post('/api/auth/resend-code', async (c) => {
     if (!user) return c.json({ error: 'user not found' }, 404);
     const code = generateCode();
     await storeVerifyCode(`tfa:${user.id}`, code);
-    sendCodeEmail(TFA_EMAIL, code, 'aibuilder').catch(() => {});
+    try { await sendCodeEmail(TFA_EMAIL, code, 'aibuilder'); } catch {}
     return c.json({ ok: true, message: `Code resent to ${TFA_EMAIL}` });
   }
 
