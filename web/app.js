@@ -584,9 +584,10 @@ async function send() {
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
       const msg = d.error || `HTTP ${res.status}`;
-      if (res.status === 429) throw new Error(`Rate limited: ${msg}`);
-      if (res.status === 401) throw new Error(`Auth required: ${msg}`);
-      if (res.status === 403) throw new Error(`Access denied: ${msg}`);
+      if (res.status === 429) throw new Error('Whoopsie! The server hit its head — you were using a little too much. Come back later!');
+      if (res.status === 401) throw new Error('Whoopsie! Sign up required — create an account to keep building.');
+      if (res.status === 403) throw new Error('Whoopsie! Access denied — you don\'t have permission for this.');
+      if (res.status === 500) throw new Error('Whoopsie! The server hit its head — something went wrong. Try again!');
       throw new Error(msg);
     }
 

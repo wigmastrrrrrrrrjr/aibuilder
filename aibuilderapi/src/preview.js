@@ -83,6 +83,14 @@ let BAAS_SDK_RAW = `(function () {
     setTimeout(function () { u.focus(); }, 50);
   }
 
+  function friendlyError(status) {
+    if (status === 429) return 'Whoopsie! The server hit its head — this project was using a little too much. Come back later!';
+    if (status === 404) return 'Whoopsie! The server hit its head — project might not exist or has been deleted!';
+    if (status === 403) return 'Whoopsie! Access denied — you don\'t have permission for this.';
+    if (status === 500) return 'Whoopsie! The server hit its head — something went wrong. Try again!';
+    return 'Whoopsie! The server hit its head — something went wrong.';
+  }
+
   function req(method, parts, body) {
     return fetch([base].concat(parts.filter(Boolean)).join('/'), {
       method: method,
@@ -91,7 +99,11 @@ let BAAS_SDK_RAW = `(function () {
     }).then(function (r) {
       return r.text().then(function (t) {
         var data = t ? JSON.parse(t) : null;
-        if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+        if (!r.ok) {
+          var msg = friendlyError(r.status);
+          if (r.status === 404) msg += ' <a href="/" style="color:#7c5cff;text-decoration:underline">Create one here</a>';
+          throw new Error(msg);
+        }
         return data;
       });
     });
@@ -213,7 +225,11 @@ let BAAS_SDK_RAW = `(function () {
       }).then(function (r) {
         return r.text().then(function (t) {
           var j = t ? JSON.parse(t) : {};
-          if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+          if (!r.ok) {
+            var msg = friendlyError(r.status);
+            if (r.status === 404) msg += ' <a href="/" style="color:#7c5cff;text-decoration:underline">Create one here</a>';
+            throw new Error(msg);
+          }
           return j.result;
         });
       });
@@ -293,8 +309,9 @@ function inject(html, pid) {
 function notYet(c, pid) {
   return c.html(
     `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;background:#0f1115;color:#9aa4b2;display:grid;place-items:center;height:100vh;margin:0">
-     <div style="text-align:center"><h2 style="color:#e6edf3">Nothing generated yet</h2>
-     <p>Project <code>${pid}</code> has no <code>index.html</code>.<br>Send a prompt in the chat to build the app.</p></div>`
+     <div style="text-align:center"><h2 style="color:#e6edf3">Whoopsie! The server hit its head</h2>
+     <p>Project <code>${pid}</code> might not exist or has been deleted!</p>
+     <a href="/" style="display:inline-block;margin-top:16px;padding:10px 20px;background:#7c5cff;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Create one here</a></div>`
   );
 }
 
