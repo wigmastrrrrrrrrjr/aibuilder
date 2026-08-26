@@ -7,6 +7,20 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
 <link rel="stylesheet" href="style.css?v=7">
+<style>
+  #captchaStatus {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 8px 0; font-size: 12px; color: #9aa4b2;
+  }
+  .captcha-ready { color: #3fb950; }
+  .captcha-fail { color: #f85149; }
+  .captcha-spin {
+    width: 14px; height: 14px; border: 2px solid #2a3241;
+    border-top-color: #58a6ff; border-radius: 50%;
+    animation: captcha-spin .8s linear infinite; display: inline-block;
+  }
+  @keyframes captcha-spin { to { transform: rotate(360deg); } }
+</style>
 </head>
 <body>
 <div id="app">
@@ -99,8 +113,11 @@
     <input id="authEmail" type="email" placeholder="email address" autocomplete="email" required>
     <div id="authErr"></div>
     <button id="authGo" type="submit">Sign up</button>
+    <div id="captchaStatus">
+      <span id="captchaSpinner" class="captcha-spin"></span>
+      <span id="captchaText">Loading captcha…</span>
+    </div>
     <button id="authSwitch" type="button">Already have an account? Log in</button>
-    <script src="https://www.google.com/recaptcha/api.js?render=6LddVZotAAAAAKhQLajTiyD6frXUZeWG5nBRUCbw"></script>
   </form>
   <!-- Step 2: Email verification (shown after signup) -->
   <form id="verifyForm" hidden>
@@ -128,6 +145,29 @@
     <script>
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
+    </script>
+    <script>
+      /* reCAPTCHA v3 — show loading state, update when ready */
+      (function() {
+        var el = document.getElementById('captchaText');
+        var spinner = document.getElementById('captchaSpinner');
+        var status = document.getElementById('captchaStatus');
+        var script = document.createElement('script');
+        script.src = 'https://www.google.com/recaptcha/api.js?render=6LddVZotAAAAAKhQLajTiyD6frXUZeWG5nBRUCbw';
+        script.onload = function() {
+          grecaptcha.ready(function() {
+            if (el) el.textContent = '✓ captcha ready';
+            if (spinner) spinner.style.display = 'none';
+            if (status) status.className = 'captcha-ready';
+          });
+        };
+        script.onerror = function() {
+          if (el) el.textContent = 'captcha unavailable — proceed anyway';
+          if (spinner) spinner.style.display = 'none';
+          if (status) status.className = 'captcha-fail';
+        };
+        document.head.appendChild(script);
+      })();
     </script>
     <script src="app.js?v=7"></script>
 </body>
