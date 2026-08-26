@@ -423,6 +423,7 @@ async function send() {
   localStorage.setItem('ab.model', chosen);
 
   let chipFiles = [];
+  let doneReceived = false;
   let previewTimer = null;
   const schedulePreview = () => {
     clearTimeout(previewTimer);
@@ -439,7 +440,14 @@ async function send() {
         sid: SID,
       }),
     });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      const msg = d.error || `HTTP ${res.status}`;
+      if (res.status === 429) throw new Error(`Rate limited: ${msg}`);
+      if (res.status === 401) throw new Error(`Auth required: ${msg}`);
+      if (res.status === 403) throw new Error(`Access denied: ${msg}`);
+      throw new Error(msg);
+    }
 
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -489,8 +497,10 @@ async function send() {
         } else if (ev.type === 'warn') {
           notify('Generator warning', ev.message);
         } else if (ev.type === 'error') {
-          throw new Error(ev.message);
+          addAiBubble(`⚠ ${ev.message}`);
+          notify('Generation error', ev.message);
         } else if (ev.type === 'done') {
+          doneReceived = true;
           $('refactorBar').hidden = true;
           addAiBubble((displayText + filter.drain()).trim());
           if ((ev.edited || []).length || (ev.deleted || []).length) {
@@ -502,6 +512,11 @@ async function send() {
           }
         }
       }
+    }
+    // Stream ended without a done event (server crashed / connection dropped)
+    if (!doneReceived && displayText.trim()) {
+      addAiBubble((displayText + filter.drain()).trim());
+      notify('Stream interrupted', 'Connection ended before the model finished responding.');
     }
   } catch (e) {
     addAiBubble(`⚠ ${e.message}`);

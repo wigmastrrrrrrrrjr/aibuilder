@@ -1,0 +1,108 @@
+name: aicode:0x Auto Train
+
+on:
+  push:
+    paths: ['aicode0x/**']
+  workflow_dispatch:
+
+jobs:
+  validate-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate training data
+        run: |
+          node aicode0x/validate.js
+          echo "Training data valid"
+
+      - name: Regenerate notebook from gen_train.js
+        run: |
+          node aicode0x/gen_train.js
+          echo "Generated train_data.jsonl"
+
+      - name: Regenerate Modelfile
+        run: |
+          node aicode0x/write_modelfile.js
+          echo "Generated Modelfile"
+
+      - name: Check if notebook is stale
+        id: diff
+        run: |
+          if [ -n "$(git status --porcelain aicode0x/)" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Auto-commit updated files
+        if: steps.diff.outputs.stale == 'true'
+        run: |
+          git config user.name "aibuilder[bot]"
+          git config user.email "bot@aibuilder.dev"
+          git add aicode0x/
+          git commit -m "chore(aicode0x): auto-regenerate training data + notebook"
+          git push
+
+      - name: Summary
+        run: |
+          echo "## aicode:0x Pipeline" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Training examples: $(wc -l < aicode0x/train_data.jsonl)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Base model: Qwen/Qwen2.5-Coder-1.5B-Instruct" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Output: aicode0x-Q4_K_M.gguf" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### To train the model:" >> "$GITHUB_STEP_SUMMARY"
+          echo "1. Go to [Colab]($( echo '${{ github.server_url }}/${{ github.repository }}/blob/main/aicode0x/aicode0x_finetune.ipynb' ))" >> "$GITHUB_STEP_SUMMARY"
+          echo "2. Set runtime to **T4 GPU**" >> "$GITHUB_STEP_SUMMARY"
+          echo "3. Run All → download GGUF (~15-20 min)" >> "$GITHUB_STEP_SUMMARY"
+          echo "4. Install: \`ollama create aicode0x -f Modelfile\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # Trigger training via Colab REST API when training data changes
+  # Requires COLAB_ACCESS_TOKEN secret (OAuth token from Google Cloud Console)
+  trigger-training:
+    needs: validate-and-build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && contains(github.event.head_commit.modified, 'aicode0x/train_data.jsonl') || contains(github.event.head_commit.message, 'force-retrain')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trigger Colab training
+        if: env.HAS_COLAB_TOKEN == 'true'
+        env:
+          COLAB_ACCESS_TOKEN: ${{ secrets.COLAB_ACCESS_TOKEN }}
+        run: |
+          NOTEBOOK_PATH="aicode0x/aicode0x_finetune.ipynb"
+          # Upload notebook and trigger execution via Colab REST API
+          # This requires a Google Cloud OAuth token with colab scope
+          echo "Colab trigger not yet configured — run notebook manually"
+          echo "See: https://github.com/${{ github.repository }}/blob/main/aicode0x/aicode0x_finetune.ipynb"
+
+      - name: Create training issue
+        if: env.HAS_COLAB_TOKEN != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const lines = fs.readFileSync('aicode0x/train_data.jsonl', 'utf8').trim().split('\n').length;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🔄 aicode:0x retrain needed (${lines} examples)`,
+              body: [
+                'Training data changed. Run the fine-tuning notebook:',
+                '',
+                '1. Open the [Colab notebook](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/blob/main/aicode0x/aicode0x_finetune.ipynb)',
+                '2. Runtime → Change runtime type → **T4 GPU**',
+                '3. Run All (~15-20 min)',
+                '4. Download GGUF, then: `ollama create aicode0x -f Modelfile`',
+                '',
+                `Training examples: ${lines}`,
+                'Base model: Qwen/Qwen2.5-Coder-1.5B-Instruct',
+              ].join('\n'),
+              labels: ['aicode0x', 'training'],
+            });
+            console.log('Created training issue');
