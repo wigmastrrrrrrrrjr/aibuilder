@@ -155,10 +155,36 @@ async function sendCodeEmail(to, code, sender) {
   });
 }
 
+// ---- reCAPTCHA v3 verification ---------------------------------------------
+const RECAPTCHA_URL = 'https://www.google.com/recaptcha/api/siteverify';
+
+async function verifyCaptcha(c, action) {
+  const secret = getVar('RECAPTCHA_SECRET');
+  if (!secret) return true; // not configured — skip
+
+  const token = c.req.header('x-recaptcha-token');
+  if (!token) return false;
+
+  try {
+    const r = await fetch(RECAPTCHA_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `secret=${encodeURIComponent(secret)}&response=${encodeURIComponent(token)}`,
+    });
+    const d = await r.json();
+    return d.success && d.score >= 0.5 && (!action || d.action === action);
+  } catch {
+    return false;
+  }
+}
+
 export const auth = new Hono();
 
 // ---- SIGNUP: step 1 — collect username + password + email, send code --------
 auth.post('/api/auth/signup', async (c) => {
+  if (!(await verifyCaptcha(c, 'signup')))
+    return c.json({ error: 'captcha failed — are you a bot?' }, 403);
+
   const { username, password, email } = await c.req.json().catch(() => ({}));
   const name = String(username || '').trim();
   const mail = String(email || '').trim().toLowerCase();
@@ -237,6 +263,9 @@ auth.post('/api/auth/verify-email', async (c) => {
 
 // ---- LOGIN -----------------------------------------------------------------
 auth.post('/api/auth/login', async (c) => {
+  if (!(await verifyCaptcha(c, 'login')))
+    return c.json({ error: 'captcha failed — are you a bot?' }, 403);
+
   const { username, password } = await c.req.json().catch(() => ({}));
   const user = await store.findUserByName(String(username || '').trim());
   if (!user || !(await verifyPassword(String(password || ''), user.phash)))

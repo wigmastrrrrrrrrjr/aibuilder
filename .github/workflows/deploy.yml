@@ -70,6 +70,19 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      - name: Sync reCAPTCHA secret
+        working-directory: aibuilderapi
+        run: |
+          if [ -n "$RECAPTCHA_SECRET" ]; then
+            printf '%s' "$RECAPTCHA_SECRET" | npx wrangler secret put RECAPTCHA_SECRET
+          else
+            echo "RECAPTCHA_SECRET not set — skipping"
+          fi
+        env:
+          RECAPTCHA_SECRET: ${{ secrets.RECAPTCHA_SECRET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Deploy Worker + assets
         working-directory: aibuilderapi
         run: npx wrangler deploy

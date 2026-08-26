@@ -111,6 +111,14 @@ function authHeaders(extra) {
 /* ---------- account / sign-up gate ---------- */
 const sessTok = () => localStorage.getItem('ab.tok') || '';
 const sessName = () => localStorage.getItem('ab.user') || '';
+
+/* ---------- reCAPTCHA v3 ---------- */
+async function recaptchaToken(action) {
+  try {
+    if (!window.grecaptcha || !window.grecaptcha.execute) return '';
+    return await window.grecaptcha.execute('6LddVZotAAAAAKhQLajTiyD6frXUZeWG5nBRUCbw', { action });
+  } catch { return ''; }
+}
 let authMode = 'signup';
 let pendingVerifyUser = null;   // username awaiting email verification
 let pendingTfaSession = null;   // sessionId awaiting 2FA
@@ -129,9 +137,10 @@ async function doAuth(e) {
 
     if (authMode === 'signup') {
       if (!email) throw new Error('email required');
+      const captcha = await recaptchaToken('signup');
       const r = await fetch(`${API}/api/auth/signup`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...(captcha ? { 'x-recaptcha-token': captcha } : {}) },
         body: JSON.stringify({ username, password, email }),
       });
       const d = await r.json().catch(() => ({}));
@@ -151,9 +160,10 @@ async function doAuth(e) {
     }
 
     if (authMode === 'login') {
+      const captcha = await recaptchaToken('login');
       const r = await fetch(`${API}/api/auth/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...(captcha ? { 'x-recaptcha-token': captcha } : {}) },
         body: JSON.stringify({ username, password }),
       });
       const d = await r.json().catch(() => ({}));
