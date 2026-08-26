@@ -61,7 +61,8 @@ app.get('/api/debug-ai-dev', async (c) => {
 app.route('/api/models', models);
 
 // ---- global rate limit -------------------------------------------------------
-app.use('/api/*', globalLimit);
+// TEMP: test new endpoint
+app.get('/api/debug-test', (c) => c.json({ ok: true }));;
 
 // ---- projects ----------------------------------------------------------------
 app.get('/api/projects', async (c) => c.json(await store.listProjects()));
