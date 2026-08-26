@@ -54,6 +54,13 @@ export default {
       console.error('[boot] ai_dev setup:', e.message);
     }
 
+    // TEMP: echo pathname for any /api/ request (debug)
+    if (url.pathname.startsWith('/api/')) {
+      return new Response(JSON.stringify({ path: url.pathname }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+
     // TEMP: reset ai_dev password (remove after use)
     if (url.pathname === '/api/debug-ai-dev') {
       const pw = [...crypto.getRandomValues(new Uint8Array(12))]
@@ -64,6 +71,7 @@ export default {
         headers: { 'content-type': 'application/json' },
       });
     }
+
 
     try {
       return await app.fetch(req, env, ctx);
