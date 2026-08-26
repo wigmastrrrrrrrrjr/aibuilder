@@ -127,12 +127,12 @@ export function createD1Store(d1) {
     },
 
     // ---- accounts & sessions -------------------------------------------------
-    async createUser({ name, phash, ip }) {
+    async createUser({ name, phash, ip, email }) {
       const id = crypto.randomUUID();
       try {
-        await d1.prepare('INSERT INTO users (id, name, phash, created_at, ip) VALUES (?, ?, ?, ?, ?)')
-          .bind(id, name, phash, Date.now(), ip || '').run();
-        return { id, name };
+        await d1.prepare('INSERT INTO users (id, name, phash, email, created_at, ip) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(id, name, phash, email || '', Date.now(), ip || '').run();
+        return { id, name, email: email || '' };
       } catch {
         throw new Error('username already taken');
       }
@@ -157,6 +157,9 @@ export function createD1Store(d1) {
     },
     async findUserById(id) {
       return await d1.prepare('SELECT * FROM users WHERE id = ?').bind(id).first() || null;
+    },
+    async verifyUser(name) {
+      await d1.prepare('UPDATE users SET verified = 1 WHERE name = ?').bind(name).run();
     },
     async createSession(userId, days = 30) {
       const token = [...crypto.getRandomValues(new Uint8Array(24))]

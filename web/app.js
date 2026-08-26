@@ -112,45 +112,72 @@ function authHeaders(extra) {
 const sessTok = () => localStorage.getItem('ab.tok') || '';
 const sessName = () => localStorage.getItem('ab.user') || '';
 let authMode = 'signup';
-let pendingTfaSession = null; // holds sessionId during 2FA flow
+let pendingVerifyUser = null;   // username awaiting email verification
+let pendingTfaSession = null;   // sessionId awaiting 2FA
 
 async function doAuth(e) {
   e.preventDefault();
   const username = $('authUser').value.trim();
   const password = $('authPass').value;
+  const email = $('authEmail').value.trim();
   $('authErr').textContent = '';
   $('authGo').disabled = true;
   const finish = () => { $('authGo').disabled = false; };
+
   try {
     if (!username || !password) throw new Error('enter a username and password');
-    const r = await fetch(`${API}/api/auth/${authMode}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
 
-    // 2FA required (ai_dev only)
-    if (d.tfaRequired) {
-      pendingTfaSession = d.sessionId;
-      $('authForm').hidden = true;
-      $('tfaForm').hidden = false;
-      $('tfaSub').textContent = d.message || 'A 6-digit code was sent to your email.';
-      $('tfaCode').value = '';
-      $('tfaCode').focus();
-      finish();
-      return;
+    if (authMode === 'signup') {
+      if (!email) throw new Error('email required');
+      const r = await fetch(`${API}/api/auth/signup`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username, password, email }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
+
+      // Email verification required
+      if (d.verifyRequired) {
+        pendingVerifyUser = d.username;
+        $('authForm').hidden = true;
+        $('verifyForm').hidden = false;
+        $('verifySub').textContent = d.message || 'We sent a 6-digit code to verify your email.';
+        $('verifyCode').value = '';
+        $('verifyCode').focus();
+        finish();
+        return;
+      }
     }
 
-    try {
-      localStorage.setItem('ab.tok', d.token);
-      localStorage.setItem('ab.user', d.username);
-    } catch (storeErr) {
-      throw new Error('browser storage is blocked — disable private mode / allow cookies');
+    if (authMode === 'login') {
+      const r = await fetch(`${API}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
+
+      // 2FA required (ai_dev)
+      if (d.tfaRequired) {
+        pendingTfaSession = d.sessionId;
+        $('authForm').hidden = true;
+        $('tfaForm').hidden = false;
+        $('tfaSub').textContent = d.message || 'A 6-digit code was sent to your email.';
+        $('tfaCode').value = '';
+        $('tfaCode').focus();
+        finish();
+        return;
+      }
+
+      try {
+        localStorage.setItem('ab.tok', d.token);
+        localStorage.setItem('ab.user', d.username);
+      } catch { throw new Error('browser storage is blocked'); }
+      $('authErr').textContent = '';
+      location.reload();
     }
-    $('authErr').textContent = '';
-    location.reload();
   } catch (err) {
     $('authErr').textContent = err.message || String(err);
     console.error('[aibuilder auth]', err);
@@ -192,6 +219,56 @@ $('tfaBack').addEventListener('click', () => {
   $('authForm').hidden = false;
   pendingTfaSession = null;
 });
+
+/* ---------- email verification (signup step 2) ---------- */
+$('verifyForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const code = $('verifyCode').value.trim();
+  $('verifyErr').textContent = '';
+  $('verifyGo').disabled = true;
+  try {
+    if (!code || code.length !== 6) throw new Error('enter the 6-digit code');
+    const r = await fetch(`${API}/api/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: pendingVerifyUser, code }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
+    try {
+      localStorage.setItem('ab.tok', d.token);
+      localStorage.setItem('ab.user', d.username);
+    } catch { throw new Error('browser storage is blocked'); }
+    location.reload();
+  } catch (err) {
+    $('verifyErr').textContent = err.message || String(err);
+  } finally {
+    $('verifyGo').disabled = false;
+  }
+});
+$('verifyResend').addEventListener('click', async () => {
+  $('verifyErr').textContent = '';
+  try {
+    const r = await fetch(`${API}/api/auth/resend-code`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: pendingVerifyUser, type: 'signup' }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'failed');
+    $('verifyErr').textContent = d.message || 'Code resent!';
+    $('verifyErr').style.color = '#3fb950';
+    setTimeout(() => { $('verifyErr').style.color = ''; }, 3000);
+  } catch (err) {
+    $('verifyErr').textContent = err.message;
+  }
+});
+$('verifyBack').addEventListener('click', () => {
+  $('verifyForm').hidden = true;
+  $('authForm').hidden = false;
+  pendingVerifyUser = null;
+});
+
 function paintAuth() {
   const t = {
     signup: ['Create your account', 'Sign up free to build apps with AI — it takes 10 seconds.', 'Sign up', 'Already have an account? Log in'],
@@ -203,11 +280,17 @@ function paintAuth() {
   $('authGo').textContent = t[2];
   $('authSwitch').textContent = t[3];
   $('authPass').placeholder = authMode === 'reset' ? 'new password (min 6 chars)' : 'password (min 6 chars)';
+  $('authEmail').hidden = authMode !== 'signup';
 }
 $('authSwitch').addEventListener('click', () => {
   authMode = authMode === 'signup' ? 'login' : authMode === 'login' ? 'reset' : 'signup';
   paintAuth();
   $('authErr').textContent = '';
+  $('authForm').hidden = false;
+  $('verifyForm').hidden = true;
+  $('tfaForm').hidden = true;
+  pendingVerifyUser = null;
+  pendingTfaSession = null;
 });
 paintAuth();
 

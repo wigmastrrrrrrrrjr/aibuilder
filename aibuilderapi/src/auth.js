@@ -2,10 +2,18 @@
 // Session travels in the 'x-ab-sess' header (builder) or ?tok= query
 // param (EventSource can't send headers).
 //
-// Ai_ (ai_dev) has mandatory email 2FA:
-//   1. Normal login → returns { tfaRequired: true, sessionId }
-//   2. Client calls /api/auth/verify-tfa with the 6-digit code
-//   3. Server verifies → returns session token
+// Signup flow:
+//   1. POST /api/auth/signup  { username, password, email }
+//   2. Server hashes a 6-digit code (PBKDF2, same security as passwords)
+//   3. Stores hash in meta table with 10-min expiry
+//   4. Sends the plaintext code to the email via EmailJS
+//   5. Returns { verifyRequired: true }
+//   6. User enters code → POST /api/auth/verify-email { username, code }
+//   7. Server hashes input, constant-time compares, creates account
+//
+// Login flow:
+//   - Verified users: normal login → session token
+//   - ai_dev: login → email 2FA → session token
 
 import { Hono } from 'hono';
 import { store } from './store.js';
@@ -15,6 +23,7 @@ import { sendEmail } from './email.js';
 const enc = new TextEncoder();
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 
+// ---- password hashing (PBKDF2-SHA256, 100k iterations) --------------------
 export async function hashPassword(pw, saltHex) {
   const salt = saltHex
     ? new Uint8Array(saltHex.match(/../g).map((h) => parseInt(h, 16)))
@@ -26,6 +35,31 @@ export async function hashPassword(pw, saltHex) {
     256,
   );
   return `${hex(salt)}$${hex(bits)}`;
+}
+
+// ---- code hashing (same PBKDF2 — attacker can't brute-force even if DB leaks)
+async function hashCode(code) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey('raw', enc.encode(String(code)), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', iterations: 100000, salt },
+    key,
+    256,
+  );
+  return `${hex(salt)}$${hex(bits)}`;
+}
+
+async function verifyCode(code, stored) {
+  const salt = String(stored || '').split('$')[0];
+  if (!salt) return false;
+  const rehash = await hashCode(code);
+  // Constant-time comparison
+  if (rehash.length !== stored.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < rehash.length; i++) {
+    mismatch |= rehash.charCodeAt(i) ^ stored.charCodeAt(i);
+  }
+  return mismatch === 0;
 }
 
 async function verifyPassword(pw, stored) {
@@ -47,24 +81,21 @@ export async function requireUser(c, next) {
   await next();
 }
 
-// legacy projects have no owner and stay writable for compat;
-// owned projects may only be modified by their owner
 export function canWrite(project, user) {
   return !project || !project.owner || Boolean(user && user.name === project.owner);
 }
 
 const NAME_RE = /^[a-zA-Z0-9_-]{3,24}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// ---- IP handling: never stored raw. We keep only an HMAC-SHA256 tag so the
-// DB can answer "has this network signed up?" / "is this request from the
-// same network?" without ever persisting a readable address.
+// ---- IP handling -----------------------------------------------------------
 async function ipSecret() {
   const fromEnv = getVar('IP_SECRET');
   if (fromEnv) return fromEnv;
   let s = await store.metaGet('ip_secret');
   if (!s) {
     s = hex(crypto.getRandomValues(new Uint8Array(32)));
-    try { await store.metaSet('ip_secret', s); } catch { /* concurrent set is fine */ }
+    try { await store.metaSet('ip_secret', s); } catch {}
   }
   return s;
 }
@@ -76,7 +107,7 @@ export function clientIp(c) {
 
 export async function ipTag(c) {
   const raw = clientIp(c);
-  if (!raw) return ''; // no header -> skip binding entirely
+  if (!raw) return '';
   const key = await crypto.subtle.importKey(
     'raw', enc.encode(await ipSecret()), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
   );
@@ -84,42 +115,70 @@ export async function ipTag(c) {
   return hex(sig).slice(0, 32);
 }
 
-// ---- 2FA helpers -----------------------------------------------------------
+// ---- helpers ---------------------------------------------------------------
 const TFA_USER = 'ai_dev';
 const TFA_EMAIL = 'csomeone301@gmail.com';
-const TFA_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+const CODE_EXPIRY_MS = 10 * 60 * 1000;
 
-function generateTfaCode() {
-  // 6-digit numeric code
+function generateCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
-}
-
-async function sendTfaEmail(code) {
-  return sendEmail({
-    to: TFA_EMAIL,
-    subject: 'aibuilder — Your verification code',
-    text: `Your aibuilder verification code is: ${code}`,
-  });
 }
 
 function isTfaUser(name) {
   return String(name || '').toLowerCase() === TFA_USER;
 }
 
+async function storeVerifyCode(key, code) {
+  const hash = await hashCode(code);
+  await store.metaSet(key, JSON.stringify({ hash, expires: Date.now() + CODE_EXPIRY_MS }));
+}
+
+async function getVerifyData(key) {
+  const raw = await store.metaGet(key);
+  if (!raw) return null;
+  try {
+    const d = JSON.parse(raw);
+    if (Date.now() > d.expires) { await store.metaSet(key, ''); return null; }
+    return d;
+  } catch { return null; }
+}
+
+async function clearVerify(key) {
+  await store.metaSet(key, '');
+}
+
+async function sendCodeEmail(to, code, sender) {
+  return sendEmail({
+    to,
+    subject: 'aibuilder — Your verification code',
+    text: `Your aibuilder verification code is: ${code}`,
+  });
+}
+
 export const auth = new Hono();
 
+// ---- SIGNUP: step 1 — collect username + password + email, send code --------
 auth.post('/api/auth/signup', async (c) => {
-  const { username, password } = await c.req.json().catch(() => ({}));
+  const { username, password, email } = await c.req.json().catch(() => ({}));
   const name = String(username || '').trim();
+  const mail = String(email || '').trim().toLowerCase();
+
   if (!NAME_RE.test(name))
     return c.json({ error: 'username must be 3-24 letters, digits, - or _' }, 400);
   if (typeof password !== 'string' || password.length < 6)
     return c.json({ error: 'password must be at least 6 characters' }, 400);
-  if (await store.findUserByName(name))
-    return c.json({ error: 'username already taken' }, 409);
-  // Ai_ account cannot be created via signup — it's pre-seeded
+  if (!EMAIL_RE.test(mail))
+    return c.json({ error: 'valid email required' }, 400);
+
+  // Block reserved names
   if (isTfaUser(name))
     return c.json({ error: 'this username is reserved' }, 403);
+
+  // Check username not already taken
+  if (await store.findUserByName(name))
+    return c.json({ error: 'username already taken' }, 409);
+
+  // Check IP limit
   const tag = await ipTag(c);
   if (tag) {
     const takenBy = await store.ipUsed(tag);
@@ -127,91 +186,127 @@ auth.post('/api/auth/signup', async (c) => {
       error: `Maximum accounts reached for this network. Log in as "${takenBy}" or reset its password below.`,
     }, 403);
   }
+
+  // Hash password eagerly (we'll need it when verification completes)
   const phash = await hashPassword(password);
+
+  // Store pending signup in meta (includes hashed password + email + hashed code)
+  const code = generateCode();
+  const codeHash = await hashCode(code);
+  const pending = { name, phash, email: mail, ip: tag, codeHash, expires: Date.now() + CODE_EXPIRY_MS };
+  await store.metaSet(`signup:${name}`, JSON.stringify(pending));
+
+  // Send verification email (fire-and-forget)
+  sendCodeEmail(mail, code, name).catch(e => console.error('[signup] email failed:', e.message));
+
+  return c.json({ verifyRequired: true, username: name, message: `Code sent to ${mail}` });
+});
+
+// ---- SIGNUP: step 2 — verify code, create account -------------------------
+auth.post('/api/auth/verify-email', async (c) => {
+  const { username, code } = await c.req.json().catch(() => ({}));
+  const name = String(username || '').trim();
+  const codeStr = String(code || '').trim();
+
+  if (!name || !codeStr)
+    return c.json({ error: 'username and code required' }, 400);
+
+  const pending = await getVerifyData(`signup:${name}`);
+  if (!pending)
+    return c.json({ error: 'no pending signup — start over' }, 400);
+
+  // Verify code (constant-time PBKDF2 comparison)
+  if (!(await verifyCode(codeStr, pending.codeHash)))
+    return c.json({ error: 'wrong code' }, 401);
+
+  // Code valid — create the actual account
+  await clearVerify(`signup:${name}`);
   let user;
   try {
-    user = await store.createUser({ name, phash, ip: tag });
+    user = await store.createUser({ name, phash: pending.phash, ip: pending.ip, email: pending.email });
   } catch {
     return c.json({ error: 'username already taken' }, 409);
   }
+
+  // Auto-verify email (they just proved they own it)
+  await store.verifyUser(name);
+
   const token = await store.createSession(user.id);
   return c.json({ token, username: user.name }, 201);
 });
 
+// ---- LOGIN -----------------------------------------------------------------
 auth.post('/api/auth/login', async (c) => {
   const { username, password } = await c.req.json().catch(() => ({}));
   const user = await store.findUserByName(String(username || '').trim());
   if (!user || !(await verifyPassword(String(password || ''), user.phash)))
     return c.json({ error: 'wrong username or password' }, 401);
 
-  // backfill network tag on first login
+  // Backfill network tag
   try {
     const tag = await ipTag(c);
     if (tag && !user.ip) await store.updateUserIp(user.name, tag);
-  } catch { /* non-fatal */ }
+  } catch {}
 
-  // ---- 2FA required for ai_dev ----
+  // ---- ai_dev: mandatory email 2FA ----
   if (isTfaUser(user.name)) {
-    const code = generateTfaCode();
-    const expires = Date.now() + TFA_EXPIRY_MS;
-    // Store pending 2FA session in meta table
-    await store.metaSet(`tfa:${user.id}`, JSON.stringify({ code, expires, userId: user.id }));
-    // Send the code via email (fire-and-forget — don't block login response)
-    sendTfaEmail(code).catch(e => console.error('[tfa] email failed:', e.message));
-    return c.json({
-      tfaRequired: true,
-      sessionId: user.id,
-      message: `Verification code sent to ${TFA_EMAIL}`,
-    });
+    const code = generateCode();
+    await storeVerifyCode(`tfa:${user.id}`, code);
+    sendCodeEmail(TFA_EMAIL, code, 'aibuilder').catch(e => console.error('[tfa] email failed:', e.message));
+    return c.json({ tfaRequired: true, sessionId: user.id, message: `Code sent to ${TFA_EMAIL}` });
   }
 
-  // Normal account — issue session immediately
+  // ---- normal account: instant session ----
   const token = await store.createSession(user.id);
   return c.json({ token, username: user.name });
 });
 
-// ---- 2FA verification endpoint ----
+// ---- ai_dev: verify 2FA code ------------------------------------------------
 auth.post('/api/auth/verify-tfa', async (c) => {
   const { sessionId, code } = await c.req.json().catch(() => ({}));
-  if (!sessionId || !code)
-    return c.json({ error: 'sessionId and code required' }, 400);
+  if (!sessionId || !code) return c.json({ error: 'sessionId and code required' }, 400);
 
-  const pending = await store.metaGet(`tfa:${sessionId}`);
-  if (!pending)
-    return c.json({ error: 'no pending 2FA — log in again' }, 400);
+  const pending = await getVerifyData(`tfa:${sessionId}`);
+  if (!pending) return c.json({ error: 'no pending 2FA — log in again' }, 400);
 
-  let data;
-  try { data = JSON.parse(pending); } catch {
-    return c.json({ error: 'invalid 2FA state' }, 400);
-  }
-
-  // Check expiry
-  if (Date.now() > data.expires) {
-    await store.metaSet(`tfa:${sessionId}`, ''); // clear
-    return c.json({ error: 'code expired — log in again' }, 400);
-  }
-
-  // Verify code (constant-time comparison)
-  const codeStr = String(code).trim();
-  const expected = String(data.code).trim();
-  if (codeStr.length !== expected.length) {
+  if (!(await verifyCode(String(code).trim(), pending.hash)))
     return c.json({ error: 'wrong code' }, 401);
-  }
-  let mismatch = 0;
-  for (let i = 0; i < codeStr.length; i++) {
-    mismatch |= codeStr.charCodeAt(i) ^ expected.charCodeAt(i);
-  }
-  if (mismatch !== 0) {
-    return c.json({ error: 'wrong code' }, 401);
-  }
 
-  // Code valid — clear pending and issue session
-  await store.metaSet(`tfa:${sessionId}`, '');
+  await clearVerify(`tfa:${sessionId}`);
   const token = await store.createSession(sessionId);
   const user = await store.findUserById(sessionId);
   return c.json({ token, username: user ? user.name : 'ai_dev' });
 });
 
+// ---- RESEND CODE (for both signup and tfa) ----------------------------------
+auth.post('/api/auth/resend-code', async (c) => {
+  const { username, type } = await c.req.json().catch(() => ({}));
+  const name = String(username || '').trim();
+
+  if (type === 'signup') {
+    const pending = await getVerifyData(`signup:${name}`);
+    if (!pending) return c.json({ error: 'no pending signup' }, 400);
+    const code = generateCode();
+    pending.codeHash = await hashCode(code);
+    pending.expires = Date.now() + CODE_EXPIRY_MS;
+    await store.metaSet(`signup:${name}`, JSON.stringify(pending));
+    sendCodeEmail(pending.email, code, name).catch(() => {});
+    return c.json({ ok: true, message: `Code resent to ${pending.email}` });
+  }
+
+  if (type === 'tfa') {
+    const user = await store.findUserByName(name);
+    if (!user) return c.json({ error: 'user not found' }, 404);
+    const code = generateCode();
+    await storeVerifyCode(`tfa:${user.id}`, code);
+    sendCodeEmail(TFA_EMAIL, code, 'aibuilder').catch(() => {});
+    return c.json({ ok: true, message: `Code resent to ${TFA_EMAIL}` });
+  }
+
+  return c.json({ error: 'type must be signup or tfa' }, 400);
+});
+
+// ---- RESET PASSWORD --------------------------------------------------------
 auth.post('/api/auth/reset', async (c) => {
   const { username, password } = await c.req.json().catch(() => ({}));
   const name = String(username || '').trim();
