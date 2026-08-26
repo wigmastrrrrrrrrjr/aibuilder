@@ -50,9 +50,16 @@ async function hashCode(code) {
 }
 
 async function verifyCode(code, stored) {
-  const salt = String(stored || '').split('$')[0];
-  if (!salt) return false;
-  const rehash = await hashCode(code);
+  const saltHex = String(stored || '').split('$')[0];
+  if (!saltHex) return false;
+  const salt = new Uint8Array(saltHex.match(/../g).map((h) => parseInt(h, 16)));
+  const key = await crypto.subtle.importKey('raw', enc.encode(String(code)), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', iterations: 100000, salt },
+    key,
+    256,
+  );
+  const rehash = `${saltHex}$${hex(bits)}`;
   // Constant-time comparison
   if (rehash.length !== stored.length) return false;
   let mismatch = 0;
