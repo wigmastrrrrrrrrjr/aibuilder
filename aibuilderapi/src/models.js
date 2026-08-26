@@ -17,16 +17,20 @@ const FREE_MODELS = new Set([
   'gemma4:31b',
   'gpt-oss:120b',
   'gpt-oss:20b',
-  'nemotron-3-super',
+  'minimax-m3',
   'nemotron-3-nano:30b',
+  'nemotron-3-super',
+  'nemotron-3-ultra',
 ]);
 
 // Best-for-coding preference order within the free tier.
 const CODING_RANK = [
-  'gemma4:31b',
   'gpt-oss:120b',
-  'gpt-oss:20b',
+  'gemma4:31b',
+  'nemotron-3-ultra',
   'nemotron-3-super',
+  'gpt-oss:20b',
+  'minimax-m3',
   'nemotron-3-nano:30b',
 ];
 
