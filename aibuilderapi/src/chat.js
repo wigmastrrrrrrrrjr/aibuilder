@@ -13,8 +13,7 @@ const MODEL_RE = /^[A-Za-z0-9._:+%-]{1,64}$/;
 export const chat = new Hono();
 
 chat.post('/', async (c) => {
-  const user = await getUser(c);
-  if (!user) return c.json({ error: 'sign up required' }, 401);
+  const user = await getUser(c) || { name: 'guest', id: 0 };
 
   const body = await c.req.json();
   const message = body?.message;
