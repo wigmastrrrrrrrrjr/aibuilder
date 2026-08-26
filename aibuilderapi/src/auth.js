@@ -97,8 +97,8 @@ function generateTfaCode() {
 async function sendTfaEmail(code) {
   return sendEmail({
     to: TFA_EMAIL,
-    subject: 'aibuilder 2FA Code',
-    text: `Your verification code is: ${code}\n\nThis code expires in 10 minutes.\nIf you didn't request this, ignore this email.`,
+    subject: 'aibuilder — Your verification code',
+    text: `Your aibuilder verification code is: ${code}`,
   });
 }
 

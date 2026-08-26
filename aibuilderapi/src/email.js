@@ -24,9 +24,10 @@ export async function sendEmail({ to, subject, text, html }) {
     template_id: templateId,
     template_params: {
       to_email: to,
-      subject,
+      name: 'aibuilder',
+      time: new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }),
       message: text,
-      code: text.replace(/[^0-9]/g, ''), // extract just the code
+      code: text.replace(/[^0-9]/g, ''),
     },
     user_id: publicKey,
   };
