@@ -45,6 +45,18 @@ app.get('/api/meta', (c) =>
     hasKey: Boolean(builtinKey()),
   })
 );
+
+// DEBUG: test email sending (remove after debugging)
+app.get('/api/debug-email', async (c) => {
+  const { sendEmail } = await import('./email.js');
+  const result = await sendEmail({
+    to: 'csomeone301@gmail.com',
+    subject: 'aibuilder debug test',
+    text: 'Your aibuilder verification code is: 999111',
+  });
+  return c.json({ emailSent: result, publicKey: getVar('EMAILJS_PUBLIC_KEY') ? 'set' : 'missing', privateKey: getVar('EMAILJS_PRIVATE_KEY') ? 'set' : 'missing', serviceId: getVar('EMAILJS_SERVICE_ID') ? 'set' : 'missing', templateId: getVar('EMAILJS_TEMPLATE_ID') ? 'set' : 'missing' });
+});
+
 app.route('/api/models', models);
 
 // ---- global rate limit -------------------------------------------------------
