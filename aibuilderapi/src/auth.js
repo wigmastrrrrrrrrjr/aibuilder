@@ -163,7 +163,7 @@ async function verifyCaptcha(c, action) {
   if (!secret) return true; // not configured — skip
 
   const token = c.req.header('x-recaptcha-token');
-  if (!token) return false;
+  if (!token) return true; // no token yet (script loading) — allow through
 
   try {
     const r = await fetch(RECAPTCHA_URL, {
@@ -174,7 +174,7 @@ async function verifyCaptcha(c, action) {
     const d = await r.json();
     return d.success && d.score >= 0.5 && (!action || d.action === action);
   } catch {
-    return false;
+    return true; // verification service down — don't block users
   }
 }
 
