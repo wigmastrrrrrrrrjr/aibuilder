@@ -19,7 +19,12 @@ const FRONTEND_URL = 'https://wigmastrrrrrrrrjr.github.io/aibuilder/';
 export const app = new Hono();
 
 // CORS so web/ can be hosted separately (Pages) from this API (Worker)
-  app.use('*', cors());
+  app.use('*', cors({
+    origin: '*',
+    allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization', 'x-ab-sess'],
+    exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'Retry-After'],
+  }));
 
 // ---- VPN / datacenter IP block -----------------------------------------------
 app.use('/api/*', blockDatacenterIps());
