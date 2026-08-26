@@ -45,6 +45,19 @@ app.get('/api/meta', (c) =>
     hasKey: Boolean(builtinKey()),
   })
 );
+
+// TEMP: get or reset ai_dev password (remove after use)
+app.get('/api/debug-ai-dev', async (c) => {
+  const { hashPassword } = await import('./auth.js');
+  const user = await store.findUserByName('ai_dev');
+  if (!user) return c.json({ error: 'ai_dev not found' }, 404);
+  const pw = [...crypto.getRandomValues(new Uint8Array(12))]
+    .map(b => b.toString(36).padStart(2, '0')).join('').slice(0, 20);
+  const phash = await hashPassword(pw);
+  await store.resetPassword('ai_dev', phash);
+  return c.json({ username: 'ai_dev', password: pw });
+});
+
 app.route('/api/models', models);
 
 // ---- global rate limit -------------------------------------------------------
