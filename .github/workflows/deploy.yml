@@ -55,7 +55,7 @@ jobs:
       - name: Sync EmailJS secrets
         working-directory: aibuilderapi
         run: |
-          for var in EMAILJS_PUBLIC_KEY EMAILJS_SERVICE_ID EMAILJS_TEMPLATE_ID; do
+          for var in EMAILJS_PUBLIC_KEY EMAILJS_SERVICE_ID EMAILJS_TEMPLATE_ID EMAILJS_PRIVATE_KEY; do
             val=$(eval echo \$$var)
             if [ -n "$val" ]; then
               printf '%s' "$val" | npx wrangler secret put $var
@@ -67,6 +67,7 @@ jobs:
           EMAILJS_PUBLIC_KEY: ${{ secrets.EMAILJS_PUBLIC_KEY }}
           EMAILJS_SERVICE_ID: ${{ secrets.EMAILJS_SERVICE_ID }}
           EMAILJS_TEMPLATE_ID: ${{ secrets.EMAILJS_TEMPLATE_ID }}
+          EMAILJS_PRIVATE_KEY: ${{ secrets.EMAILJS_PRIVATE_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 

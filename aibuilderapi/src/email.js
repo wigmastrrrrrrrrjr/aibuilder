@@ -11,6 +11,7 @@ const BASE = 'https://api.emailjs.com/api/v1.0/email/send';
 
 export async function sendEmail({ to, subject, text, html }) {
   const publicKey = getVar('EMAILJS_PUBLIC_KEY');
+  const privateKey = getVar('EMAILJS_PRIVATE_KEY');
   const serviceId = getVar('EMAILJS_SERVICE_ID');
   const templateId = getVar('EMAILJS_TEMPLATE_ID');
 
@@ -31,6 +32,7 @@ export async function sendEmail({ to, subject, text, html }) {
     },
     user_id: publicKey,
   };
+  if (privateKey) body.accessToken = privateKey;
 
   try {
     const r = await fetch(BASE, {
