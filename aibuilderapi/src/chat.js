@@ -5,6 +5,7 @@ import { systemPrompt } from './prompt.js';
 import { extractKey, builtinKey, localOllamaUrl } from './keys.js';
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
+import { modelCost, FREE_DAILY_CREDITS } from './models.js';
 import { createClient } from '@supabase/supabase-js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
@@ -62,20 +63,24 @@ chat.post('/', async (c) => {
   const model = requested || (project && MODEL_RE.test(project.model || '') ? project.model : '')
     || getVar('OLLAMA_MODEL') || 'gemma4:31b';
 
-  // BYOK users ride their own key — no shared-quota usage counted.
-  // Ai_Dev (the builder) gets unlimited generations on the shared key too.
+  // Credit system: free users get FREE_DAILY_CREDITS per day and each chat
+  // deducts the chosen model's credit cost. BYOK users ride their own key;
+  // Ai_Dev (the builder) is unlimited on the shared key too.
   const hasOwnKey = Boolean(
     extractKey(c.req.header('x-api-key'), typeof body.apiKey === 'string' ? body.apiKey : ''),
   );
-  if (!hasOwnKey && !isLocalModel && user.name.toLowerCase() !== 'ai_dev') {
+  if (!hasOwnKey && user.name.toLowerCase() !== 'ai_dev') {
     const day = new Date().toISOString().slice(0, 10);
-    const used = await store.incrUsage(user.name, day);
-    const limit = Number(getVar('DAILY_LIMIT')) || 30;
-    if (used > limit) {
+    const cost = modelCost(model);
+    const total = Number(getVar('DAILY_CREDITS')) || FREE_DAILY_CREDITS;
+    const spent = await store.getCredits(user.id, day);
+    if (spent + cost > total) {
       return c.json({
-        error: `Daily free limit reached (${limit} prompts/day). Add your own Ollama API key (🔑) for unlimited use.`,
+        error: `Out of credits — ${total} credits/day and this model costs ${cost}. Add your own Ollama API key (🔑) for unlimited use.`,
+        credits: { total, used: spent, left: Math.max(0, total - spent), day },
       }, 429);
     }
+    await store.spendCredits(user.id, day, cost);
   }
   await store.setModel(pid, model);
 

@@ -4,7 +4,7 @@ import { store } from './store.js';
 import { chat } from './chat.js';
 import { baas } from './baas.js';
 import { preview, BAAS_SDK_JS } from './preview.js';
-import { models } from './models.js';
+import { models, FREE_DAILY_CREDITS } from './models.js';
 import { getVar } from './env.js';
 import { builtinKey } from './keys.js';
 import { toBase64 } from './base64.js';
@@ -27,7 +27,12 @@ export const app = new Hono();
   }));
 
 // ---- VPN / datacenter IP block -----------------------------------------------
-app.use('/api/*', blockDatacenterIps());
+// Auth endpoints stay reachable from VPN/mobile/datacenter IPs so users can
+// always log in / sign up; the block protects the remaining API surface.
+app.use('/api/*', async (c, next) => {
+  if (c.req.path.startsWith('/api/auth') || c.req.path === '/api/credits') return next();
+  return blockDatacenterIps()(c, next);
+});
 
 // ---- rate limits ------------------------------------------------------------
 const DAY = 86400000;
@@ -45,6 +50,17 @@ app.get('/api/meta', (c) =>
     hasKey: Boolean(builtinKey()),
   })
 );
+
+// daily credit balance for the signed-in user
+app.get('/api/credits', requireUser, async (c) => {
+  const user = c.get('user');
+  const day = new Date().toISOString().slice(0, 10);
+  const total = Number(getVar('DAILY_CREDITS')) || FREE_DAILY_CREDITS;
+  const used = await store.getCredits(user.id, day);
+  return c.json({
+    credits: { total, used, left: Math.max(0, total - used), day },
+  });
+});
 
 
 

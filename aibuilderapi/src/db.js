@@ -173,6 +173,22 @@ useStore({
                 ON CONFLICT (name, day) DO UPDATE SET count = count + 1`).run(name, day);
     return db.prepare('SELECT count FROM usage WHERE name = ? AND day = ?').get(name, day).count;
   },
+  // ---- daily credits --------------------------------------------------------
+  creditsKey(userId) {
+    return `credit:${userId}`;
+  },
+  getCredits(userId, day) {
+    const r = db.prepare('SELECT count FROM usage WHERE name = ? AND day = ?')
+      .get(this.creditsKey(userId), day);
+    return r ? r.count : 0;
+  },
+  spendCredits(userId, day, amount) {
+    const key = this.creditsKey(userId);
+    db.prepare(`INSERT INTO usage (name, day, count) VALUES (?, ?, ?)
+                ON CONFLICT (name, day) DO UPDATE SET count = count + ?`)
+      .run(key, day, amount, amount);
+    return db.prepare('SELECT count FROM usage WHERE name = ? AND day = ?').get(key, day).count;
+  },
   async addMessage(pid, role, content) {
     db.prepare(
       'INSERT INTO messages (project_id, role, content, created_at) VALUES (?, ?, ?, ?)'

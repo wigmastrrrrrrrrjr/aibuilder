@@ -317,6 +317,7 @@ if (!sessTok()) {
    whoBtn.hidden = false;
    const ic = document.createElement('span'); ic.className = 'ms'; ic.textContent = 'person';
    whoBtn.append(ic, document.createTextNode(sessName()));
+   loadCredits();
  }
 whoBtn.addEventListener('click', async () => {
   if (!confirm(`Log out of ${sessName()}?`)) return;
@@ -359,6 +360,21 @@ async function loadMeta() {
     loadModels();
   } catch { /* ignore */ }
   refreshKeyBtn();
+}
+
+// Daily free credits shown in the sidebar footer.
+async function loadCredits() {
+  const mb = $('metaBar');
+  if (!mb || !sessTok()) return;
+  try {
+    const r = await fetch(`${API}/api/credits`, { headers: authHeaders() });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    if (j && j.credits) {
+      const { left, total } = j.credits;
+      mb.textContent = `Credits left today: ${left} / ${total}`;
+    }
+  } catch { mb.textContent = ''; }
 }
 
 async function loadModels() {
@@ -586,7 +602,13 @@ async function send() {
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
       const msg = d.error || `HTTP ${res.status}`;
-      if (res.status === 429) throw new Error('Whoopsie! The server hit its head — you were using a little too much. Come back later!');
+      if (res.status === 429) {
+        if (d.credits) {
+          loadCredits();
+          throw new Error(`Out of credits — ${d.credits.left} of ${d.credits.total} left today. Add your own Ollama API key (🔑) for unlimited use.`);
+        }
+        throw new Error('Whoopsie! The server hit its head — you were using a little too much. Come back later!');
+      }
       if (res.status === 401) throw new Error('Whoopsie! Sign up required — create an account to keep building.');
       if (res.status === 403) throw new Error('Whoopsie! Access denied — you don\'t have permission for this.');
       if (res.status === 500) throw new Error('Whoopsie! The server hit its head — something went wrong. Try again!');
@@ -658,6 +680,7 @@ async function send() {
           doneReceived = true;
           $('refactorBar').hidden = true;
           addAiBubble((displayText + filter.drain()).trim());
+          loadCredits();
           if ((ev.edited || []).length || (ev.deleted || []).length) {
             const bits = [];
             if (ev.files?.length) bits.push(`${ev.files.length} written`);

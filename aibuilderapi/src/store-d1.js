@@ -126,6 +126,23 @@ export function createD1Store(d1) {
       const r = await d1.prepare('SELECT count FROM usage WHERE name = ? AND day = ?').bind(name, day).first();
       return r ? r.count : 0;
     },
+    // ---- daily credits --------------------------------------------------------
+    creditsKey(userId) {
+      return `credit:${userId}`;
+    },
+    async getCredits(userId, day) {
+      const r = await d1.prepare('SELECT count FROM usage WHERE name = ? AND day = ?')
+        .bind(this.creditsKey(userId), day).first();
+      return r ? r.count : 0;
+    },
+    async spendCredits(userId, day, amount) {
+      const key = this.creditsKey(userId);
+      await d1.prepare(`INSERT INTO usage (name, day, count) VALUES (?, ?, ?)
+                        ON CONFLICT (name, day) DO UPDATE SET count = count + ?`)
+        .bind(key, day, amount, amount).run();
+      const r = await d1.prepare('SELECT count FROM usage WHERE name = ? AND day = ?').bind(key, day).first();
+      return r ? r.count : 0;
+    },
 
     // ---- accounts & sessions -------------------------------------------------
     async createUser({ name, phash, ip, email }) {
