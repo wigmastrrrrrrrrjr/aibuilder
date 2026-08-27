@@ -165,13 +165,7 @@ async function sendCodeEmail(to, code, sender) {
 // ---- reCAPTCHA v3 verification ---------------------------------------------
 const RECAPTCHA_URL = 'https://www.google.com/recaptcha/api/siteverify';
 
-async function verifyCaptcha(c, action) {
-  const secret = getVar('RECAPTCHA_SECRET');
-  if (!secret) return true; // not configured — skip
-
-  const token = c.req.header('x-recaptcha-token');
-  if (!token) return true; // no token yet (script loading) — allow through
-
+async function verifyRecaptcha(secret, token, action) {
   try {
     const r = await fetch(RECAPTCHA_URL, {
       method: 'POST',
@@ -181,8 +175,71 @@ async function verifyCaptcha(c, action) {
     const d = await r.json();
     return d.success && d.score >= 0.5 && (!action || d.action === action);
   } catch {
-    return true; // verification service down — don't block users
+    return false; // verification service down — does NOT pass; caller decides fallback
   }
+}
+
+// ---- BotBye backup (validates the x-botbye-token from the client JS tag) ----
+const BOTBYE_URL = 'https://verify.botbye.com/api/v1/protect/evaluate';
+
+// Returns true = ALLOW, false = BLOCK, null = not applicable (not configured / no token)
+async function verifyBotbye(c) {
+  const serverKey = getVar('BOTBYE_SERVER_KEY');
+  const token = c.req.header('x-botbye-token');
+  if (!serverKey || !token) return null;
+  try {
+    const r = await fetch(`${BOTBYE_URL}?${encodeURIComponent(token)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'validate',
+        server_key: serverKey,
+        request: {
+          ip: clientIp(c),
+          token,
+          headers: {
+            'user-agent': c.req.header('user-agent') || '',
+            'accept-language': c.req.header('accept-language') || '',
+            host: c.req.header('host') || '',
+            'content-type': c.req.header('content-type') || '',
+          },
+          request_method: c.req.method,
+          request_uri: new URL(c.req.url).pathname,
+        },
+        integration: { module_name: 'HTTP_API', module_version: '3.0.0' },
+      }),
+    });
+    const d = await r.json();
+    return d && d.decision === 'ALLOW';
+  } catch {
+    return null; // service down — prefer the other provider's verdict, else allow
+  }
+}
+
+async function verifyCaptcha(c, action) {
+  const recaptchaSecret = getVar('RECAPTCHA_SECRET');
+  const botbyeSecret = getVar('BOTBYE_SERVER_KEY');
+  if (!recaptchaSecret && !botbyeSecret) return true; // nothing configured — skip
+
+  const rt = c.req.header('x-recaptcha-token');
+  const bt = c.req.header('x-botbye-token');
+
+  // Primary: reCAPTCHA was attempted on the client.
+  if (rt) {
+    if (recaptchaSecret && await verifyRecaptcha(recaptchaSecret, rt, action)) return true;
+    // reCAPTCHA failed or config missing — try BotBye backup before blocking
+    const bk = await verifyBotbye(c);
+    if (bk !== null) return bk;
+    return false; // reCAPTCHA token present but verified no good, no backup verdict
+  }
+
+  // reCAPTCHA not attempted (script failed to load etc.) — BotBye is the fallback.
+  if (bt && botbyeSecret) {
+    const bk = await verifyBotbye(c);
+    if (bk !== null) return bk;
+  }
+
+  return true; // no token at all yet (script still loading) — allow through
 }
 
 export const auth = new Hono();

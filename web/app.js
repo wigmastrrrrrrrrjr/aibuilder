@@ -112,12 +112,24 @@ function authHeaders(extra) {
 const sessTok = () => localStorage.getItem('ab.tok') || '';
 const sessName = () => localStorage.getItem('ab.user') || '';
 
-/* ---------- reCAPTCHA v3 ---------- */
-async function recaptchaToken(action) {
+/* ---------- captcha (reCAPTCHA v3 primary, BotBye backup) ---------- */
+// Returns { header:'x-recaptcha-token'|'x-botbye-token', value } or null.
+async function captchaToken(action) {
+  // Primary: reCAPTCHA v3
   try {
-    if (!window.grecaptcha || !window.grecaptcha.execute) return '';
-    return await window.grecaptcha.execute('6LddVZotAAAAAKhQLajTiyD6frXUZeWG5nBRUCbw', { action });
-  } catch { return ''; }
+    if (window.grecaptcha && window.grecaptcha.execute) {
+      const t = await window.grecaptcha.execute('6LddVZotAAAAAKhQLajTiyD6frXUZeWG5nBRUCbw', { action });
+      if (t) return { header: 'x-recaptcha-token', value: t };
+    }
+  } catch { /* fall through to backup */ }
+  // Backup: BotBye challenge token
+  try {
+    if (window.botbye && typeof window.botbye.runChallenge === 'function') {
+      const t = await window.botbye.runChallenge();
+      if (t) return { header: 'x-botbye-token', value: t };
+    }
+  } catch { /* no backup available */ }
+  return null;
 }
 let authMode = 'signup';
 let pendingVerifyUser = null;   // username awaiting email verification
@@ -137,10 +149,11 @@ async function doAuth(e) {
 
     if (authMode === 'signup') {
       if (!email) throw new Error('email required');
-      const captcha = await recaptchaToken('signup');
+      const ct = await captchaToken('signup');
+      const capH = ct ? { [ct.header]: ct.value } : {};
       const r = await fetch(`${API}/api/auth/signup`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...(captcha ? { 'x-recaptcha-token': captcha } : {}) },
+        headers: { 'content-type': 'application/json', ...capH },
         body: JSON.stringify({ username, password, email }),
       });
       const d = await r.json().catch(() => ({}));
@@ -160,10 +173,11 @@ async function doAuth(e) {
     }
 
     if (authMode === 'login') {
-      const captcha = await recaptchaToken('login');
+      const ct = await captchaToken('login');
+      const capH = ct ? { [ct.header]: ct.value } : {};
       const r = await fetch(`${API}/api/auth/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...(captcha ? { 'x-recaptcha-token': captcha } : {}) },
+        headers: { 'content-type': 'application/json', ...capH },
         body: JSON.stringify({ username, password }),
       });
       const d = await r.json().catch(() => ({}));
