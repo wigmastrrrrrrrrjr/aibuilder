@@ -25,7 +25,8 @@ Rules:
 export const chat = new Hono();
 
 chat.post('/', async (c) => {
-  const user = await getUser(c) || { name: 'guest', id: 0 };
+  const user = await getUser(c);
+  if (!user) return c.json({ error: 'sign in required' }, 401);
 
   const body = await c.req.json();
   const message = body?.message;

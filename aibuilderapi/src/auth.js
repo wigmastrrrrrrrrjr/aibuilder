@@ -83,12 +83,7 @@ export async function getUser(c) {
 
 export async function requireUser(c, next) {
   const u = await getUser(c);
-  // Temporary guest fallback: if no authenticated user, treat request as a guest.
-  if (!u) {
-    const guest = { name: 'guest', id: 0 };
-    c.set('user', guest);
-    return next();
-  }
+  if (!u) return c.json({ error: 'sign in required' }, 401);
   c.set('user', u);
   return next();
 }
@@ -191,27 +186,6 @@ async function verifyCaptcha(c, action) {
 }
 
 export const auth = new Hono();
-
-// ---- temporary disable of signup/login related endpoints ----------------------
-// Returns a 503 Service Unavailable with a clear message. Remove this when
-// signup and login are re-enabled.
-function disabledAuth(c, next) {
-  const url = new URL(c.req.url);
-  const path = url.pathname;
-  if (
-    path.startsWith('/api/auth/signup') ||
-    path.startsWith('/api/auth/login') ||
-    path.startsWith('/api/auth/verify-email') ||
-    path.startsWith('/api/auth/verify-tfa') ||
-    path.startsWith('/api/auth/resend-code') ||
-    path.startsWith('/api/auth/reset')
-  ) {
-    return c.json({ error: 'Signup and login are temporarily disabled. Use guest mode.' }, 503);
-  }
-  return next();
-}
-
-auth.use('*', disabledAuth);
 
 // ---- SIGNUP: step 1 — collect username + password + email, send code --------
 auth.post('/api/auth/signup', async (c) => {

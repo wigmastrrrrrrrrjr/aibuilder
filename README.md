@@ -110,7 +110,7 @@ own repo or deployed straight to Workers; `web/` deploys to Pages as-is.
 - [x] Discovery feed (`discover.html`)
 - [x] Cloudflare Workers + D1 + Assets deployment
 - [x] Email-based auth (signup/login)
-- [x] Guest mode (limited daily prompts)
+- [x] Guest mode (limited daily prompts) — removed; accounts required
 - [x] BYOK support (user-supplied Ollama keys)
 
 ### Phase 2 — Iteration & Polish

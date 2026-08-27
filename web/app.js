@@ -310,8 +310,8 @@ function setPub(published) {
   if (lbl) lbl.textContent = published ? 'Unpublish' : 'Publish';
 }
 if (!sessTok()) {
-   // No session token – continue as guest (auth UI disabled)
-   $('authGate').hidden = true;
+   // Not signed in – require an account (no guest mode)
+   $('authGate').hidden = false;
  } else {
    whoBtn.hidden = false;
    const ic = document.createElement('span'); ic.className = 'ms'; ic.textContent = 'person';
