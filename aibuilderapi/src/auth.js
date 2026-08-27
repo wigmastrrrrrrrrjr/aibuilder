@@ -179,83 +179,12 @@ async function verifyRecaptcha(secret, token, action) {
   }
 }
 
-// ---- BotBye backup (validates the x-botbye-token from the client JS tag) ----
-const BOTBYE_URL = 'https://verify.botbye.com/api/v1/protect/evaluate';
-
-// Returns true = ALLOW, false = BLOCK, null = not applicable (not configured / no token)
-async function verifyBotbye(c) {
-  const serverKey = getVar('BOTBYE_SERVER_KEY');
-  const token = c.req.header('x-botbye-token');
-  if (!serverKey || !token) return null;
-  try {
-    const r = await fetch(`${BOTBYE_URL}?${encodeURIComponent(token)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'validate',
-        server_key: serverKey,
-        request: {
-          ip: clientIp(c),
-          token,
-          headers: {
-            'user-agent': c.req.header('user-agent') || '',
-            'accept-language': c.req.header('accept-language') || '',
-            host: c.req.header('host') || '',
-            'content-type': c.req.header('content-type') || '',
-          },
-          request_method: c.req.method,
-          request_uri: new URL(c.req.url).pathname,
-        },
-        integration: { module_name: 'HTTP_API', module_version: '3.0.0' },
-      }),
-    });
-    const d = await r.json();
-    return d && d.decision === 'ALLOW';
-  } catch {
-    return null; // service down — prefer the other provider's verdict, else allow
-  }
-}
-
-async function verifyCaptcha(c, action) {
-  const recaptchaSecret = getVar('RECAPTCHA_SECRET');
-  const botbyeSecret = getVar('BOTBYE_SERVER_KEY');
-  if (!recaptchaSecret && !botbyeSecret) return true; // nothing configured — skip
-
-  const rt = c.req.header('x-recaptcha-token');
-  const bt = c.req.header('x-botbye-token');
-
-  // Primary: reCAPTCHA was attempted on the client.
-  if (rt) {
-    if (recaptchaSecret && await verifyRecaptcha(recaptchaSecret, rt, action)) return true;
-    // reCAPTCHA failed or config missing — try BotBye backup before blocking
-    const bk = await verifyBotbye(c);
-    if (bk !== null) return bk;
-    return false; // reCAPTCHA token present but verified no good, no backup verdict
-  }
-
-  // reCAPTCHA not attempted (script failed to load etc.) — BotBye is the fallback.
-  if (bt && botbyeSecret) {
-    const bk = await verifyBotbye(c);
-    if (bk !== null) return bk;
-  }
-
-  return true; // no token at all yet (script still loading) — allow through
-}
+// Captcha removed — plain signup/login
 
 export const auth = new Hono();
 
-// ---- Human check: client verifies itself in the background before signing up ----
-auth.post('/api/captcha/check', async (c) => {
-  if (!(await verifyCaptcha(c, 'check')))
-    return c.json({ human: false, error: 'you are not human' }, 403);
-  return c.json({ human: true });
-});
-
 // ---- SIGNUP (email verification temporarily disabled — account created immediately) ----
 auth.post('/api/auth/signup', async (c) => {
-  if (!(await verifyCaptcha(c, 'signup')))
-    return c.json({ error: 'captcha failed — are you a bot?' }, 403);
-
   const { username, password, email, dob } = await c.req.json().catch(() => ({}));
   const name = String(username || '').trim();
   const mail = String(email || '').trim().toLowerCase();
@@ -349,9 +278,6 @@ auth.post('/api/auth/verify-email', async (c) => {
 
 // ---- LOGIN -----------------------------------------------------------------
 auth.post('/api/auth/login', async (c) => {
-  if (!(await verifyCaptcha(c, 'login')))
-    return c.json({ error: 'captcha failed — are you a bot?' }, 403);
-
   const { username, password } = await c.req.json().catch(() => ({}));
   const user = await store.findUserByName(String(username || '').trim());
   if (!user || !(await verifyPassword(String(password || ''), user.phash)))

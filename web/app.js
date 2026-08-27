@@ -112,61 +112,6 @@ function authHeaders(extra) {
 const sessTok = () => localStorage.getItem('ab.tok') || '';
 const sessName = () => localStorage.getItem('ab.user') || '';
 
-/* ---------- captcha (reCAPTCHA v3 primary, BotBye backup) ---------- */
-const CAPTCHA_SITE_KEY = '6LddVZotAAAAAKhQLajTiyD6frXUZeWG5nBRUCbw';
-
-// Returns { header:'x-recaptcha-token'|'x-botbye-token', value } or null.
-// Tries reCAPTCHA once with a short timeout, then immediately falls back to BotBye.
-async function captchaToken(action) {
-  // Primary: reCAPTCHA v3 — with 1.5s timeout so we don't hang
-  try {
-    if (window.grecaptcha && window.grecaptcha.execute) {
-      const tokenPromise = window.grecaptcha.execute(CAPTCHA_SITE_KEY, { action });
-      const t = await Promise.race([
-        tokenPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('recaptcha timeout')), 1500)),
-      ]);
-      if (t) return { header: 'x-recaptcha-token', value: t };
-    }
-  } catch { /* fall through to backup */ }
-
-  // Backup: BotBye challenge token (fast, no external verify round-trip on client)
-  try {
-    if (window.botbye && typeof window.botbye.runChallenge === 'function') {
-      const t = await window.botbye.runChallenge();
-      if (t) return { header: 'x-botbye-token', value: t };
-    }
-  } catch { /* no backup available */ }
-  return null;
-}
-
-function setCaptchaStatus(text, cls) {
-  const el = $('captchaText'), spin = $('captchaSpinner'), box = $('captchaStatus');
-  if (el) el.textContent = text;
-  if (spin) spin.style.display = 'none';
-  if (box) box.className = cls || '';
-}
-
-// Background human check: silently verifies the visitor is a human before they
-// even submit the form, so the gate can tell them up front. Fire-and-forget.
-async function humanCheck() {
-  const ct = await captchaToken('check');
-  if (!ct) { setCaptchaStatus('captcha unavailable — proceed anyway', 'captcha-fail'); return; }
-  try {
-    const r = await fetch(`${API}/api/captcha/check`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', [ct.header]: ct.value },
-    });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok && d.human) {
-      setCaptchaStatus('You may proceed with creating your account — you are a human.', 'captcha-ready');
-    } else {
-      setCaptchaStatus('You may not be able to sign up as you are not human.', 'captcha-fail');
-    }
-  } catch {
-    setCaptchaStatus('captcha unavailable — proceed anyway', 'captcha-fail');
-  }
-}
 let authMode = 'signup';
 let pendingVerifyUser = null;   // username awaiting email verification
 let pendingTfaSession = null;   // sessionId awaiting 2FA
@@ -209,11 +154,9 @@ async function doAuth(e) {
       const dob = $('authDob')?.value || '';
       if (!dob) throw new Error('date of birth required (you must be 13 or older)');
       if (!okToSignUp(dob)) throw new Error('you must be 13 or older to use aibuilder (COPPA)');
-      const ct = await captchaToken('signup');
-      const capH = ct ? { [ct.header]: ct.value } : {};
       const r = await fetch(`${API}/api/auth/signup`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...capH },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ username, password, email, dob }),
       });
       const d = await r.json().catch(() => ({}));
@@ -223,11 +166,9 @@ async function doAuth(e) {
     }
 
     if (authMode === 'login') {
-      const ct = await captchaToken('login');
-      const capH = ct ? { [ct.header]: ct.value } : {};
       const r = await fetch(`${API}/api/auth/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...capH },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
       const d = await r.json().catch(() => ({}));
@@ -372,7 +313,6 @@ function setPub(published) {
 if (!sessTok()) {
    // Not signed in – require an account (no guest mode)
    $('authGate').hidden = false;
-   humanCheck(); // verify human-ness in the background
  } else {
    whoBtn.hidden = false;
    const ic = document.createElement('span'); ic.className = 'ms'; ic.textContent = 'person';
