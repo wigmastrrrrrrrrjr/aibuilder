@@ -161,7 +161,7 @@ async function doAuth(e) {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
-      finishAndEnter(d, location.reload);
+      finishAndEnter(d, () => location.reload());
       return;
     }
 
@@ -186,7 +186,7 @@ async function doAuth(e) {
         return;
       }
 
-      finishAndEnter(d, location.reload);
+      finishAndEnter(d, () => location.reload());
     }
   } catch (err) {
     $('authErr').textContent = err.message || String(err);
