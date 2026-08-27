@@ -113,16 +113,22 @@ const sessTok = () => localStorage.getItem('ab.tok') || '';
 const sessName = () => localStorage.getItem('ab.user') || '';
 
 /* ---------- captcha (reCAPTCHA v3 primary, BotBye backup) ---------- */
-// Returns { header:'x-recaptcha-token'|'x-botbye-token', value } or null.
+const CAPTCHA_SITE_KEY = '6LddVZotAAAAAKhQLajTiyD6frXUZeWG5nBRUCbw';
+
+// Try hard to obtain a puzzle/token: reCAPTCHA first, then BotBye.
+// Resolves to { header:'x-recaptcha-token'|'x-botbye-token', value } or null.
 async function captchaToken(action) {
   // Primary: reCAPTCHA v3
-  try {
-    if (window.grecaptcha && window.grecaptcha.execute) {
-      const t = await window.grecaptcha.execute('6LddVZotAAAAAKhQLajTiyD6frXUZeWG5nBRUCbw', { action });
-      if (t) return { header: 'x-recaptcha-token', value: t };
-    }
-  } catch { /* fall through to backup */ }
-  // Backup: BotBye challenge token
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (window.grecaptcha && window.grecaptcha.execute) {
+        const t = await window.grecaptcha.execute(CAPTCHA_SITE_KEY, { action });
+        if (t) return { header: 'x-recaptcha-token', value: t };
+      }
+    } catch { /* retry below */ }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  // Backup: BotBye challenge token (only reached if reCAPTCHA couldn't produce a puzzle)
   try {
     if (window.botbye && typeof window.botbye.runChallenge === 'function') {
       const t = await window.botbye.runChallenge();
@@ -130,6 +136,34 @@ async function captchaToken(action) {
     }
   } catch { /* no backup available */ }
   return null;
+}
+
+function setCaptchaStatus(text, cls) {
+  const el = $('captchaText'), spin = $('captchaSpinner'), box = $('captchaStatus');
+  if (el) el.textContent = text;
+  if (spin) spin.style.display = 'none';
+  if (box) box.className = cls || '';
+}
+
+// Background human check: silently verifies the visitor is a human before they
+// even submit the form, so the gate can tell them up front.
+async function humanCheck() {
+  const ct = await captchaToken('check');
+  if (!ct) { setCaptchaStatus('captcha unavailable — proceed anyway', 'captcha-fail'); return; }
+  try {
+    const r = await fetch(`${API}/api/captcha/check`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', [ct.header]: ct.value },
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.human) {
+      setCaptchaStatus('You may proceed with creating your account — you are a human.', 'captcha-ready');
+    } else {
+      setCaptchaStatus('You may not be able to sign up as you are not human.', 'captcha-fail');
+    }
+  } catch {
+    setCaptchaStatus('captcha unavailable — proceed anyway', 'captcha-fail');
+  }
 }
 let authMode = 'signup';
 let pendingVerifyUser = null;   // username awaiting email verification
@@ -326,6 +360,7 @@ function setPub(published) {
 if (!sessTok()) {
    // Not signed in – require an account (no guest mode)
    $('authGate').hidden = false;
+   humanCheck(); // verify human-ness in the background
  } else {
    whoBtn.hidden = false;
    const ic = document.createElement('span'); ic.className = 'ms'; ic.textContent = 'person';

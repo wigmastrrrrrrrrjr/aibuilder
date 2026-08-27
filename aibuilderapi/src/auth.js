@@ -244,6 +244,13 @@ async function verifyCaptcha(c, action) {
 
 export const auth = new Hono();
 
+// ---- Human check: client verifies itself in the background before signing up ----
+auth.post('/api/captcha/check', async (c) => {
+  if (!(await verifyCaptcha(c, 'check')))
+    return c.json({ human: false, error: 'you are not human' }, 403);
+  return c.json({ human: true });
+});
+
 // ---- SIGNUP: step 1 — collect username + password + email, send code --------
 auth.post('/api/auth/signup', async (c) => {
   if (!(await verifyCaptcha(c, 'signup')))
