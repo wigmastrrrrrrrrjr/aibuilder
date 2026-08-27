@@ -4,7 +4,7 @@ import { store } from './store.js';
 import { chat } from './chat.js';
 import { baas } from './baas.js';
 import { preview, BAAS_SDK_JS } from './preview.js';
-import { models, FREE_DAILY_CREDITS } from './models.js';
+import { models, FREE_DAILY_CREDITS, creditsToUnits, unitsToCredits } from './models.js';
 import { getVar } from './env.js';
 import { builtinKey } from './keys.js';
 import { toBase64 } from './base64.js';
@@ -56,9 +56,15 @@ app.get('/api/credits', requireUser, async (c) => {
   const user = c.get('user');
   const day = new Date().toISOString().slice(0, 10);
   const total = Number(getVar('DAILY_CREDITS')) || FREE_DAILY_CREDITS;
-  const used = await store.getCredits(user.id, day);
+  const usedUnits = await store.getCredits(user.id, day);
+  const totalUnits = creditsToUnits(total);
   return c.json({
-    credits: { total, used, left: Math.max(0, total - used), day },
+    credits: {
+      total,
+      used: unitsToCredits(usedUnits),
+      left: Math.max(0, unitsToCredits(totalUnits - usedUnits)),
+      day,
+    },
   });
 });
 

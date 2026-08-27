@@ -363,6 +363,7 @@ async function loadMeta() {
 }
 
 // Daily free credits shown in the sidebar footer.
+const fmtCredits = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
 async function loadCredits() {
   const mb = $('metaBar');
   if (!mb || !sessTok()) return;
@@ -372,7 +373,7 @@ async function loadCredits() {
     const j = await r.json();
     if (j && j.credits) {
       const { left, total } = j.credits;
-      mb.textContent = `Credits left today: ${left} / ${total}`;
+      mb.textContent = `Credits left today: ${fmtCredits(left)} / ${fmtCredits(total)}`;
     }
   } catch { mb.textContent = ''; }
 }
@@ -605,7 +606,7 @@ async function send() {
       if (res.status === 429) {
         if (d.credits) {
           loadCredits();
-          throw new Error(`Out of credits — ${d.credits.left} of ${d.credits.total} left today. Add your own Ollama API key (🔑) for unlimited use.`);
+          throw new Error(`Out of credits — ${fmtCredits(d.credits.left)} of ${fmtCredits(d.credits.total)} left today. Add your own Ollama API key (🔑) for unlimited use.`);
         }
         throw new Error('Whoopsie! The server hit its head — you were using a little too much. Come back later!');
       }

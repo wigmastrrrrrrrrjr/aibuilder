@@ -37,11 +37,17 @@ const CODING_RANK = [
 // Free daily credit grant, reset at midnight UTC.
 export const FREE_DAILY_CREDITS = 30;
 
+// Credits are stored as integer units of 1/10 credit so fractional costs
+// (local models = 0.4) fit the integer usage table.
+export const CREDIT_PRECISION = 10;
+export const creditsToUnits = (c) => Math.round(c * CREDIT_PRECISION);
+export const unitsToCredits = (u) => u / CREDIT_PRECISION;
+
 // Cost in credits for one chat request, keyed by model.
 // - top-tier coding models: 9
 // - everything else on the shared free tier: 4
 // - mistral fallback: 10
-// - local (own tunnel) models: 1
+// - local (own tunnel) models: 0.4  → ~75 messages/day on the free grant
 const CREDIT_COST = {
   'gpt-oss:120b': 9,
   'gemma4:31b': 9,
@@ -49,7 +55,7 @@ const CREDIT_COST = {
   'mistral-small-latest': 10,
 };
 const FREE_TIER_COST = 4;
-const LOCAL_COST = 1;
+const LOCAL_COST = 0.4;
 
 export function modelCost(model) {
   if (typeof model === 'string' && model.startsWith('local:')) return LOCAL_COST;
