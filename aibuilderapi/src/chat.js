@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { store } from './store.js';
 import { FileStreamer } from './parser.js';
 import { systemPrompt } from './prompt.js';
-import { extractKey, builtinKey } from './keys.js';
+import { extractKey, builtinKey, localOllamaUrl } from './keys.js';
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
 import { createClient } from '@supabase/supabase-js';
@@ -25,11 +25,12 @@ chat.post('/', async (c) => {
 
   // BYOK: a user-supplied key (x-api-key header or body.apiKey) takes priority
   // over the built-in platform key. It is used for this request only.
+  const isLocalModel = typeof body.model === 'string' && body.model.startsWith('local:');
   const key = extractKey(
     c.req.header('x-api-key'),
     typeof body.apiKey === 'string' ? body.apiKey : '',
   ) || builtinKey();
-  if (!key) {
+  if (!key && !isLocalModel) {
     return c.json({ error: 'no API key — add one in the UI (🔑) or set OLLAMA_API_KEY/MISTRAL_API_KEY in .env' }, 500);
   }
 
@@ -55,7 +56,7 @@ chat.post('/', async (c) => {
   const hasOwnKey = Boolean(
     extractKey(c.req.header('x-api-key'), typeof body.apiKey === 'string' ? body.apiKey : ''),
   );
-  if (!hasOwnKey && user.name.toLowerCase() !== 'ai_dev') {
+  if (!hasOwnKey && !isLocalModel && user.name.toLowerCase() !== 'ai_dev') {
     const day = new Date().toISOString().slice(0, 10);
     const used = await store.incrUsage(user.name, day);
     const limit = Number(getVar('DAILY_LIMIT')) || 30;
@@ -120,18 +121,50 @@ chat.post('/', async (c) => {
         return { response: r, provider: 'mistral' };
       };
 
+      const localUrl = localOllamaUrl();
+      const isLocalModel = typeof model === 'string' && model.startsWith('local:');
+      const localModel = isLocalModel ? model.slice(6) : model;
+
+      const tryLocal = async () => {
+        if (!localUrl) throw new Error('no LOCAL_OLLAMA_URL configured');
+        const r = await fetch(`${localUrl}/api/chat`, {
+          method: 'POST',
+          signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: localModel, messages, stream: true }),
+        });
+        if (!r.ok) throw new Error(`local ollama ${r.status}`);
+        return { response: r, provider: 'local' };
+      };
+
       let upstream;
       let provider = 'ollama';
-      try {
-        ({ response: upstream, provider } = await tryOllama());
-      } catch (e1) {
-        send({ type: 'warn', message: `ollama failed (${e1.message}), trying mistral...` });
+
+      if (isLocalModel && localUrl) {
         try {
-          ({ response: upstream, provider } = await tryMistral());
-        } catch (e2) {
-          send({ type: 'error', message: `all providers down: ollama: ${e1.message}; mistral: ${e2.message}` });
+          ({ response: upstream, provider } = await tryLocal());
+        } catch (e) {
+          send({ type: 'error', message: `local ollama failed: ${e.message}` });
           try { controller.close(); } catch {}
           return;
+        }
+      } else {
+        try {
+          ({ response: upstream, provider } = await tryOllama());
+        } catch (e1) {
+          send({ type: 'warn', message: `ollama failed (${e1.message}), trying mistral...` });
+          try {
+            ({ response: upstream, provider } = await tryMistral());
+          } catch (e2) {
+            send({ type: 'warn', message: `mistral failed (${e2.message}), trying local...` });
+            try {
+              ({ response: upstream, provider } = await tryLocal());
+            } catch (e3) {
+              send({ type: 'error', message: `all providers down: ollama: ${e1.message}; mistral: ${e2.message}; local: ${e3.message}` });
+              try { controller.close(); } catch {}
+              return;
+            }
+          }
         }
       }
 
@@ -207,6 +240,7 @@ chat.post('/', async (c) => {
           if (provider === 'mistral') {
             tok = j?.choices?.[0]?.delta?.content ?? '';
           } else {
+            // ollama cloud + local ollama both use message.content
             const msg = j?.message ?? {};
             if (msg.thinking) send({ type: 'think', v: msg.thinking });
             tok = msg.content ?? '';

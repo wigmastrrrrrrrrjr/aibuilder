@@ -5,8 +5,9 @@
 #   1. npx wrangler d1 execute aibuildersehdatabase --remote --file=../schema.sql
 #   2. npx wrangler secret put OLLAMA_API_KEY
 #   3. npx wrangler secret put MISTRAL_API_KEY
-#   4. npx wrangler secret put SUPABASE_SERVICE_KEY
-#   5. npx wrangler deploy          (API on Workers, web/ served via Assets)
+#   4. npx wrangler secret put LOCAL_OLLAMA_URL   (your Cloudflare Tunnel URL)
+#   5. npx wrangler secret put SUPABASE_SERVICE_KEY
+#   6. npx wrangler deploy          (API on Workers, web/ served via Assets)
 
 name = "aibuilderapi"
 main = "src/worker.js"
@@ -26,6 +27,7 @@ binding = "ASSETS"
 OLLAMA_MODEL = "gemma4:31b"
 SUPABASE_URL = "https://trwxpgmkpaddnyktbleg.supabase.co"
 SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE"
+LOCAL_OLLAMA_URL = ""
 
 [observability]
 enabled = true

@@ -21,3 +21,8 @@ export function mistralKey() {
   const k = getVar('MISTRAL_API_KEY');
   return k && !k.startsWith('your_') ? k : '';
 }
+
+export function localOllamaUrl() {
+  const u = getVar('LOCAL_OLLAMA_URL');
+  return u && u.startsWith('http') ? u.replace(/\/+$/, '') : '';
+}

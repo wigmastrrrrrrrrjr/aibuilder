@@ -52,6 +52,19 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      - name: Sync local Ollama tunnel URL
+        working-directory: aibuilderapi
+        run: |
+          if [ -n "$LOCAL_OLLAMA_URL" ]; then
+            printf '%s' "$LOCAL_OLLAMA_URL" | npx wrangler secret put LOCAL_OLLAMA_URL
+          else
+            echo "LOCAL_OLLAMA_URL not set — skipping (local fallback disabled)"
+          fi
+        env:
+          LOCAL_OLLAMA_URL: ${{ secrets.LOCAL_OLLAMA_URL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Sync Supabase service key
         working-directory: aibuilderapi
         run: |

@@ -5,7 +5,7 @@
 //   whatever plan that key entitles, unfiltered.
 
 import { Hono } from 'hono';
-import { extractKey, builtinKey, mistralKey } from './keys.js';
+import { extractKey, builtinKey, mistralKey, localOllamaUrl } from './keys.js';
 import { getVar } from './env.js';
 
 const BASE = 'https://ollama.com/api/tags';
@@ -91,6 +91,14 @@ models.get('/', async (c) => {
   // Append Mistral fallback model if key is configured and not already in list
   if (mistralKey() && !names.includes('mistral-small-latest')) {
     names.push('mistral-small-latest');
+  }
+  // Append local Ollama models if tunnel is configured
+  const localUrl = localOllamaUrl();
+  if (localUrl) {
+    const LOCAL_MODELS = ['local:qwen2.5:0.5b', 'local:qwen2.1.5b'];
+    for (const m of LOCAL_MODELS) {
+      if (!names.includes(m)) names.push(m);
+    }
   }
   return c.json({
     models: sortForCoding(names),
