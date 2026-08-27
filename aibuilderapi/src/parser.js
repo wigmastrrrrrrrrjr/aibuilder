@@ -3,13 +3,16 @@
 //   <<<EDIT:js/app.js>>>    search/replace hunks         <<<END>>>
 //   <<<DELETE:old.js>>>     (no content needed)          <<<END>>>
 //   <<<PLAN>>>              markdown checklist lines      <<<END>>>
+//   <<<NAME:app title>>>    rename the project (no body)  (no END needed)
+//   <<<DELEGATE:path>>>     hand a file to a sub-agent    <<<END>>>
+//                          (body = task description for the sub-agent)
 // EDIT bodies use:
 //   <<<<<<< SEARCH
 //   old text
 //   =======
 //   new text
 //   >>>>>>> REPLACE
-// Feed chunks via feed(); yields {type:'text'|'file'|'edit'|'delete'|'plan'} events.
+// Feed chunks via feed(); yields {type:'text'|'file'|'edit'|'delete'|'plan'|'name'|'delegate'} events.
 
 const TAG_OPEN = '<<<';
 const TAG_CLOSE = '>>>';
@@ -84,7 +87,7 @@ export class FileStreamer {
         const c = raw.indexOf(':');
         const kind = (c === -1 ? raw : raw.slice(0, c)).trim().toUpperCase();
         const path = c === -1 ? '' : raw.slice(c + 1).trim();
-        if (!['FILE', 'EDIT', 'DELETE', 'PLAN'].includes(kind)) {
+        if (!['FILE', 'EDIT', 'DELETE', 'PLAN', 'NAME', 'DELEGATE'].includes(kind)) {
           this.tag = null; // unknown tag — treat as plain text next round
           events.push({ type: 'text', v: TAG_OPEN + raw + TAG_CLOSE });
           continue;
@@ -93,6 +96,9 @@ export class FileStreamer {
         this.body = '';
         if (kind === 'DELETE') {
           events.push({ type: 'delete', path });
+          this.tag = null;
+        } else if (kind === 'NAME') {
+          events.push({ type: 'name', name: path });
           this.tag = null;
         }
       } else {
@@ -115,6 +121,8 @@ export class FileStreamer {
           events.push({ type: 'edit', path, hunks: parseEditHunks(this.body) });
         } else if (kind === 'PLAN') {
           events.push({ type: 'plan', items: parsePlan(this.body) });
+        } else if (kind === 'DELEGATE') {
+          events.push({ type: 'delegate', path, task: stripFences(this.body.trim()) });
         }
         this.body = '';
       }

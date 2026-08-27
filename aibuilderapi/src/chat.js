@@ -11,6 +11,16 @@ const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
 const MISTRAL_MODEL = 'mistral-small-latest';
 const MODEL_RE = /^[A-Za-z0-9._:+%-]{1,64}$/;
+const SUB_AGENT_PROMPT = `You are a sub-agent of AIBuilder, an expert engineer, working on ONE file as part of a larger web app that another engineer is building.
+Respond with a single generator block that writes your assigned file:
+<<<FILE:path>>>
+complete, polished file content
+<<<END>>>
+Rules:
+- Write EXACTLY the assigned file. Do not invent other files, do not edit or delete anything.
+- Do not use EDIT, DELETE, PLAN, NAME or DELEGATE blocks. Only one FILE block.
+- Do not explain or narrate. Match the app's existing style and conventions.
+- The file must be complete and self-contained so it works on its own.`;
 
 export const chat = new Hono();
 
@@ -172,6 +182,7 @@ chat.post('/', async (c) => {
       const written = [];
       const edited = [];
       const deleted = [];
+      const subAgentTasks = [];
       let ops = 0;
       let refactorSent = false;
       const maybeRefactor = () => {
@@ -214,9 +225,104 @@ chat.post('/', async (c) => {
             await store.setPlan(pid, ev.items || []);
             send({ type: 'plan', items: ev.items || [] });
           } catch { /* plan is cosmetic */ }
+        } else if (ev.type === 'name' && ev.name) {
+          const nm = String(ev.name).trim().slice(0, 60);
+          if (!nm) return;
+          try {
+            await store.rename(pid, nm);
+            send({ type: 'name', name: nm, projectId: pid });
+          } catch { /* cosmetic */ }
+        } else if (ev.type === 'delegate' && ev.path) {
+          const task = String(ev.task || '').trim();
+          if (!task) return;
+          if (subAgentTasks.length >= 4) {
+            send({ type: 'warn', message: `sub-agent queue full — skipping delegate for ${ev.path}` });
+            return;
+          }
+          send({ type: 'delegate', path: ev.path });
+          subAgentTasks.push(spawnSubAgent(ev.path, task));
         }
       };
       let raw = '';
+
+      // Spin off a parallel sub-agent: a focused single-file generator that
+      // runs concurrently with the main response and merges its FILE output in.
+      const spawnSubAgent = async (subPath, task) => {
+        const msg = [
+          { role: 'system', content: SUB_AGENT_PROMPT },
+          { role: 'user', content: `Your one assigned file: ${subPath}\n\n` +
+            `Task from the main engineer:\n${task}\n\n` +
+            `Return ONLY a single <<<FILE:${subPath}>>> ... <<<END>>> block.` },
+        ];
+        let r;
+        if (provider === 'mistral') {
+          r = await fetch(MISTRAL_URL, {
+            method: 'POST',
+            signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+            headers: { Authorization: `Bearer ${mistralKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: MISTRAL_MODEL, messages: msg, stream: true }),
+          });
+          if (!r.ok) throw new Error(`mistral ${r.status}`);
+        } else if (provider === 'local' && localUrl) {
+          r = await fetch(`${localUrl}/api/chat`, {
+            method: 'POST',
+            signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: localModel, messages: msg, stream: true }),
+          });
+          if (!r.ok) throw new Error(`local ollama ${r.status}`);
+        } else {
+          r = await fetch(OLLAMA_URL, {
+            method: 'POST',
+            signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+            headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, messages: msg, stream: true }),
+          });
+          if (!r.ok) throw new Error(`ollama ${r.status}`);
+        }
+        const sp = new FileStreamer();
+        const evs = [];
+        const reader = r.body.getReader();
+        const d = new TextDecoder();
+        let lb = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          lb += d.decode(value, { stream: true });
+          let nl;
+          while ((nl = lb.indexOf('\n')) !== -1) {
+            const line = lb.slice(0, nl).trim();
+            lb = lb.slice(nl + 1);
+            if (!line || line === 'data: [DONE]') continue;
+            let j;
+            try {
+              const payload = line.startsWith('data: ') ? line.slice(6) : line;
+              j = JSON.parse(payload);
+            } catch { continue; }
+            let tok = '';
+            if (provider === 'mistral') tok = j?.choices?.[0]?.delta?.content ?? '';
+            else tok = j?.message?.content ?? '';
+            if (!tok) continue;
+            for (const ev of sp.feed(tok)) {
+              if (ev.type === 'file' && ev.path) {
+                ev.path = subPath;
+                evs.push(ev);
+              } else if (ev.type === 'file') {
+                evs.push(ev);
+              }
+            }
+          }
+        }
+        for (const ev of sp.flush()) {
+          if (ev.type === 'file' && ev.path) {
+            ev.path = subPath;
+            evs.push(ev);
+          } else if (ev.type === 'file') {
+            evs.push(ev);
+          }
+        }
+        return evs;
+      };
 
       try {
       const reader = upstream.body.getReader();
@@ -255,6 +361,19 @@ chat.post('/', async (c) => {
       }
         for (const ev of parser.flush()) {
           await handleGen(ev);
+        }
+        if (subAgentTasks.length) {
+          const results = await Promise.allSettled(subAgentTasks);
+          for (const res of results) {
+            if (res.status === 'rejected') {
+              send({ type: 'warn', message: `sub-agent failed: ${String(res.reason?.message || res.reason).slice(0, 200)}` });
+              continue;
+            }
+            for (const ev of res.value) {
+              await handleGen(ev);
+              send({ type: 'subagent', path: ev.path, model });
+            }
+          }
         }
         if (raw.trim()) await store.addMessage(pid, 'assistant', raw);
         send({ type: 'done', projectId: pid, files: written, edited, deleted, model });

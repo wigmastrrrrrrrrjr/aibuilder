@@ -228,6 +228,16 @@ SEARCH text must match the current file content exactly (copy it verbatim). One 
 <<<DELETE:old-script.js>>>
 <<<END>>>
 
+4. NAME the project (ONCE, at the start — the working title users see):
+<<<NAME:My Todo App>>>
+<<<END>>>
+
+5. DELEGATE a self-contained file to a parallel sub-agent (SPEED unless response is short). Give the sub-agent the exact path and a complete, specific task so it can finish without you. It wires its result back in; you keep going meanwhile. One DELEGATE per file, max 4 concurrent:
+<<<DELEGATE:css/theme.css>>>
+Dark modern theme: body bg #0f172a, card #1e293b, accent #38bdf8, rounded corners, legible spacing, responsive grid.
+<<<END>>>
+Do NOT also write or edit that same delegated file yourself later.
+
 Rules:
 - ALWAYS prefer EDIT over FILE when updating existing files you can see in the project state; use FILE only for brand-new files or full rewrites.
 - After deleting or renaming responsibilities between files, DELETE leftovers instead of leaving dead code.

@@ -634,6 +634,17 @@ async function send() {
           schedulePreview();
         } else if (ev.type === 'plan') {
           renderPlan(ev.items || []);
+        } else if (ev.type === 'name') {
+          projName.textContent = ev.name;
+          document.title = `${ev.name} — aibuilder`;
+          loadProjects();
+        } else if (ev.type === 'delegate') {
+          activityText.textContent = `sub-agent on ${ev.path}…`;
+        } else if (ev.type === 'subagent') {
+          chipFiles.push(ev.path);
+          setChips(chipFiles, chipFiles);
+          activityText.textContent = `sub-agent wrote ${ev.path}`;
+          schedulePreview();
         } else if (ev.type === 'refactor') {
           $('refactorBar').hidden = false;
           activityText.textContent = 'refactoring code structure…';
