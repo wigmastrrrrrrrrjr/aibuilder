@@ -24,6 +24,7 @@ export function createD1Store(d1) {
     async deleteProject(pid) {
       await d1.prepare('DELETE FROM files WHERE project_id = ?').bind(pid).run();
       await d1.prepare('DELETE FROM messages WHERE project_id = ?').bind(pid).run();
+      await d1.prepare('DELETE FROM events WHERE pid = ?').bind(pid).run();
       await d1.prepare('DELETE FROM projects WHERE id = ?').bind(pid).run();
       return { ok: true };
     },
@@ -203,10 +204,10 @@ export function createD1Store(d1) {
         .bind(pid, room).first();
       return r?.s || 0;
     },
-    async eventsSince(pid, room, since) {
+    async eventsSince(pid, room, since, limit = 60) {
       const { results } = await d1.prepare(
-        'SELECT data, seq FROM events WHERE pid = ? AND room = ? AND seq > ? ORDER BY seq LIMIT 60'
-      ).bind(pid, room, since).all();
+        'SELECT data, seq FROM events WHERE pid = ? AND room = ? AND seq > ? ORDER BY seq LIMIT ?'
+      ).bind(pid, room, since, Math.min(200, Math.max(1, Number(limit) || 60))).all();
       return results.map(r => ({ ...JSON.parse(r.data), seq: r.seq }));
     },
 

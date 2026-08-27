@@ -30,6 +30,11 @@ async function ensureColumns(d1) {
       await d1.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run();
     } catch { /* already present */ }
   }
+  // Live DB may predate the multiplayer event log — create the tables.
+  await d1.prepare(`CREATE TABLE IF NOT EXISTS events (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    pid TEXT NOT NULL, room TEXT NOT NULL, data TEXT NOT NULL)`).run();
+  await d1.prepare('CREATE INDEX IF NOT EXISTS idx_events_room ON events (pid, room, seq)').run();
 }
 
 export default {

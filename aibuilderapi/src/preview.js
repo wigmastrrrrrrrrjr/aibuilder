@@ -161,25 +161,42 @@ let BAAS_SDK_RAW = `(function () {
           subs.push(fn);
           return function () { subs = subs.filter(function (f) { return f !== fn; }); };
         },
-        close: function () { sb.removeChannel(channel); subs = []; }
+        close: function () { sb.removeChannel(channel); subs = []; },
+        // durable multiplayer: fetch missed events so no message is lost.
+        //   room.history({limit})     -> last N events (newest first)
+        //   room.since(seq)           -> events strictly after seq
+        history: function (opts) {
+          opts = opts || {};
+          return fetch('/api/projects/' + pid + '/live/baas-' + coll +
+            '?limit=' + (Number(opts.limit) || 50), authHeaders())
+            .then(function (r) { return r.json().then(function (j) { return j.messages || []; }); });
+        },
+        since: function (seq) {
+          return fetch('/api/projects/' + pid + '/live/baas-' + coll +
+            '?since=' + (Number(seq) || 0), authHeaders())
+            .then(function (r) { return r.json().then(function (j) { return j.messages || []; }); });
+        },
+        seq: function () {
+          return fetch('/api/projects/' + pid + '/live/baas-' + coll +
+            '?since=0&limit=1', authHeaders())
+            .then(function (r) { return r.json().then(function (j) { return j.seq || 0; }); });
+        }
       };
     },
     push: function (coll, evt) {
       var chName = 'live:' + pid + ':' + coll;
       var sb = getSB();
-      getIdentity().then(function (name) {
+      return getIdentity().then(function (name) {
         var ch = sb.channel(chName);
-        ch.send({
-          type: 'broadcast',
-          event: 'evt',
-          payload: { type: 'message', user: name, data: evt || {}, ts: Date.now() }
-        });
-        // also POST to server for backward compat (server-side persistence / co-build)
-        fetch('/api/projects/' + pid + '/live/baas-' + coll + '/push', {
+        var payload = { type: 'message', user: name, data: evt || {}, ts: Date.now() };
+        ch.send({ type: 'broadcast', event: 'evt', payload });
+        // durable: also persist to the room's event log so late joiners catch up
+        return fetch('/api/projects/' + pid + '/live/baas-' + coll + '/push', {
           method: 'POST',
           headers: authHeaders({ 'content-type': 'application/json' }),
-          body: JSON.stringify({ ...(evt || {}), _user: name })
-        }).catch(function () {});
+          body: JSON.stringify({ data: evt || {}, _user: name })
+        }).then(function (r) { return r.ok ? r.json().then(function (j) { return j.seq || 0; }) : 0; })
+          .catch(function () { return 0; });
       });
     },
     server: function (name) {
@@ -202,7 +219,7 @@ let BAAS_SDK_RAW = `(function () {
       return {
         myName: function () { return myName; },
         push: function (evt) {
-          getIdentity().then(function (name) {
+          return getIdentity().then(function (name) {
             channel.send({
               type: 'broadcast',
               event: 'evt',
@@ -214,8 +231,96 @@ let BAAS_SDK_RAW = `(function () {
           subs.push(cb);
           return function () { subs = subs.filter(function (f) { return f !== cb; }); };
         },
-        close: function () { sb.removeChannel(channel); subs = []; }
+        close: function () { sb.removeChannel(channel); subs = []; },
+        history: function (opts) {
+          opts = opts || {};
+          return fetch('/api/projects/' + pid + '/live/srv:' + name +
+            '?limit=' + (Number(opts.limit) || 50), authHeaders())
+            .then(function (r) { return r.json().then(function (j) { return j.messages || []; }); });
+        },
+        since: function (seq) {
+          return fetch('/api/projects/' + pid + '/live/srv:' + name +
+            '?since=' + (Number(seq) || 0), authHeaders())
+            .then(function (r) { return r.json().then(function (j) { return j.messages || []; }); });
+        },
+        seq: function () {
+          return fetch('/api/projects/' + pid + '/live/srv:' + name +
+            '?since=0&limit=1', authHeaders())
+            .then(function (r) { return r.json().then(function (j) { return j.seq || 0; }); });
+        }
       };
+    },
+    chat: {
+      // Persistent per-project chat with history, realtime delivery,
+      // and anon identities — the jsccOS chat engine, back in the SDK.
+      //   var chat = creat.chat.room('lobby');  // named rooms; default 'main'
+      //   await chat.send('hello');             // -> the stored message
+      //   var msgs = await chat.list({limit: 30, since: 0});
+      //   chat.on(function (m) { ... });        // realtime (includes your own sends)
+      //   chat.history({limit: 30});            // most recent messages (newest last)
+      //   chat.latest();                        // -> last seq, for cross-tab sync
+      room: function (rname) {
+        rname = /^[a-z0-9_-]{1,32}$/.test(rname || '') ? rname : 'main';
+        var chName = 'live:' + pid + ':chat:' + rname;
+        var subs = [];
+        var channel = null;
+        function connect() {
+          if (channel) return channel;
+          var sb = getSB();
+          channel = sb.channel(chName);
+          channel.on('broadcast', { event: 'evt' }, function (payload) {
+            for (var i = 0; i < subs.length; i++) {
+              try { subs[i](payload.payload); } catch {}
+            }
+          }).subscribe();
+          return channel;
+        }
+        return {
+          name: rname,
+          send: function (text) {
+            return fetch('/api/projects/' + pid + '/chat/send', {
+              method: 'POST',
+              headers: authHeaders({ 'content-type': 'application/json' }),
+              body: JSON.stringify({ room: rname, text: String(text == null ? '' : text) })
+            }).then(function (r) {
+              return r.text().then(function (t) {
+                var j = t ? JSON.parse(t) : {};
+                if (!r.ok) throw new Error(j.error || friendlyError(r.status));
+                return j.message;
+              });
+            });
+          },
+          list: function (opts) {
+            opts = opts || {};
+            var q = 'room=' + encodeURIComponent(rname) +
+              '&since=' + (Number(opts.since) || 0) +
+              '&limit=' + Math.max(1, Math.min(200, Number(opts.limit) || 50));
+            return fetch('/api/projects/' + pid + '/chat/list?' + q, authHeaders())
+              .then(function (r) {
+                return r.text().then(function (t) {
+                  var j = t ? JSON.parse(t) : {};
+                  if (!r.ok) throw new Error(j.error || friendlyError(r.status));
+                  return j.messages || [];
+                });
+              });
+          },
+          history: function (opts) { return this.list(opts); },
+          latest: function () {
+            return fetch('/api/projects/' + pid + '/chat/list?room=' + encodeURIComponent(rname) +
+              '&since=0&limit=1', authHeaders())
+              .then(function (r) { return r.json().then(function (j) { return j.seq || 0; }); });
+          },
+          on: function (cb) {
+            subs.push(cb);
+            connect();
+            return function () { subs = subs.filter(function (f) { return f !== cb; }); };
+          },
+          close: function () {
+            if (channel) { try { getSB().removeChannel(channel); } catch {} channel = null; }
+            subs = [];
+          }
+        };
+      }
     },
     call: function (name, input) {
       return fetch('/api/projects/' + pid + '/fn/' + name, {

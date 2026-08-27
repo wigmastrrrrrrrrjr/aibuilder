@@ -62,3 +62,12 @@ CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL
 );
+
+-- Multiplayer / chat event log (append-only, per-project rooms)
+CREATE TABLE IF NOT EXISTS events (
+  seq  INTEGER PRIMARY KEY AUTOINCREMENT,
+  pid  TEXT NOT NULL,
+  room TEXT NOT NULL,
+  data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_events_room ON events (pid, room, seq);

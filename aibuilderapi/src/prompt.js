@@ -30,20 +30,20 @@ Rules:
 - Values must be JSON-safe (strings, numbers, booleans, arrays, plain objects — no functions, no Dates, no undefined).
 - ALWAYS try/catch or handle errors. Show loading spinners for slow operations.
 
-### creat.push — Broadcast event to ALL viewers (Supabase Realtime)
+### creat.push — Broadcast event to ALL viewers (Supabase Realtime + durable log)
 
-  creat.push(collection, { type: 'move', x: 5, y: 10 });
+  await creat.push(collection, { type: 'move', x: 5, y: 10 });   // -> seq number
 
 - Sends to every connected viewer of this app, INCLUDING the sender.
 - collection = same rules as db collection names.
 - payload = any JSON-safe object. Include a "type" field so receivers know what to do.
-- This is a FIRE-AND-FORGET call — no return value, no await needed (but await is fine).
-- Events are stamped with { user: 'username' } via /api/auth/me — do NOT set user yourself.
+- ALSO persisted to the room's event log — late joiners can catch up (see history/since below).
+- Resolves to the event's sequence number (returns a promise).
 
 ### creat.live — Subscribe to broadcast events (Supabase Realtime, instant delivery)
 
   var room = creat.live(collection, function (evt) {
-    // evt = { type: 'message', user, data, ts }
+    // evt = { type: 'message', user, data, ts, seq }
     // evt.user = sender's username (fetched from auth, or 'anon #xxxx')
     // evt.data = whatever was passed to creat.push()
   });
@@ -56,6 +56,18 @@ Rules:
 - collection = the SAME collection name used in creat.push.
 - The callback fires for EVERY event, INCLUDING your own pushes.
 - Connection auto-reconnects via Supabase — you do NOT need to handle reconnection.
+- DURABLE CATCH-UP (no missed messages): the room handle also exposes the event log:
+    room.history({limit: 50})   // -> last 50 events (array, oldest first)
+    room.since(35)              // -> all events strictly after seq 35
+    room.seq()                  // -> latest seq number
+
+  Typical pattern to never miss anything:
+    var seen = await room.seq();
+    room.history({limit: 200}).then(function (es) { es.forEach(render); });
+    room.since(seen).then(function (es) { es.forEach(render); });
+
+- Do NOT combine lastSeq + history naively: history returns the tail of the log,
+  and since(last) returns only NEWER events — use them as shown above.
 
 IMPORTANT:
 - You do NOT need to "connect" or "open" anything. creat.live() handles the Supabase channel.
@@ -78,6 +90,37 @@ For app-specific rooms like game lobbies, chat rooms, or team channels:
 - Events arrive with evt.type, evt.user, evt.data — same shape as creat.live events.
 - subscribe() returns an unsubscribe function — call it to stop listening.
 - You can have multiple servers open at once (e.g. one for chat, one for game state).
+- Also durable: srv.history({limit}), srv.since(seq), srv.seq() work exactly as above.
+
+### creat.chat — Persistent chat engine (jsccOS chat, back in the SDK)
+
+Real chat with history that survives reloads — messages are stored server-side,
+so any viewer can rewind the conversation. Identity is auto-attached.
+
+  var chat = creat.chat.room('lobby');   // named rooms; default room 'main'
+  // - you can open several rooms at once
+
+  await chat.send('hello everyone');     // -> the stored message {id, user, text, ts}
+
+  var msgs = await chat.list({ limit: 30, since: 0 });  // oldest first, monotonic ids
+  //   - since=0 => fresh backstory; use the last id to poll incrementally:
+  var idx = msgs.length ? msgs[msgs.length - 1].id : 0;
+  setInterval(function () {
+    chat.list({ since: idx }).then(function (newMsgs) {
+      newMsgs.forEach(function (m) { appendLine(m.user + ': ' + m.text); idx = m.id; });
+    });
+  }, 1500);
+
+  var off = chat.on(function (m) { ... });   // realtime, includes your own sends
+  off();                                     // stop listening
+  chat.history({limit: 30});                 // most recent messages (by id)
+  chat.latest();                             // -> latest seq, for cross-tab sync
+
+- Rooms default to 'main'. Room names: a-z0-9-_, max 32 chars.
+- Message shape everywhere: { id, user, text, ts }. id is monotonic per room.
+- Display messages through chat.on() or by polling chat.list({since: lastId}) — pick ONE
+  path so you don't double-print (chat.on() already includes your own sends).
+- Anon viewers are shown as 'anon #xxxx' automatically — no name input needed.
 
 ### creat.call — Run a serverless function
 

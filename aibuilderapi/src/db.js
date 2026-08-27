@@ -90,6 +90,7 @@ useStore({
   async deleteProject(pid) {
     db.prepare('DELETE FROM files WHERE project_id = ?').run(pid);
     db.prepare('DELETE FROM messages WHERE project_id = ?').run(pid);
+    db.prepare('DELETE FROM events WHERE pid = ?').run(pid);
     db.prepare('DELETE FROM projects WHERE id = ?').run(pid);
     return { ok: true };
   },
@@ -194,10 +195,10 @@ useStore({
     ).get(pid, room);
     return r.s;
   },
-    async eventsSince(pid, room, since) {
+    async eventsSince(pid, room, since, limit = 60) {
       return db.prepare(
-        'SELECT seq, data FROM events WHERE pid = ? AND room = ? AND seq > ? ORDER BY seq LIMIT 60'
-      ).all(pid, room, since).map((r) => ({ ...JSON.parse(r.data), seq: r.seq }));
+        'SELECT seq, data FROM events WHERE pid = ? AND room = ? AND seq > ? ORDER BY seq LIMIT ?'
+      ).all(pid, room, since, Math.min(200, Math.max(1, Number(limit) || 60))).map((r) => ({ ...JSON.parse(r.data), seq: r.seq }));
     },
 
     // ---- accounts & sessions -----------------------------------------------
