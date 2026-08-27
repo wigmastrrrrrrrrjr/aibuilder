@@ -10,6 +10,28 @@ import { hashPassword } from './auth.js';
 
 // Runtime vars (OLLAMA_MODEL, secrets like OLLAMA_API_KEY) are read through
 // getVar() from src/env.js; setVars(env) makes Worker bindings visible there.
+// D1 lacks db.js's ensureColumn; add missing columns to live tables so
+// newer INSERTs (owner, encoding, ip, …) don't fail with "no such column".
+async function ensureColumns(d1) {
+  const adds = [
+    ['projects', 'published', 'INTEGER NOT NULL DEFAULT 0'],
+    ['projects', 'slug', 'TEXT'],
+    ['projects', 'description', "TEXT NOT NULL DEFAULT ''"],
+    ['projects', 'model', 'TEXT'],
+    ['projects', 'plan', 'TEXT'],
+    ['projects', 'owner', "TEXT NOT NULL DEFAULT ''"],
+    ['files', 'encoding', "TEXT NOT NULL DEFAULT 'utf8'"],
+    ['users', 'email', "TEXT NOT NULL DEFAULT ''"],
+    ['users', 'verified', 'INTEGER NOT NULL DEFAULT 0'],
+    ['users', 'ip', "TEXT NOT NULL DEFAULT ''"],
+  ];
+  for (const [table, col, def] of adds) {
+    try {
+      await d1.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run();
+    } catch { /* already present */ }
+  }
+}
+
 export default {
   async fetch(req, env, ctx) {
     setVars(env);
@@ -35,6 +57,10 @@ export default {
     }
 
     useStore(createD1Store(env.DB));
+
+    // Backfill columns the live D1 tables may predate (CREATE TABLE IF NOT EXISTS
+    // won't add columns to an existing table; mirrors db.js ensureColumn).
+    await ensureColumns(env.DB);
 
     // Auto-create ai_dev account on first boot (runs once per cold start)
     try {

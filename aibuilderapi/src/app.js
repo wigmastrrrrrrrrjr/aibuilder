@@ -53,6 +53,15 @@ app.route('/api/models', models);
 // ---- global rate limit -------------------------------------------------------
 // TEMP: test new endpoint
 app.get('/api/debug-test', (c) => c.json({ ok: true }));;
+// TEMP: diag D1 write path
+app.post('/api/diag-insert', async (c) => {
+  try {
+    const p = await store.createProject('diag', 'guest');
+    return c.json({ ok: true, pid: p.id });
+  } catch (e) {
+    return c.json({ ok: false, error: String((e && e.message) || e), name: e && e.name });
+  }
+});;
 
 // ---- projects ----------------------------------------------------------------
 app.get('/api/projects', async (c) => c.json(await store.listProjects()));
