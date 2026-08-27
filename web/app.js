@@ -169,6 +169,25 @@ let authMode = 'signup';
 let pendingVerifyUser = null;   // username awaiting email verification
 let pendingTfaSession = null;   // sessionId awaiting 2FA
 
+// Returns true if dob (YYYY-MM-DD) indicates age >= 13.
+function okToSignUp(dob) {
+  const birth = new Date(dob);
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const m = today.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
+  return age >= 13;
+}
+
+function finishAndEnter(d, after) {
+  try {
+    localStorage.setItem('ab.tok', d.token);
+    localStorage.setItem('ab.user', d.username);
+  } catch { throw new Error('browser storage is blocked'); }
+  $('authErr').textContent = '';
+  after();
+}
+
 async function doAuth(e) {
   e.preventDefault();
   const username = $('authUser').value.trim();
@@ -185,27 +204,20 @@ async function doAuth(e) {
       if (!email) throw new Error('email required');
       const agree = $('agreeCheck')?.checked;
       if (!agree) throw new Error('you must accept the Terms of Service and Terms of Use to sign up');
+      const dob = $('authDob')?.value || '';
+      if (!dob) throw new Error('date of birth required (you must be 13 or older)');
+      if (!okToSignUp(dob)) throw new Error('you must be 13 or older to use aibuilder (COPPA)');
       const ct = await captchaToken('signup');
       const capH = ct ? { [ct.header]: ct.value } : {};
       const r = await fetch(`${API}/api/auth/signup`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...capH },
-        body: JSON.stringify({ username, password, email }),
+        body: JSON.stringify({ username, password, email, dob }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
-
-      // Email verification required
-      if (d.verifyRequired) {
-        pendingVerifyUser = d.username;
-        $('authForm').hidden = true;
-        $('verifyForm').hidden = false;
-        $('verifySub').textContent = d.message || 'We sent a 6-digit code to verify your email.';
-        $('verifyCode').value = '';
-        $('verifyCode').focus();
-        finish();
-        return;
-      }
+      finishAndEnter(d, location.reload);
+      return;
     }
 
     if (authMode === 'login') {
@@ -231,12 +243,7 @@ async function doAuth(e) {
         return;
       }
 
-      try {
-        localStorage.setItem('ab.tok', d.token);
-        localStorage.setItem('ab.user', d.username);
-      } catch { throw new Error('browser storage is blocked'); }
-      $('authErr').textContent = '';
-      location.reload();
+      finishAndEnter(d, location.reload);
     }
   } catch (err) {
     $('authErr').textContent = err.message || String(err);
@@ -341,6 +348,7 @@ function paintAuth() {
   $('authSwitch').textContent = t[3];
   $('authPass').placeholder = authMode === 'reset' ? 'new password (min 6 chars)' : 'password (min 6 chars)';
   $('authEmail').hidden = authMode !== 'signup';
+  $('dobRow').hidden = authMode !== 'signup';
 }
 $('authSwitch').addEventListener('click', () => {
   authMode = authMode === 'signup' ? 'login' : authMode === 'login' ? 'reset' : 'signup';

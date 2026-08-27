@@ -256,7 +256,7 @@ auth.post('/api/auth/signup', async (c) => {
   if (!(await verifyCaptcha(c, 'signup')))
     return c.json({ error: 'captcha failed — are you a bot?' }, 403);
 
-  const { username, password, email } = await c.req.json().catch(() => ({}));
+  const { username, password, email, dob } = await c.req.json().catch(() => ({}));
   const name = String(username || '').trim();
   const mail = String(email || '').trim().toLowerCase();
 
@@ -266,6 +266,12 @@ auth.post('/api/auth/signup', async (c) => {
     return c.json({ error: 'password must be at least 6 characters' }, 400);
   if (!EMAIL_RE.test(mail))
     return c.json({ error: 'valid email required' }, 400);
+
+  // COPPA: require DOB and enforce 13+
+  if (!dob || !/^\d{4}-\d{2}-\d{2}$/.test(dob))
+    return c.json({ error: 'date of birth required (you must be 13 or older)' }, 400);
+  if (!okToSignUp(dob))
+    return c.json({ error: 'you must be 13 or older to use aibuilder (COPPA)' }, 403);
 
   // Block reserved names
   if (isTfaUser(name))
@@ -297,6 +303,16 @@ auth.post('/api/auth/signup', async (c) => {
   const token = await store.createSession(user.id);
   return c.json({ token, username: user.name }, 201);
 });
+
+// Shared age check (server + client)
+function okToSignUp(dob) {
+  const birth = new Date(dob);
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const m = today.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
+  return age >= 13;
+}
 
 // ---- SIGNUP: step 2 — verify code, create account -------------------------
 auth.post('/api/auth/verify-email', async (c) => {
