@@ -251,7 +251,7 @@ auth.post('/api/captcha/check', async (c) => {
   return c.json({ human: true });
 });
 
-// ---- SIGNUP: step 1 — collect username + password + email, send code --------
+// ---- SIGNUP (email verification temporarily disabled — account created immediately) ----
 auth.post('/api/auth/signup', async (c) => {
   if (!(await verifyCaptcha(c, 'signup')))
     return c.json({ error: 'captcha failed — are you a bot?' }, 403);
@@ -284,23 +284,18 @@ auth.post('/api/auth/signup', async (c) => {
     }, 403);
   }
 
-  // Hash password eagerly (we'll need it when verification completes)
+  // Create the account directly (no email code step for now)
   const phash = await hashPassword(password);
-
-  // Store pending signup in meta (includes hashed password + email + hashed code)
-  const code = generateCode();
-  const codeHash = await hashCode(code);
-  const pending = { name, phash, email: mail, ip: tag, codeHash, expires: Date.now() + CODE_EXPIRY_MS };
-  await store.metaSet(`signup:${name}`, JSON.stringify(pending));
-
-  // Send verification email (await so the Worker stays alive)
+  let user;
   try {
-    await sendCodeEmail(mail, code, name);
-  } catch (e) {
-    console.error('[signup] email failed:', e.message);
+    user = await store.createUser({ name, phash, ip: tag, email: mail });
+  } catch {
+    return c.json({ error: 'username already taken' }, 409);
   }
+  await store.verifyUser(name);
 
-  return c.json({ verifyRequired: true, username: name, message: `Code sent to ${mail}` });
+  const token = await store.createSession(user.id);
+  return c.json({ token, username: user.name }, 201);
 });
 
 // ---- SIGNUP: step 2 — verify code, create account -------------------------

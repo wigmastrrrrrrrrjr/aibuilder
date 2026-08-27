@@ -68,6 +68,8 @@ ensureColumn('projects', 'plan TEXT');
 ensureColumn('projects', "owner TEXT NOT NULL DEFAULT ''");
 ensureColumn('files', "encoding TEXT NOT NULL DEFAULT 'utf8'");
 ensureColumn('users', "ip TEXT NOT NULL DEFAULT ''");
+ensureColumn('users', "email TEXT NOT NULL DEFAULT ''");
+ensureColumn('users', "verified INTEGER NOT NULL DEFAULT 0");
 
 function slugify(name) {
   const s = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -202,15 +204,18 @@ useStore({
     },
 
     // ---- accounts & sessions -----------------------------------------------
-    async createUser({ name, phash, ip }) {
+    async createUser({ name, phash, ip, email }) {
       const id = crypto.randomUUID();
       try {
-        db.prepare('INSERT INTO users (id, name, phash, created_at, ip) VALUES (?, ?, ?, ?, ?)')
-          .run(id, name, phash, Date.now(), ip || '');
+        db.prepare('INSERT INTO users (id, name, phash, created_at, ip, email) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(id, name, phash, Date.now(), ip || '', email || '');
       } catch {
         throw new Error('username already taken');
       }
       return { id, name };
+    },
+    async verifyUser(name) {
+      db.prepare('UPDATE users SET verified = 1 WHERE name = ?').run(name);
     },
     async ipUsed(ip) {
       if (!ip) return null;
