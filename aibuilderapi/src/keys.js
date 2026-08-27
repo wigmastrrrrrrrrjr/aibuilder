@@ -16,3 +16,8 @@ export function builtinKey() {
   const k = getVar('OLLAMA_API_KEY');
   return k && !k.startsWith('your_') ? k : '';
 }
+
+export function mistralKey() {
+  const k = getVar('MISTRAL_API_KEY');
+  return k && !k.startsWith('your_') ? k : '';
+}

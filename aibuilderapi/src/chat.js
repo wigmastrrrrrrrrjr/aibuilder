@@ -8,6 +8,8 @@ import { getUser, canWrite } from './auth.js';
 import { createClient } from '@supabase/supabase-js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
+const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
+const MISTRAL_MODEL = 'mistral-small-latest';
 const MODEL_RE = /^[A-Za-z0-9._:+%-]{1,64}$/;
 
 export const chat = new Hono();
@@ -28,7 +30,7 @@ chat.post('/', async (c) => {
     typeof body.apiKey === 'string' ? body.apiKey : '',
   ) || builtinKey();
   if (!key) {
-    return c.json({ error: 'no API key — add one in the UI (🔑) or set OLLAMA_API_KEY in .env' }, 500);
+    return c.json({ error: 'no API key — add one in the UI (🔑) or set OLLAMA_API_KEY/MISTRAL_API_KEY in .env' }, 500);
   }
 
   let pid = body.projectId;
@@ -90,25 +92,47 @@ chat.post('/', async (c) => {
       };
       send({ type: 'meta', projectId: pid, model });
 
-      let upstream;
-      try {
-        upstream = await fetch(OLLAMA_URL, {
+      const mistralKey = getVar('MISTRAL_API_KEY') || '';
+
+      const tryOllama = async () => {
+        const r = await fetch(OLLAMA_URL, {
           method: 'POST',
-          // hard ceiling so a queued/stalled upstream can't hang forever
           signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ model, messages, stream: true }),
         });
-      } catch (e) {
-        send({ type: 'error', message: `ollama unreachable: ${e.message}` });
-        try { controller.close(); } catch {}
-        return;
-      }
-      if (!upstream.ok || !upstream.body) {
-        const t = await upstream.text().catch(() => '');
-        send({ type: 'error', message: `ollama ${upstream.status}: ${t.slice(0, 300)}` });
-        try { controller.close(); } catch {}
-        return;
+        if (!r.ok) throw new Error(`ollama ${r.status}`);
+        return { response: r, provider: 'ollama' };
+      };
+
+      const tryMistral = async () => {
+        if (!mistralKey) throw new Error('no MISTRAL_API_KEY configured');
+        const r = await fetch(MISTRAL_URL, {
+          method: 'POST',
+          signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+          headers: { Authorization: `Bearer ${mistralKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: MISTRAL_MODEL, messages, stream: true }),
+        });
+        if (!r.ok) {
+          const t = await r.text().catch(() => '');
+          throw new Error(`mistral ${r.status}: ${t.slice(0, 200)}`);
+        }
+        return { response: r, provider: 'mistral' };
+      };
+
+      let upstream;
+      let provider = 'ollama';
+      try {
+        ({ response: upstream, provider } = await tryOllama());
+      } catch (e1) {
+        send({ type: 'warn', message: `ollama failed (${e1.message}), trying mistral...` });
+        try {
+          ({ response: upstream, provider } = await tryMistral());
+        } catch (e2) {
+          send({ type: 'error', message: `all providers down: ollama: ${e1.message}; mistral: ${e2.message}` });
+          try { controller.close(); } catch {}
+          return;
+        }
       }
 
       const parser = new FileStreamer();
@@ -162,31 +186,39 @@ chat.post('/', async (c) => {
       let raw = '';
 
       try {
-        const reader = upstream.body.getReader();
-        const dec = new TextDecoder();
-        let lineBuf = '';
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          lineBuf += dec.decode(value, { stream: true });
-          let nl;
-          while ((nl = lineBuf.indexOf('\n')) !== -1) {
-            const line = lineBuf.slice(0, nl).trim();
-            lineBuf = lineBuf.slice(nl + 1);
-            if (!line) continue;
-            let j;
-            try { j = JSON.parse(line); } catch { continue; }
+      const reader = upstream.body.getReader();
+      const dec = new TextDecoder();
+      let lineBuf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        lineBuf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = lineBuf.indexOf('\n')) !== -1) {
+          const line = lineBuf.slice(0, nl).trim();
+          lineBuf = lineBuf.slice(nl + 1);
+          if (!line || line === 'data: [DONE]') continue;
+          let j;
+          try {
+            const payload = line.startsWith('data: ') ? line.slice(6) : line;
+            j = JSON.parse(payload);
+          } catch { continue; }
+          let tok = '';
+          if (provider === 'mistral') {
+            tok = j?.choices?.[0]?.delta?.content ?? '';
+          } else {
             const msg = j?.message ?? {};
-            const tok = msg.content ?? '';
             if (msg.thinking) send({ type: 'think', v: msg.thinking });
-            if (!tok) continue;
-            raw += tok;
-            send({ type: 'token', v: tok });
-            for (const ev of parser.feed(tok)) {
-              await handleGen(ev);
-            }
+            tok = msg.content ?? '';
+          }
+          if (!tok) continue;
+          raw += tok;
+          send({ type: 'token', v: tok });
+          for (const ev of parser.feed(tok)) {
+            await handleGen(ev);
           }
         }
+      }
         for (const ev of parser.flush()) {
           await handleGen(ev);
         }

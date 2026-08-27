@@ -4,8 +4,9 @@
 # Deploy steps:
 #   1. npx wrangler d1 execute aibuildersehdatabase --remote --file=../schema.sql
 #   2. npx wrangler secret put OLLAMA_API_KEY
-#   3. npx wrangler secret put SUPABASE_SERVICE_KEY
-#   4. npx wrangler deploy          (API on Workers, web/ served via Assets)
+#   3. npx wrangler secret put MISTRAL_API_KEY
+#   4. npx wrangler secret put SUPABASE_SERVICE_KEY
+#   5. npx wrangler deploy          (API on Workers, web/ served via Assets)
 
 name = "aibuilderapi"
 main = "src/worker.js"

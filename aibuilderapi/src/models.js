@@ -5,7 +5,7 @@
 //   whatever plan that key entitles, unfiltered.
 
 import { Hono } from 'hono';
-import { extractKey, builtinKey } from './keys.js';
+import { extractKey, builtinKey, mistralKey } from './keys.js';
 import { getVar } from './env.js';
 
 const BASE = 'https://ollama.com/api/tags';
@@ -87,6 +87,10 @@ models.get('/', async (c) => {
   if (!bypassFreeFilter) {
     names = names.filter(n => FREE_MODELS.has(n));
     if (!names.length) names = [...FREE_MODELS]; // offline fallback
+  }
+  // Append Mistral fallback model if key is configured and not already in list
+  if (mistralKey() && !names.includes('mistral-small-latest')) {
+    names.push('mistral-small-latest');
   }
   return c.json({
     models: sortForCoding(names),
