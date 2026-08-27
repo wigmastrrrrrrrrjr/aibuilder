@@ -115,20 +115,22 @@ const sessName = () => localStorage.getItem('ab.user') || '';
 /* ---------- captcha (reCAPTCHA v3 primary, BotBye backup) ---------- */
 const CAPTCHA_SITE_KEY = '6LddVZotAAAAAKhQLajTiyD6frXUZeWG5nBRUCbw';
 
-// Try hard to obtain a puzzle/token: reCAPTCHA first, then BotBye.
-// Resolves to { header:'x-recaptcha-token'|'x-botbye-token', value } or null.
+// Returns { header:'x-recaptcha-token'|'x-botbye-token', value } or null.
+// Tries reCAPTCHA once with a short timeout, then immediately falls back to BotBye.
 async function captchaToken(action) {
-  // Primary: reCAPTCHA v3
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      if (window.grecaptcha && window.grecaptcha.execute) {
-        const t = await window.grecaptcha.execute(CAPTCHA_SITE_KEY, { action });
-        if (t) return { header: 'x-recaptcha-token', value: t };
-      }
-    } catch { /* retry below */ }
-    await new Promise((r) => setTimeout(r, 800));
-  }
-  // Backup: BotBye challenge token (only reached if reCAPTCHA couldn't produce a puzzle)
+  // Primary: reCAPTCHA v3 — with 1.5s timeout so we don't hang
+  try {
+    if (window.grecaptcha && window.grecaptcha.execute) {
+      const tokenPromise = window.grecaptcha.execute(CAPTCHA_SITE_KEY, { action });
+      const t = await Promise.race([
+        tokenPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('recaptcha timeout')), 1500)),
+      ]);
+      if (t) return { header: 'x-recaptcha-token', value: t };
+    }
+  } catch { /* fall through to backup */ }
+
+  // Backup: BotBye challenge token (fast, no external verify round-trip on client)
   try {
     if (window.botbye && typeof window.botbye.runChallenge === 'function') {
       const t = await window.botbye.runChallenge();
@@ -146,7 +148,7 @@ function setCaptchaStatus(text, cls) {
 }
 
 // Background human check: silently verifies the visitor is a human before they
-// even submit the form, so the gate can tell them up front.
+// even submit the form, so the gate can tell them up front. Fire-and-forget.
 async function humanCheck() {
   const ct = await captchaToken('check');
   if (!ct) { setCaptchaStatus('captcha unavailable — proceed anyway', 'captcha-fail'); return; }
