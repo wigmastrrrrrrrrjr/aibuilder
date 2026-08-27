@@ -6,12 +6,19 @@
 <title>aibuilder</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
-<link rel="stylesheet" href="style.css?v=7">
+<link rel="stylesheet" href="style.css?v=8">
 <style>
   #captchaStatus {
     display: flex; align-items: center; justify-content: center; gap: 8px;
     padding: 8px 0; font-size: 12px; color: #9aa4b2;
   }
+  #agreeRow {
+    display: flex; align-items: center; gap: 8px;
+    margin: 2px 0 10px; font-size: 12px; color: #9aa4b2;
+  }
+  #agreeRow a { color: #58a6ff; text-decoration: none; }
+  #agreeRow a:hover { text-decoration: underline; }
+  #agreeCheck { accent-color: #58a6ff; width: 15px; height: 15px; flex: none; }
   .captcha-ready { color: #3fb950; }
   .captcha-fail { color: #f85149; }
   .captcha-spin {
@@ -112,6 +119,8 @@
     <input id="authPass" type="password" placeholder="password (min 6 characters)" autocomplete="new-password" required>
     <input id="authEmail" type="email" placeholder="email address" autocomplete="email" required>
     <div id="authErr"></div>
+    <label id="agreeRow"><input type="checkbox" id="agreeCheck" required>
+      <span>I agree to the <a href="tos.html" target="_blank" rel="noopener">Terms of Service</a> and <a href="tou.html" target="_blank" rel="noopener">Terms of Use</a>.</span></label>
     <button id="authGo" type="submit">Sign up</button>
     <div id="captchaStatus">
       <span id="captchaSpinner" class="captcha-spin"></span>
@@ -183,6 +192,6 @@
         } catch (e) { /* ignore */ }
       })();
     </script>
-    <script src="app.js?v=7"></script>
+    <script src="app.js?v=8"></script>
 </body>
 </html>

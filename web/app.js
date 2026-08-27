@@ -183,6 +183,8 @@ async function doAuth(e) {
 
     if (authMode === 'signup') {
       if (!email) throw new Error('email required');
+      const agree = $('agreeCheck')?.checked;
+      if (!agree) throw new Error('you must accept the Terms of Service and Terms of Use to sign up');
       const ct = await captchaToken('signup');
       const capH = ct ? { [ct.header]: ct.value } : {};
       const r = await fetch(`${API}/api/auth/signup`, {
