@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { useStore } from './store.js';
 import { creditsToUnits } from './models.js';
+import { hashEmail } from './hash-email.js';
 
 // Anti-abuse: allow a small number of signups per network before locking.
 const MAX_ACCOUNTS_PER_IP = 3;
@@ -529,7 +530,7 @@ useStore({
       const id = crypto.randomUUID();
       try {
         db.prepare('INSERT INTO users (id, name, phash, created_at, ip, email) VALUES (?, ?, ?, ?, ?, ?)')
-          .run(id, name, phash, Date.now(), ip || '', email || '');
+          .run(id, name, phash, Date.now(), ip || '', await hashEmail(email));
       } catch {
         throw new Error('username already taken');
       }

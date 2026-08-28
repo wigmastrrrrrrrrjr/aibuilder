@@ -8,6 +8,7 @@ import { createD1Store } from './store-d1.js';
 import { setVars, getVar } from './env.js';
 import { hashPassword } from './auth.js';
 import { MAINTENANCE_MODE, maintenanceResponse } from './maintenance.js';
+import { hashEmail } from './hash-email.js';
 
 // Runtime vars (OLLAMA_MODEL, secrets like OLLAMA_API_KEY) are read through
 // getVar() from src/env.js; setVars(env) makes Worker bindings visible there.
@@ -117,6 +118,22 @@ export default {
         await store.metaSet('clean:probe_events_v2', '1');
       }
     } catch (e) { console.error('[boot] test-event cleanup:', e.message); }
+
+    // Email hardening: one-way hash any legacy plaintext emails in the live DB
+    // (new signups already hash via store.createUser).
+    try {
+      const emailDone = await store.metaGet('clean:email_hash_v1');
+      if (!emailDone) {
+        const rows = await env.DB.prepare(
+          "SELECT name, email FROM users WHERE email != '' AND email NOT LIKE 'sha256:%'"
+        ).all();
+        for (const row of rows.results || []) {
+          const h = await hashEmail(row.email);
+          if (h) await env.DB.prepare('UPDATE users SET email = ? WHERE name = ?').bind(h, row.name).run();
+        }
+        await store.metaSet('clean:email_hash_v1', '1');
+      }
+    } catch (e) { console.error('[boot] email hash migration:', e.message); }
 
 
 

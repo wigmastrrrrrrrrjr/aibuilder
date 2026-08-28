@@ -4,7 +4,7 @@
 export const MAINTENANCE_MODE = true;
 
 export const MAINTENANCE_MESSAGE =
-  'whoops looks like we are doing a maintenance be back in a couple hours';
+  'whoops looks like we are doing a maintenance - revamping basically the entire AI and fixing a couple of vulnerabilities, emails are now stored as hashes not plain text';
 
 const MAINTENANCE_HTML = `<!doctype html>
 <html lang="en">
@@ -29,6 +29,7 @@ const MAINTENANCE_HTML = `<!doctype html>
   .icon{width:56px;height:56px;margin:0 auto 20px;border-radius:16px;display:grid;place-items:center;background:var(--primary-soft);color:var(--primary)}
   h1{font-size:20px;font-weight:800;margin-bottom:10px}
   p{color:var(--muted);font-size:15px;line-height:1.6}
+  .lead{color:var(--text);font-weight:600;font-size:16px}
   .eta{display:block;margin-top:8px;font-size:13px;font-weight:600;color:var(--primary);font-variant-numeric:tabular-nums}
   .pill{display:inline-block;margin-top:22px;font-size:11px;font-weight:600;color:var(--primary);background:var(--primary-soft);border:1px solid #e3e2fb;padding:4px 12px;border-radius:999px;letter-spacing:.02em}
 </style>
@@ -46,7 +47,8 @@ const MAINTENANCE_HTML = `<!doctype html>
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
     </div>
     <h1>whoops looks like we are doing a maintenance</h1>
-    <p>be back in a couple hours</p>
+    <p class="lead">we are revamping basically the entire AI and fixing a couple of vulnerabilities</p>
+    <p>emails are now stored as hashes, not plain text - your data is protected</p>
     <span class="eta" id="eta"></span>
     <span class="pill">Scheduled maintenance</span>
   </div>

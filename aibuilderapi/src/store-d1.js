@@ -2,6 +2,7 @@
 // Same SQL, same lazy BaaS tables — see ../../schema.sql for the base schema.
 
 import { creditsToUnits } from './models.js';
+import { hashEmail } from './hash-email.js';
 
 // Anti-abuse: allow a small number of signups per network before locking.
 const MAX_ACCOUNTS_PER_IP = 3;
@@ -413,7 +414,7 @@ export function createD1Store(d1) {
       const id = crypto.randomUUID();
       try {
         await d1.prepare('INSERT INTO users (id, name, phash, email, created_at, ip) VALUES (?, ?, ?, ?, ?, ?)')
-          .bind(id, name, phash, email || '', Date.now(), ip || '').run();
+          .bind(id, name, phash, await hashEmail(email), Date.now(), ip || '').run();
         return { id, name, email: email || '' };
       } catch {
         throw new Error('username already taken');
