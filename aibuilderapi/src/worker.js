@@ -103,13 +103,14 @@ export default {
       console.error('[boot] ai_dev setup:', e.message);
     }
 
-    // One-time cleanup: drop live-probe chat rows that leaked into the public
-    // "Realtime Chat UI" project's lobby during SDK worker testing.
+    // One-time cleanup: drop live-probe chat + multiplayer rows that leaked
+    // into the public "Realtime Chat UI" project during SDK worker testing.
+    const probePid = '6d77bf09f6ee49349a96';
     try {
-      const cleaned = await store.metaGet('clean:probe_events');
+      const cleaned = await store.metaGet('clean:probe_events_v2');
       if (!cleaned) {
-        await env.DB.prepare("DELETE FROM events WHERE pid = '6d77bf09f6ee49349a96' AND room = 'chat:main'").run();
-        await store.metaSet('clean:probe_events', '1');
+        await env.DB.prepare('DELETE FROM events WHERE pid = ?').bind(probePid).run();
+        await store.metaSet('clean:probe_events_v2', '1');
       }
     } catch (e) { console.error('[boot] test-event cleanup:', e.message); }
 
