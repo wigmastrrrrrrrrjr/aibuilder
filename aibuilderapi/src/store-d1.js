@@ -183,14 +183,14 @@ export function createD1Store(d1) {
       for (const f of have) if (!keep.has(f.path)) await this.deleteFile(pid, f.path);
       return { ok: true, files: s.files.length };
     },
-    async addMessage(pid, role, content) {
+    async addMessage(pid, role, content, user = '') {
       await d1.prepare(
-        'INSERT INTO messages (project_id, role, content, created_at) VALUES (?, ?, ?, ?)'
-      ).bind(pid, role, content, Date.now()).run();
+        'INSERT INTO messages (project_id, role, content, user, created_at) VALUES (?, ?, ?, ?, ?)'
+      ).bind(pid, role, content, user, Date.now()).run();
     },
     async history(pid, limit = 12) {
       const { results } = await d1.prepare(
-        `SELECT role, content FROM (SELECT role, content, created_at FROM messages
+        `SELECT role, content, user FROM (SELECT role, content, user, created_at FROM messages
          WHERE project_id = ? ORDER BY created_at DESC LIMIT ?)
          ORDER BY created_at ASC`
       ).bind(pid, limit).all();
@@ -294,6 +294,12 @@ export function createD1Store(d1) {
       const { results } = await d1.prepare('SELECT name FROM team_members WHERE team_id = ? ORDER BY joined_at').bind(tid).all();
       t.members = results.map(r => r.name);
       return t;
+    },
+    async teamByInviteCode(code) {
+      const t = await d1.prepare('SELECT * FROM teams WHERE invite_code = ?').bind(code).first();
+      if (!t) return null;
+      const m = await d1.prepare('SELECT COUNT(*) AS c FROM team_members WHERE team_id = ?').bind(t.id).first();
+      return { id: t.id, name: t.name, owner: t.owner, members: m.c };
     },
     async teamMembers(tid) {
       const { results } = await d1.prepare('SELECT name FROM team_members WHERE team_id = ? ORDER BY joined_at').bind(tid).all();

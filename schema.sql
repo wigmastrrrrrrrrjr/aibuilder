@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS messages (
   project_id TEXT NOT NULL,
   role       TEXT NOT NULL,
   content    TEXT NOT NULL,
+  user       TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );
 

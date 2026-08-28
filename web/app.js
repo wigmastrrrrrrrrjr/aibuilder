@@ -67,9 +67,16 @@ function stripBlocks(text) {
 }
 
 /* ---------- bubbles & UI helpers ---------- */
-function addUserBubble(text) {
+function addUserBubble(text, who) {
   const d = document.createElement('div');
-  d.className = 'msg user'; d.textContent = text;
+  d.className = 'msg user';
+  if (who) {
+    const w = document.createElement('span');
+    w.className = 'who';
+    w.textContent = who;
+    d.appendChild(w);
+  }
+  d.appendChild(document.createTextNode(text));
   messagesEl.appendChild(d); scrollBottom();
 }
 function addAiBubble(text) {
@@ -330,9 +337,29 @@ if (!sessTok()) {
  } else {
    whoBtn.hidden = false;
    const ic = document.createElement('span'); ic.className = 'ms'; ic.textContent = 'person';
-   whoBtn.append(ic, document.createTextNode(sessName()));
-   loadCredits();
- }
+whoBtn.append(ic, document.createTextNode(sessName()));
+    loadCredits();
+  }
+  // deep-link into a team invite (?join=<tid>&code=<CODE>)
+  (() => {
+    const q = new URLSearchParams(location.search);
+    if (!q.get('join') || !q.get('code') || !sessTok()) return;
+    const qs = new URLSearchParams();
+    for (const [k, v] of q) { if (k !== 'join' && k !== 'code') qs.set(k, v); }
+    const clean = 'index.html' + (qs.toString() ? '?' + qs : '');
+    history.replaceState(null, '', clean);
+    (async () => {
+      try {
+        const r = await fetch(`${API}/api/teams/${encodeURIComponent(q.get('join'))}/join`, {
+          method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }),
+          body: JSON.stringify({ invite_code: q.get('code') }),
+        });
+        if (r.ok) notify('Teams', 'You joined the team. Shared projects, credits and live presence are now active.');
+        else notify('Team invite', (await r.json().catch(() => ({}))).error || 'That invite link is invalid or expired.');
+        loadCredits(); loadProjects();
+      } catch (e) { notify('Team invite', e.message); }
+    })();
+  })();
 whoBtn.addEventListener('click', async () => {
   if (!confirm(`Log out of ${sessName()}?`)) return;
   try {
@@ -376,8 +403,11 @@ async function loadMeta() {
   refreshKeyBtn();
 }
 
-// Daily free credits shown in the sidebar footer.
-const fmtCredits = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+// Daily free credits, lifetime earned and the team shared pool (sidebar footer).
+const fmtCredits = (v) => (Number.isFinite(v) ? (Number.isInteger(v) ? String(v) : v.toFixed(1)) : '0');
+let userTeams = [];
+let teamNameOf = new Map();
+const myTeamIds = new Set();
 async function loadCredits() {
   const mb = $('metaBar');
   if (!mb || !sessTok()) return;
@@ -385,12 +415,144 @@ async function loadCredits() {
     const r = await fetch(`${API}/api/credits`, { headers: authHeaders() });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
-    if (j && j.credits) {
-      const { left, total } = j.credits;
-      mb.textContent = `Credits left today: ${fmtCredits(left)} / ${fmtCredits(total)}`;
+    userTeams = (j.teams || []).slice();
+    myTeamIds.clear(); teamNameOf.clear();
+    for (const t of userTeams) {
+      myTeamIds.add(t.id); teamNameOf.set(t.id, t.name);
     }
+    const parts = [];
+    if (j.credits) {
+      parts.push(`Today: ${fmtCredits(j.credits.left)} / ${fmtCredits(j.credits.total)} credits`);
+      if (Number.isFinite(j.earned) && j.earned > 0) parts.push(`Earned: ${fmtCredits(j.earned)}`);
+    }
+    if (j.team) {
+      parts.push(`Team ${j.team.name}: pool ${fmtCredits(j.team.leftCredits)} / ${fmtCredits(j.team.totalCredits)}`);
+    }
+    mb.textContent = parts.join(' · ');
+    mb.title = parts.join('\n');
   } catch { mb.textContent = ''; }
 }
+
+/* ---------- teambuild: teams ---------- */
+const whoLabel = (u) => (u && u !== sessName() ? u : '');
+const teamModal = $('teamModal');
+async function openTeams() {
+  teamModal.hidden = false;
+  await refreshTeamList();
+}
+async function refreshTeamList() {
+  if (!sessTok()) return;
+  const list = $('teamList');
+  try {
+    const r = await fetch(`${API}/api/teams`, { headers: authHeaders() });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    const teams = await r.json();
+    list.innerHTML = '';
+    if (!Array.isArray(teams) || !teams.length) {
+      list.innerHTML = '<div class="fpEmpty">No teams yet — create one above, or paste an invite code from a teammate.</div>';
+      return;
+    }
+    const me = sessName();
+    for (const t of teams) {
+      const row = document.createElement('div');
+      row.className = 'teamRow';
+      const title = document.createElement('div');
+      title.className = 'teamTitle';
+      const name = document.createElement('span');
+      name.className = 'teamName';
+      name.textContent = t.name + (t.owner === me ? ' (you)' : '');
+      const meta = document.createElement('span');
+      meta.className = 'teamMeta';
+      meta.textContent = `${t.members || 0} member${(t.members || 0) === 1 ? '' : 's'}`;
+      title.append(name, meta);
+      const code = document.createElement('code');
+      code.className = 'teamCode';
+      code.title = 'Invite code';
+      code.textContent = t.invite_code || '';
+      const copy = document.createElement('button');
+      copy.className = 'chipBtn';
+      copy.textContent = 'Invite';
+      copy.onclick = async () => {
+        const link = `${location.origin}${location.pathname.replace(/index\.html$/, '')}?join=${t.id}&code=${t.invite_code}`;
+        try {
+          await navigator.clipboard.writeText(link);
+          notify('Team invite', 'Link copied — a teammate can open it to join.');
+        } catch {
+          prompt('Copy this invite link:', link);
+        }
+      };
+      const act = document.createElement('button');
+      act.className = 'chipBtn' + (t.owner === me ? ' danger' : '');
+      act.textContent = t.owner === me ? 'Delete' : 'Leave';
+      act.onclick = async () => {
+        const url = `${API}/api/teams/${t.id}`;
+        if (t.owner === me) {
+          if (!confirm(`Delete team "${t.name}"? All members lose access.`)) return;
+          const dr = await fetch(url, { method: 'DELETE', headers: authHeaders() });
+          if (!dr.ok) { notify('Teams', (await dr.json().catch(() => ({}))).error || 'failed'); return; }
+        } else {
+          const lr = await fetch(url + '/leave', { method: 'POST', headers: authHeaders() });
+          if (!lr.ok) { notify('Teams', (await lr.json().catch(() => ({}))).error || 'failed'); return; }
+        }
+        loadCredits(); loadProjects(); refreshTeamList();
+      };
+      row.append(title, code, copy, act);
+      list.appendChild(row);
+    }
+  } catch (e) {
+    list.innerHTML = `<div class="fpEmpty">⚠ ${e.message}</div>`;
+  }
+}
+$('teamCreate').addEventListener('click', async () => {
+  const name = $('teamName').value.trim().slice(0, 40);
+  if (!name) { notify('Teams', 'Enter a team name first.'); return; }
+  try {
+    const r = await fetch(`${API}/api/teams`, {
+      method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ name }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    $('teamName').value = '';
+    loadCredits(); loadProjects(); await refreshTeamList();
+  } catch (e) { notify('Create team failed', e.message); }
+});
+$('teamJoin').addEventListener('click', async () => {
+  const raw = $('joinCode').value.trim();
+  if (!raw) { notify('Teams', 'Paste the invite code or link first.'); return; }
+  const m = raw.match(/[?&]code=([A-Za-z0-9]{4,12})/i);
+  const tid = raw.match(/[?&]join=([A-Za-z0-9]+)/i);
+  const code = (m ? m[1] : raw.replace(/[^A-Za-z0-9]/g, '')).toUpperCase();
+  if (code.length < 4) { notify('Teams', 'That invite code looks wrong.'); return; }
+  try {
+    if (tid) {
+      const jr = await fetch(`${API}/api/teams/${tid[1]}/join`, {
+        method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ invite_code: code }),
+      });
+      if (!jr.ok) throw new Error((await jr.json().catch(() => ({}))).error || `HTTP ${jr.status}`);
+    } else {
+      const fr = await fetch(`${API}/api/teams/by-invite/${encodeURIComponent(code)}`, { headers: authHeaders() });
+      if (!fr.ok) throw new Error((await fr.json().catch(() => ({}))).error || `HTTP ${fr.status}`);
+      const t = await fr.json();
+      const jr = await fetch(`${API}/api/teams/${t.id}/join`, {
+        method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ invite_code: code }),
+      });
+      if (!jr.ok) throw new Error((await jr.json().catch(() => ({}))).error || `HTTP ${jr.status}`);
+    }
+    $('joinCode').value = '';
+    notify('Teams', 'You joined the team.');
+    loadCredits(); loadProjects(); await refreshTeamList();
+  } catch (e) { notify('Join team failed', e.message); }
+});
+$('joinCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('teamJoin').click(); });
+$('teamName').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('teamCreate').click(); });
+$('teamClose').addEventListener('click', () => { teamModal.hidden = true; });
+teamModal.addEventListener('click', (e) => { if (e.target === teamModal) teamModal.hidden = true; });
+$('teamsBtn').addEventListener('click', () => {
+  if (!sessTok()) { alert('Sign in to use teams.'); return; }
+  openTeams();
+});
 
 async function loadModels() {
   try {
@@ -418,15 +580,25 @@ async function loadModels() {
 
 async function loadProjects(selectPid) {
   const all = await (await fetch(`${API}/api/projects`)).json();
-  // sidebar = my projects (legacy owner-less ones stay visible for compat)
+  // sidebar = my projects + every team project I'm a member of
   const me = sessName();
-  const list = all.filter((p) => !p.owner || p.owner === me);
+  const list = all.filter((p) => !p.owner || p.owner === me || (p.team_id && myTeamIds.has(p.team_id)));
   const el = $('projectList'); el.innerHTML = '';
   for (const p of list) {
     const d = document.createElement('div');
     d.className = 'proj' + (p.id === projectId ? ' active' : '');
-    d.textContent = p.name + (p.published ? ' ·' : '');
-    d.title = p.name + (p.published ? ' (published)' : '');
+    const shared = Boolean(p.team_id) && p.owner !== me;
+    if (shared) {
+      const tag = document.createElement('span');
+      tag.className = 'tag shared';
+      tag.textContent = (teamNameOf.get(p.team_id) || 'team').slice(0, 14);
+      tag.title = 'Shared with your team';
+      d.appendChild(tag);
+    }
+    const label = document.createElement('span');
+    label.textContent = p.name + (p.published ? ' ·' : '');
+    d.appendChild(label);
+    d.title = (shared ? `${teamNameOf.get(p.team_id) || 'Team'} project — ` : '') + p.name + (p.published ? ' (published)' : '');
     d.onclick = () => { selectProject(p.id); setDrawer(false); };
     el.appendChild(d);
   }
@@ -450,7 +622,7 @@ async function selectProject(pid) {
   }
   messagesEl.innerHTML = '';
   for (const m of data.messages) {
-    if (m.role === 'user') addUserBubble(m.content);
+    if (m.role === 'user') addUserBubble(m.content, whoLabel(m.user));
     else addAiBubble(stripBlocks(m.content));
   }
   let plan = [];
@@ -460,6 +632,8 @@ async function selectProject(pid) {
   refreshPreview(false);
   loadProjects();
   watchProject(pid);
+  startCursors(pid);
+  refreshLive(pid);
 }
 
 function resetToNew() {
@@ -467,6 +641,8 @@ function resetToNew() {
   canEdit = false;
   snapModal.hidden = true;
   fpPane.hidden = true;
+  stopCursors();
+  $('liveBadge').hidden = true;
   projName.textContent = 'New app';
   document.title = 'aibuilder';
   publishBtn.disabled = true;
@@ -585,8 +761,97 @@ function watchProject(pid) {
     const m = payload.payload;
     if (m.type !== 'refresh' || m.sid === SID) return;
     if (!busy) selectProject(pid);
+  }).on('broadcast', { event: 'msg' }, (payload) => {
+    const m = payload.payload || {};
+    if (m.sid === SID) return;
+    refreshLive(pid);
+    addUserBubble(String(m.message || ''), whoLabel(m.user));
   }).subscribe();
 }
+
+/* ---------- teambuild: live presence (who is building now) ---------- */
+let liveTimer = null;
+async function refreshLive(pid) {
+  const badge = $('liveBadge');
+  clearTimeout(liveTimer);
+  if (!pid || !sessTok()) { badge.hidden = true; return; }
+  try {
+    const r = await fetch(`${API}/api/projects/${pid}/presence`, { headers: authHeaders() });
+    if (!r.ok) throw new Error('http ' + r.status);
+    const j = await r.json();
+    if (j && typeof j.active === 'number') {
+      badge.hidden = false;
+      badge.textContent = `${j.active}/${j.limit} live`;
+      badge.classList.toggle('full', j.active >= j.limit);
+      badge.title = (j.users && j.users.length ? `Live now: ${j.users.join(', ')}` : '') +
+        (j.active >= j.limit ? ' — at the 10-person cap, a teammate must leave before you can build.' : '');
+    }
+  } catch { badge.hidden = true; }
+}
+
+/* ---------- teambuild: remote cursors over the chat pane ---------- */
+const CURSOR_COLORS = ['#e05252', '#3da9fc', '#2fcb6a', '#f59e0b', '#a78bfa', '#ec4899', '#14b8a6', '#f43f5e', '#84cc16', '#0ea5e9'];
+const hashStr = (s) => { let h = 0; for (const ch of String(s)) { h = (h * 31 + ch.charCodeAt(0)) | 0; } return Math.abs(h); };
+let cursorState = null;
+function stopCursors() {
+  if (cursorState) {
+    try { cursorState.ch.unsubscribe(); } catch {}
+    try { clearInterval(cursorState.timer); } catch {}
+    cursorState = null;
+    const l = $('cursorLayer'); if (l) l.innerHTML = '';
+  }
+  clearInterval(liveTimer);
+}
+function startCursors(pid) {
+  stopCursors();
+  if (!pid || !window.supabase || !sessTok()) return;
+  const sb = window.supabase.createClient(window.__SB_URL, window.__SB_KEY);
+  const ch = sb.channel('cursors:' + pid, { config: { presence: { key: SID } } });
+  const layer = $('cursorLayer');
+  ch.on('presence', { event: 'sync' }, () => {
+    const state = ch.presenceState();
+    layer.innerHTML = '';
+    const names = [];
+    for (const sid in state) {
+      if (sid === SID) continue;
+      for (const p of state[sid] || []) {
+        if (!p || typeof p.x !== 'number') continue;
+        names.push(p.name);
+        const color = CURSOR_COLORS[hashStr(sid) % CURSOR_COLORS.length];
+        const el = document.createElement('div');
+        el.className = 'cursor';
+        el.style.left = p.x + 'px';
+        el.style.top = p.y + 'px';
+        el.style.setProperty('--c', color);
+        const nm = document.createElement('span');
+        nm.className = 'nm';
+        nm.textContent = p.name;
+        el.appendChild(nm);
+        layer.appendChild(el);
+      }
+    }
+    if (names.length) layer.dataset.names = names.join(', ');
+    else delete layer.dataset.names;
+  }).subscribe((status) => {
+    if (status === 'SUBSCRIBED') ch.track({ name: sessName() });
+  });
+  cursorState = { ch, layer };
+  liveTimer = setInterval(() => refreshLive(pid), 20000);
+  refreshLive(pid);
+}
+document.addEventListener('mousemove', (() => {
+  let last = 0;
+  return (e) => {
+    if (!cursorState || !cursorState.ch) return;
+    const now = Date.now();
+    if (now - last < 40) return;
+    last = now;
+    const pane = $('chatPane');
+    const r = pane.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+    cursorState.ch.track({ x: Math.round(e.clientX - r.left), y: Math.round(e.clientY - r.top), name: sessName() });
+  };
+})(), { passive: true });
 
 /* ---------- chat streaming ---------- */
 async function send() {
@@ -597,7 +862,10 @@ async function send() {
 
   const emptyHero = messagesEl.querySelector('.empty');
   if (emptyHero) emptyHero.remove();
-  addUserBubble(message);
+  addUserBubble(message, whoLabel(sessName()));
+  if (liveChannel) {
+    liveChannel.send({ type: 'broadcast', event: 'msg', payload: { user: sessName(), message, sid: SID } }).then(() => {}).catch(() => {});
+  }
 
   displayText = ''; rawStream.textContent = '';
   const filter = new BlockFilter();
@@ -630,6 +898,10 @@ async function send() {
       const d = await res.json().catch(() => ({}));
       const msg = d.error || `HTTP ${res.status}`;
       if (res.status === 429) {
+        if (/10-people|live limit/i.test(msg)) {
+          refreshLive(projectId);
+          throw new Error(msg);
+        }
         if (d.credits) {
           loadCredits();
           throw new Error(`Daily credit limit reached — ${fmtCredits(d.credits.left)} of ${fmtCredits(d.credits.total)} remaining today. Add your own API key (🔑) for unlimited use.`);

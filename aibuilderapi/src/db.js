@@ -122,6 +122,7 @@ ensureColumn('files', "encoding TEXT NOT NULL DEFAULT 'utf8'");
 ensureColumn('users', "ip TEXT NOT NULL DEFAULT ''");
 ensureColumn('users', "email TEXT NOT NULL DEFAULT ''");
 ensureColumn('users', "verified INTEGER NOT NULL DEFAULT 0");
+ensureColumn('messages', "user TEXT NOT NULL DEFAULT ''");
 
 function slugify(name) {
   const s = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -383,6 +384,12 @@ useStore({
       .map(r => r.name);
     return t;
   },
+  teamByInviteCode(code) {
+    const t = db.prepare('SELECT * FROM teams WHERE invite_code = ?').get(code);
+    if (!t) return null;
+    const m = db.prepare('SELECT COUNT(*) AS c FROM team_members WHERE team_id = ?').get(t.id);
+    return { id: t.id, name: t.name, owner: t.owner, members: m.c };
+  },
   teamMembers(tid) {
     return db.prepare('SELECT name FROM team_members WHERE team_id = ? ORDER BY joined_at').all(tid)
       .map(r => r.name);
@@ -487,14 +494,14 @@ useStore({
       'SELECT DISTINCT user FROM presence WHERE pid = ? AND user != \'\' ORDER BY seen_at DESC LIMIT 20'
     ).all(pid).map(r => r.user);
   },
-  async addMessage(pid, role, content) {
+  async addMessage(pid, role, content, user = '') {
     db.prepare(
-      'INSERT INTO messages (project_id, role, content, created_at) VALUES (?, ?, ?, ?)'
-    ).run(pid, role, content, Date.now());
+      'INSERT INTO messages (project_id, role, content, user, created_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(pid, role, content, user, Date.now());
   },
   async history(pid, limit = 12) {
     return db.prepare(
-      `SELECT role, content FROM messages WHERE project_id = ?
+      `SELECT role, content, user FROM messages WHERE project_id = ?
        ORDER BY created_at DESC LIMIT ?`
     ).all(pid, limit).reverse();
   },

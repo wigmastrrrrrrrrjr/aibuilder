@@ -81,7 +81,6 @@ app.get('/api/credits', requireUser, async (c) => {
       day,
     },
     earned: unitsToCredits(bal.earned),
-    interactionsToday: undefined,
     team,
     teams: myTeams.map((t) => ({ id: t.id, name: t.name, owner: t.owner, members: Number(t.members || t.member_count || 0) })),
   });

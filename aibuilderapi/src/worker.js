@@ -25,6 +25,7 @@ async function ensureColumns(d1) {
     ['users', 'email', "TEXT NOT NULL DEFAULT ''"],
     ['users', 'verified', 'INTEGER NOT NULL DEFAULT 0'],
     ['users', 'ip', "TEXT NOT NULL DEFAULT ''"],
+    ['messages', 'user', "TEXT NOT NULL DEFAULT ''"],
   ];
   for (const [table, col, def] of adds) {
     try {

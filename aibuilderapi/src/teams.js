@@ -35,6 +35,15 @@ teams.get('/api/teams', requireUser, async (c) => {
   return c.json(await store.myTeams(c.get('user').name));
 });
 
+// Look up a team by its invite code (lets a member paste just the code to join).
+teams.get('/api/teams/by-invite/:code', requireUser, async (c) => {
+  const code = String(c.req.param('code') || '').trim().toUpperCase();
+  if (!code || code.length < 4) return c.json({ error: 'enter the invite code' }, 400);
+  const t = await store.teamByInviteCode(code);
+  if (!t) return c.json({ error: 'no team found for that invite code' }, 404);
+  return c.json({ id: t.id, name: t.name, owner: t.owner, members: Number(t.members || t.member_count || 0) });
+});
+
 teams.get('/api/teams/:tid', requireUser, async (c) => {
   const tid = c.req.param('tid');
   const me = c.get('user').name;

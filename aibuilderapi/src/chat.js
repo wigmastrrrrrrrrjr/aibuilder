@@ -146,7 +146,7 @@ chat.post('/', async (c) => {
     ...history,
     { role: 'user', content: message },
   ];
-  await store.addMessage(pid, 'user', message);
+  await store.addMessage(pid, 'user', message, user.name);
 
   // Client-cancel propagates to the upstream request.
   const ac = new AbortController();

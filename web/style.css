@@ -770,3 +770,103 @@ button { font-family: inherit; }
   #filePane { left: 0; right: 0; top: 0; bottom: 0; border-radius: 0; }
   .fpVersions { width: 128px; min-width: 128px; }
 }
+
+/* ==========================================================================
+   teambuild: teams, live presence, remote cursors
+   ========================================================================== */
+
+/* ---- sidebar teams entry ---- */
+#teamsBtn .ms { color: var(--muted); }
+#teamsBtn.active .ms { color: var(--primary); }
+
+/* ---- chat header live badge ---- */
+#liveBadge {
+  font-size: 11px; font-weight: 700; color: var(--text-2);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 3px 9px; letter-spacing: 0.02em;
+  white-space: nowrap; flex: none;
+}
+#liveBadge.full { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+
+/* ---- remote cursors ---- */
+#chatPane { position: relative; }
+#cursorLayer {
+  position: absolute; inset: 0; pointer-events: none; overflow: hidden;
+  z-index: 5;
+}
+.cursor { position: absolute; z-index: 5; }
+.cursor .nm {
+  position: absolute; left: 4px; top: 0; white-space: nowrap;
+  font-size: 11px; font-weight: 700; color: #fff; background: var(--c);
+  padding: 2px 7px; border-radius: 999px; box-shadow: var(--shadow-sm);
+}
+.cursor::before {
+  content: ''; position: absolute; left: 2px; top: -1px;
+  width: 0; height: 0;
+  border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-top: 8px solid var(--c);
+}
+
+/* ---- message author chips ---- */
+.msg .who {
+  display: block; font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  margin-bottom: 3px; opacity: 0.85;
+}
+.msg.user .who { color: #fff; }
+
+/* ---- sidebar project team badges ---- */
+.proj .tag {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+  color: var(--muted); border: 1px solid var(--border);
+  border-radius: 999px; padding: 1px 7px; margin-right: 6px;
+  vertical-align: middle; flex: none;
+}
+.proj .tag.shared { color: var(--primary); border-color: var(--primary-tint); background: var(--primary-soft); }
+
+/* ---- teams modal ---- */
+#teamModal {
+  position: fixed; inset: 0; z-index: 96; background: rgba(15, 23, 42, 0.45);
+  display: flex; align-items: center; justify-content: center; padding: 18px;
+}
+#teamModal[hidden] { display: none; }
+.teamCard {
+  width: min(94vw, 560px); max-height: 78vh; display: flex; flex-direction: column;
+  background: var(--surface); border-radius: var(--radius-lg); overflow: hidden;
+  border: 1px solid var(--border); box-shadow: var(--shadow-lg);
+}
+.teamCard > header {
+  display: flex; align-items: center; gap: 8px; padding: 14px 18px;
+  border-bottom: 1px solid var(--border); font-weight: 700; font-size: 14.5px;
+  background: var(--surface-2); color: var(--text);
+}
+.teamCard > header .ms { color: var(--primary); }
+.teamCard > header button { margin-left: auto; }
+.teamList { flex: 1; overflow-y: auto; padding: 8px 16px; }
+.teamRow {
+  display: flex; align-items: center; gap: 8px; padding: 11px 4px;
+  border-bottom: 1px solid var(--border); flex-wrap: wrap;
+}
+.teamRow:last-child { border-bottom: 0; }
+.teamTitle { display: flex; flex-direction: column; flex: 1; min-width: 120px; }
+.teamName { font-weight: 600; font-size: 13.5px; color: var(--text); }
+.teamMeta { font-size: 11px; color: var(--muted); }
+.teamCode {
+  font-family: ui-monospace, 'SF Mono', monospace; font-size: 11px;
+  color: var(--primary); background: var(--primary-soft);
+  border-radius: 6px; padding: 3px 8px;
+}
+.teamRow .chipBtn { font-size: 11.5px; }
+.chipBtn.danger { color: var(--danger); border-color: var(--danger-soft); }
+.chipBtn.danger:hover { background: var(--danger-soft); }
+.teamRowIn {
+  display: flex; gap: 8px; padding: 10px 16px;
+  border-top: 1px solid var(--border); align-items: center;
+}
+.teamRowIn .teamInput { flex: 1; min-width: 0; }
+.teamInput {
+  border: 1px solid var(--border); background: var(--surface);
+  border-radius: var(--radius-sm); padding: 8px 12px; font-size: 13px;
+  color: var(--text); outline: none;
+}
+.teamInput:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-tint); }

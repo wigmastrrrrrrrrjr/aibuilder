@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
-<link rel="stylesheet" href="style.css?v=14">
+<link rel="stylesheet" href="style.css?v=15">
 </head>
 <body>
 
@@ -33,17 +33,20 @@
     <div class="navSection">Your projects</div>
     <div id="projectList"></div>
 
+    <button id="teamsBtn" class="navItem" title="Teams — share projects, credits and live presence"><span class="ms">groups</span> Teams</button>
     <button id="keyBtn" class="navItem" title="Use your own Ollama API key"><span class="ms">key</span> <i id="keyLbl" style="font-style:normal">Own API key</i></button>
     <div id="metaBar"></div>
   </aside>
 
   <main id="main">
     <section id="chatPane">
+      <div id="cursorLayer"></div>
       <header id="chatHeader">
         <span class="headerBtns">
           <button id="menuBtn" title="Show history"><span class="ms">menu</span></button>
         </span>
         <span id="projName" title="Click to rename">New app</span>
+        <span id="liveBadge" hidden></span>
         <button id="renameBtn" class="iconBtn" title="Rename project" hidden><span class="ms">edit</span></button>
         <span class="headerBtns">
           <button id="planBtn" class="iconBtn" title="Plan" hidden><span class="ms">checklist</span><em id="planCount"></em></button>
@@ -147,6 +150,24 @@
 <!-- drag-and-drop target overlay (Phase 2) -->
 <div id="dropOverlay" hidden><span>Drop files to add them to this project</span></div>
 
+<!-- teams (teambuild) -->
+<div id="teamModal" hidden>
+  <div class="teamCard">
+    <header><span class="ms">groups</span> Teams
+      <button id="teamClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+    </header>
+    <div id="teamList" class="teamList"><div class="fpEmpty">Loading…</div></div>
+    <div class="teamRowIn">
+      <input id="teamName" class="teamInput" placeholder="New team name" maxlength="40" autocomplete="off">
+      <button id="teamCreate" class="chipBtn">Create team</button>
+    </div>
+    <div class="teamRowIn">
+      <input id="joinCode" class="teamInput" placeholder="Paste an invite code or link to join" maxlength="200" autocomplete="off" spellcheck="false">
+      <button id="teamJoin" class="chipBtn">Join team</button>
+    </div>
+  </div>
+</div>
+
 <div id="authGate" hidden>
   <div class="authCard">
     <aside class="authBrand">
@@ -208,6 +229,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=14"></script>
+    <script src="app.js?v=15"></script>
 </body>
 </html>
