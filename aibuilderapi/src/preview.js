@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { store } from './store.js';
 import { fromBase64 } from './base64.js';
+import { getUser, ipTag } from './auth.js';
 
 export const preview = new Hono();
 
@@ -406,9 +407,19 @@ function inject(html, pid) {
   const errHook = `<script>(function(){function r(m){try{parent.postMessage({__ab:'error',message:String(m).slice(0,300)},'*')}catch(e){}}` +
     `window.addEventListener('error',function(e){r(e.message||'script error')});` +
     `window.addEventListener('unhandledrejection',function(e){var x=e.reason;r('Unhandled promise rejection: '+(x&&x.message||x))});})();</script>`;
-  const tag = `<script>window.__CREAT_PROJECT__='${pid}';</script><script src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js'></script><script src='/__baas.js'></script>${errHook}`;
-  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${tag}</head>`);
-  return tag + html;
+  // SDK is inlined and injected at the very top of <head> so window.creat
+  // exists before ANY app script runs (head, body, inline or deferred).
+  // Inlining also removes the separate /__baas.js fetch as a failure point.
+  const sdk = `<script>window.__CREAT_PROJECT__='${pid}';</script>` +
+    `<script type="text/javascript">${BAAS_SDK_RAW}</script>` +
+    `<script src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js'></script>` +
+    errHook;
+  const headMatch = html.match(/<head([^>]*)>/i);
+  if (headMatch) {
+    return html.replace(/<head([^>]*)>/i, (m, attrs) => `<head${attrs}>${sdk}`);
+  }
+  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${sdk}</head>`);
+  return sdk + html;
 }
 
 function notYet(c, pid) {
@@ -436,7 +447,11 @@ async function serveFile(c, pid, rawPath) {
   }
   if (!row) {
     if (!(await store.getProject(pid))) return c.text('unknown project', 404);
-    if (target === 'index.html') return notYet(c, pid);
+    if (target === 'index.html') {
+      // Serving the project's page (placeholder here) counts as a view.
+      try { await store.recordInteraction(pid, await visitorKey(c)); } catch {}
+      return notYet(c, pid);
+    }
     return c.text('not found', 404);
   }
 
@@ -446,8 +461,22 @@ async function serveFile(c, pid, rawPath) {
   const body = type.startsWith('text/html') && row.encoding !== 'base64'
     ? inject(row.content, pid)
     : content;
+  if (type.startsWith('text/html')) {
+    // Credit exchange: a fresh visitor served a page of a published project
+    // earns its owner +1 credit (once per visitor per project per day).
+    try { await store.recordInteraction(pid, await visitorKey(c)); } catch {}
+  }
   return c.body(body, 200, { 'content-type': type, 'cache-control': 'no-store' });
 }
 
 preview.get('/:pid', (c) => serveFile(c, c.req.param('pid'), ''));
 preview.get('/:pid/*', (c) => serveFile(c, c.req.param('pid'), c.req.path.replace(/^\/preview\/[^/]+\/?/, '')));
+
+// A stable per-visitor identity for interaction counting: signed-in users are
+// keyed by username, everyone else by a hash of their IP.
+async function visitorKey(c) {
+  const u = await getUser(c);
+  if (u && u.name) return `user:${u.name}`;
+  const tag = await ipTag(c);
+  return tag ? `ip:${tag}` : '';
+}

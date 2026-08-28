@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { useStore } from './store.js';
+import { creditsToUnits } from './models.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR || path.resolve(here, '../../data');
@@ -70,6 +71,38 @@ CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS teams (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  invite_code TEXT UNIQUE NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS team_members (
+  team_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  joined_at INTEGER NOT NULL,
+  PRIMARY KEY (team_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_team_members ON team_members (team_id);
+CREATE TABLE IF NOT EXISTS interactions (
+  project_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  key TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, day, key)
+);
+CREATE TABLE IF NOT EXISTS earnings (
+  name TEXT PRIMARY KEY,
+  units INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS presence (
+  pid TEXT NOT NULL,
+  sid TEXT NOT NULL,
+  user TEXT NOT NULL DEFAULT '',
+  seen_at INTEGER NOT NULL,
+  PRIMARY KEY (pid, sid)
+);
 `);
 
 function ensureColumn(table, colDef) {
@@ -81,6 +114,7 @@ ensureColumn('projects', "description TEXT NOT NULL DEFAULT ''");
 ensureColumn('projects', 'model TEXT');
 ensureColumn('projects', 'plan TEXT');
 ensureColumn('projects', "owner TEXT NOT NULL DEFAULT ''");
+ensureColumn('projects', "team_id TEXT NOT NULL DEFAULT ''");
 ensureColumn('files', "encoding TEXT NOT NULL DEFAULT 'utf8'");
 ensureColumn('users', "ip TEXT NOT NULL DEFAULT ''");
 ensureColumn('users', "email TEXT NOT NULL DEFAULT ''");
@@ -284,6 +318,172 @@ useStore({
       .run(key, day, amount, amount);
     return db.prepare('SELECT count FROM usage WHERE name = ? AND day = ?').get(key, day).count;
   },
+  // Generic name-keyed credit ledger (used for team pools + interactions),
+  // plus lifetime interaction-credit earnings.
+  creditGet(key, day) {
+    const r = db.prepare('SELECT count FROM usage WHERE name = ? AND day = ?')
+      .get(key, day);
+    return r ? r.count : 0;
+  },
+  creditSpend(key, day, amount) {
+    db.prepare(`INSERT INTO usage (name, day, count) VALUES (?, ?, ?)
+                ON CONFLICT (name, day) DO UPDATE SET count = count + ?`)
+      .run(key, day, amount, amount);
+    return db.prepare('SELECT count FROM usage WHERE name = ? AND day = ?').get(key, day).count;
+  },
+  teamCreditKey(teamId) {
+    return `credit:team:${teamId}`;
+  },
+  earningsUnits(name) {
+    const r = db.prepare('SELECT units FROM earnings WHERE name = ?').get(name);
+    return r ? r.units : 0;
+  },
+  earningsUnitsForNames(names) {
+    if (!names || !names.length) return 0;
+    const ph = names.map(() => '?').join(', ');
+    const r = db.prepare(`SELECT COALESCE(SUM(units), 0) AS u FROM earnings WHERE name IN (${ph})`)
+      .get(...names);
+    return r ? r.u : 0;
+  },
+  earnCredits(name, units) {
+    db.prepare(`INSERT INTO earnings (name, units) VALUES (?, ?)
+                ON CONFLICT (name) DO UPDATE SET units = units + excluded.units`)
+      .run(name, units);
+  },
+  spendEarnings(name, units) {
+    db.prepare('UPDATE earnings SET units = MAX(0, units - ?) WHERE name = ?')
+      .run(units, name);
+    return this.earningsUnits(name);
+  },
+
+  // ---- teambuild: teams ---------------------------------------------------
+  createTeam(name, owner) {
+    const id = crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+    const CHS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code;
+    for (let tries = 0; tries < 5; tries++) {
+      code = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+        .map(b => CHS[b % CHS.length]).join('');
+      const clash = db.prepare('SELECT 1 FROM teams WHERE invite_code = ?').get(code);
+      if (!clash) break;
+    }
+    db.prepare('INSERT INTO teams (id, name, owner, invite_code, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(id, name, owner, code, Date.now());
+    db.prepare('INSERT INTO team_members (team_id, name, joined_at) VALUES (?, ?, ?)')
+      .run(id, owner, Date.now());
+    return this.teamInfo(id);
+  },
+  teamInfo(tid) {
+    const t = db.prepare('SELECT * FROM teams WHERE id = ?').get(tid);
+    if (!t) return null;
+    t.members = db.prepare('SELECT name FROM team_members WHERE team_id = ? ORDER BY joined_at').all(tid)
+      .map(r => r.name);
+    return t;
+  },
+  teamMembers(tid) {
+    return db.prepare('SELECT name FROM team_members WHERE team_id = ? ORDER BY joined_at').all(tid)
+      .map(r => r.name);
+  },
+  addTeamMember(tid, name, joinedAt = Date.now()) {
+    try {
+      db.prepare('INSERT INTO team_members (team_id, name, joined_at) VALUES (?, ?, ?)')
+        .run(tid, name, joinedAt);
+      return true;
+    } catch { return false; }
+  },
+  removeTeamMember(tid, name) {
+    db.prepare('DELETE FROM team_members WHERE team_id = ? AND name = ?').run(tid, name);
+    const r = db.prepare('SELECT COUNT(*) AS c FROM team_members WHERE team_id = ?').get(tid);
+    if (r.c === 0) db.prepare('DELETE FROM teams WHERE id = ?').run(tid);
+  },
+  myTeams(name) {
+    return db.prepare(
+      `SELECT DISTINCT t.*,
+        (SELECT COUNT(*) FROM team_members m WHERE m.team_id = t.id) AS members
+       FROM teams t
+       LEFT JOIN team_members m ON m.team_id = t.id
+       WHERE t.owner = ? OR m.name = ?
+       ORDER BY t.created_at DESC`
+    ).all(name, name);
+  },
+  myTeamIds(name) {
+    return db.prepare(
+      'SELECT DISTINCT team_id FROM team_members WHERE name = ?'
+    ).all(name).map(r => r.team_id);
+  },
+  isTeamMember(tid, name) {
+    const r = db.prepare('SELECT 1 AS x FROM team_members WHERE team_id = ? AND name = ?')
+      .get(tid, name);
+    return Boolean(r);
+  },
+  setProjectTeam(pid, tid) {
+    db.prepare('UPDATE projects SET team_id = ? WHERE id = ?').run(tid || '', pid);
+    return db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+  },
+  deleteTeam(tid) {
+    db.prepare('DELETE FROM team_members WHERE team_id = ?').run(tid);
+    db.prepare("UPDATE projects SET team_id = '' WHERE team_id = ?").run(tid);
+    db.prepare('DELETE FROM teams WHERE id = ?').run(tid);
+    return { ok: true };
+  },
+
+  // ---- credit exchange: interactions --------------------------------------
+  recordInteraction(pid, visitorKey, day) {
+    const p = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+    if (!p || !p.published || !p.owner) return { ok: false, created: false };
+    const vid = String(visitorKey || '');
+    if (!vid) return { ok: false, created: false };
+    if (vid === `user:${p.owner}`) return { ok: false, created: false };
+    if (p.team_id && vid.startsWith('user:')) {
+      if (this.isTeamMember(p.team_id, vid.slice(5))) return { ok: false, created: false };
+    }
+    let changes = 0;
+    try {
+      const r = db.prepare('INSERT INTO interactions (project_id, day, key, created_at) VALUES (?, ?, ?, ?)')
+        .run(p.id, day || new Date().toISOString().slice(0, 10), vid, Date.now());
+      changes = Number(r.changes);
+    } catch { /* duplicate visitor */ }
+    if (changes > 0) {
+      this.earnCredits(p.owner, creditsToUnits(1));
+      return { ok: true, created: true, project_id: p.id };
+    }
+    return { ok: true, created: false };
+  },
+  interactionsToday(pid, day) {
+    const r = db.prepare('SELECT COUNT(*) AS c FROM interactions WHERE project_id = ? AND day = ?')
+      .get(pid, day || new Date().toISOString().slice(0, 10));
+    return r ? r.c : 0;
+  },
+
+  // ---- live presence (10-person concurrency cap) --------------------------
+  PRESENCE_WINDOW_MS: 30000,
+  async touchPresence(pid, sid, userName, now = Date.now()) {
+    const key = this.PRESENCE_WINDOW_MS;
+    db.prepare('DELETE FROM presence WHERE seen_at < ?').run(now - key);
+    const had = db.prepare('SELECT 1 AS x FROM presence WHERE pid = ? AND sid = ?')
+      .get(pid, sid);
+    if (!had) {
+      const cnt = db.prepare('SELECT COUNT(*) AS c FROM presence WHERE pid = ?').get(pid);
+      if (cnt.c >= 10) return { active: cnt.c, accepted: false, present: false };
+      db.prepare('INSERT INTO presence (pid, sid, user, seen_at) VALUES (?, ?, ?, ?)')
+        .run(pid, sid, userName || '', now);
+    } else {
+      db.prepare('UPDATE presence SET user = ?, seen_at = ? WHERE pid = ? AND sid = ?')
+        .run(userName || '', now, pid, sid);
+    }
+    const cnt = db.prepare('SELECT COUNT(*) AS c FROM presence WHERE pid = ?').get(pid);
+    return { active: cnt.c, accepted: true, present: Boolean(had) };
+  },
+  async leavePresence(pid, sid) {
+    db.prepare('DELETE FROM presence WHERE pid = ? AND sid = ?').run(pid, sid);
+  },
+  async presenceUsers(pid) {
+    const now = Date.now();
+    db.prepare('DELETE FROM presence WHERE seen_at < ?').run(now - this.PRESENCE_WINDOW_MS);
+    return db.prepare(
+      'SELECT DISTINCT user FROM presence WHERE pid = ? AND user != \'\' ORDER BY seen_at DESC LIMIT 20'
+    ).all(pid).map(r => r.user);
+  },
   async addMessage(pid, role, content) {
     db.prepare(
       'INSERT INTO messages (project_id, role, content, created_at) VALUES (?, ?, ?, ?)'
@@ -365,7 +565,7 @@ useStore({
       const s = db.prepare('SELECT * FROM sessions WHERE token = ?').get(token);
       if (!s || s.exp < Date.now()) return null;
       const u = db.prepare('SELECT id, name FROM users WHERE id = ?').get(s.user_id);
-      return u ? { userId: u.id, name: u.name } : null;
+      return u ? { id: u.id, userId: u.id, name: u.name } : null;
     },
     async deleteSession(token) {
       db.prepare('DELETE FROM sessions WHERE token = ?').run(token);

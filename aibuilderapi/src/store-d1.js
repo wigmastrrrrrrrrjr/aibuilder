@@ -1,6 +1,8 @@
 // Cloudflare D1 implementation of the same store interface as db.js.
 // Same SQL, same lazy BaaS tables — see ../../schema.sql for the base schema.
 
+import { creditsToUnits } from './models.js';
+
 function slugify(name) {
   const s = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   return (s || 'app').slice(0, 40);
@@ -229,6 +231,173 @@ export function createD1Store(d1) {
       const r = await d1.prepare('SELECT count FROM usage WHERE name = ? AND day = ?').bind(key, day).first();
       return r ? r.count : 0;
     },
+    // Generic name-keyed credit ledger (used for team pools + interactions),
+    // plus lifetime interaction-credit earnings.
+    async creditGet(key, day) {
+      const r = await d1.prepare('SELECT count FROM usage WHERE name = ? AND day = ?').bind(key, day).first();
+      return r ? r.count : 0;
+    },
+    async creditSpend(key, day, amount) {
+      await d1.prepare(`INSERT INTO usage (name, day, count) VALUES (?, ?, ?)
+                        ON CONFLICT (name, day) DO UPDATE SET count = count + ?`)
+        .bind(key, day, amount, amount).run();
+      const r = await d1.prepare('SELECT count FROM usage WHERE name = ? AND day = ?').bind(key, day).first();
+      return r ? r.count : 0;
+    },
+    teamCreditKey(teamId) {
+      return `credit:team:${teamId}`;
+    },
+    async earningsUnits(name) {
+      const r = await d1.prepare('SELECT units FROM earnings WHERE name = ?').bind(name).first();
+      return r ? r.units : 0;
+    },
+    async earningsUnitsForNames(names) {
+      if (!names || !names.length) return 0;
+      const ph = names.map(() => '?').join(', ');
+      const r = await d1.prepare(`SELECT COALESCE(SUM(units), 0) AS u FROM earnings WHERE name IN (${ph})`)
+        .bind(...names).first();
+      return r ? r.u : 0;
+    },
+    async earnCredits(name, units) {
+      await d1.prepare(`INSERT INTO earnings (name, units) VALUES (?, ?)
+                        ON CONFLICT (name) DO UPDATE SET units = units + excluded.units`)
+        .bind(name, units).run();
+    },
+    async spendEarnings(name, units) {
+      await d1.prepare('UPDATE earnings SET units = MAX(0, units - ?) WHERE name = ?').bind(units, name).run();
+      return this.earningsUnits(name);
+    },
+
+    // ---- teambuild: teams ---------------------------------------------------
+    async createTeam(name, owner) {
+      const id = crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+      const CHS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let code = '';
+      for (let tries = 0; tries < 5; tries++) {
+        code = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+          .map(b => CHS[b % CHS.length]).join('');
+        const clash = await d1.prepare('SELECT 1 AS x FROM teams WHERE invite_code = ?').bind(code).first();
+        if (!clash) break;
+      }
+      await d1.prepare('INSERT INTO teams (id, name, owner, invite_code, created_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(id, name, owner, code, Date.now()).run();
+      await d1.prepare('INSERT INTO team_members (team_id, name, joined_at) VALUES (?, ?, ?)')
+        .bind(id, owner, Date.now()).run();
+      return this.teamInfo(id);
+    },
+    async teamInfo(tid) {
+      const t = await d1.prepare('SELECT * FROM teams WHERE id = ?').bind(tid).first();
+      if (!t) return null;
+      const { results } = await d1.prepare('SELECT name FROM team_members WHERE team_id = ? ORDER BY joined_at').bind(tid).all();
+      t.members = results.map(r => r.name);
+      return t;
+    },
+    async teamMembers(tid) {
+      const { results } = await d1.prepare('SELECT name FROM team_members WHERE team_id = ? ORDER BY joined_at').bind(tid).all();
+      return results.map(r => r.name);
+    },
+    async addTeamMember(tid, name, joinedAt = Date.now()) {
+      try {
+        await d1.prepare('INSERT INTO team_members (team_id, name, joined_at) VALUES (?, ?, ?)')
+          .bind(tid, name, joinedAt).run();
+        return true;
+      } catch { return false; }
+    },
+    async removeTeamMember(tid, name) {
+      await d1.prepare('DELETE FROM team_members WHERE team_id = ? AND name = ?').bind(tid, name).run();
+      const r = await d1.prepare('SELECT COUNT(*) AS c FROM team_members WHERE team_id = ?').bind(tid).first();
+      if ((r?.c || 0) === 0) await d1.prepare('DELETE FROM teams WHERE id = ?').bind(tid).run();
+    },
+    async myTeams(name) {
+      const { results } = await d1.prepare(
+        `SELECT DISTINCT t.*,
+          (SELECT COUNT(*) FROM team_members m WHERE m.team_id = t.id) AS members
+         FROM teams t
+         LEFT JOIN team_members m ON m.team_id = t.id
+         WHERE t.owner = ? OR m.name = ?
+         ORDER BY t.created_at DESC`
+      ).bind(name, name).all();
+      return results;
+    },
+    async myTeamIds(name) {
+      const { results } = await d1.prepare(
+        'SELECT DISTINCT team_id FROM team_members WHERE name = ?'
+      ).bind(name).all();
+      return results.map(r => r.team_id);
+    },
+    async isTeamMember(tid, name) {
+      const r = await d1.prepare('SELECT 1 AS x FROM team_members WHERE team_id = ? AND name = ?')
+        .bind(tid, name).first();
+      return Boolean(r);
+    },
+    async setProjectTeam(pid, tid) {
+      await d1.prepare('UPDATE projects SET team_id = ? WHERE id = ?').bind(tid || '', pid).run();
+      return this.getProject(pid);
+    },
+    async deleteTeam(tid) {
+      await d1.prepare('DELETE FROM team_members WHERE team_id = ?').bind(tid).run();
+      await d1.prepare("UPDATE projects SET team_id = '' WHERE team_id = ?").bind(tid).run();
+      await d1.prepare('DELETE FROM teams WHERE id = ?').bind(tid).run();
+      return { ok: true };
+    },
+
+    // ---- credit exchange: interactions --------------------------------------
+    async recordInteraction(pid, visitorKey, day) {
+      const p = await this.getProject(pid);
+      if (!p || !p.published || !p.owner) return { ok: false, created: false };
+      const vid = String(visitorKey || '');
+      if (!vid) return { ok: false, created: false };
+      if (vid === `user:${p.owner}`) return { ok: false, created: false };
+      if (p.team_id && vid.startsWith('user:')) {
+        if (await this.isTeamMember(p.team_id, vid.slice(5))) return { ok: false, created: false };
+      }
+      let meta = null;
+      try {
+        const r = await d1.prepare('INSERT INTO interactions (project_id, day, key, created_at) VALUES (?, ?, ?, ?)')
+          .bind(p.id, day || new Date().toISOString().slice(0, 10), vid, Date.now()).run();
+        meta = r.meta;
+      } catch { /* duplicate visitor */ }
+      if (meta && meta.changes > 0) {
+        await this.earnCredits(p.owner, creditsToUnits(1));
+        return { ok: true, created: true, project_id: p.id };
+      }
+      return { ok: true, created: false };
+    },
+    async interactionsToday(pid, day) {
+      const r = await d1.prepare('SELECT COUNT(*) AS c FROM interactions WHERE project_id = ? AND day = ?')
+        .bind(pid, day || new Date().toISOString().slice(0, 10)).first();
+      return r ? r.c : 0;
+    },
+
+    // ---- live presence (10-person concurrency cap) --------------------------
+    PRESENCE_WINDOW_MS: 30000,
+    async touchPresence(pid, sid, userName, now = Date.now()) {
+      const key = this.PRESENCE_WINDOW_MS;
+      await d1.prepare('DELETE FROM presence WHERE seen_at < ?').bind(now - key).run();
+      const had = await d1.prepare('SELECT 1 AS x FROM presence WHERE pid = ? AND sid = ?').bind(pid, sid).first();
+      if (!had) {
+        const cnt = await d1.prepare('SELECT COUNT(*) AS c FROM presence WHERE pid = ?').bind(pid).first();
+        if ((cnt?.c || 0) >= 10) return { active: cnt.c, accepted: false, present: false };
+        await d1.prepare('INSERT INTO presence (pid, sid, user, seen_at) VALUES (?, ?, ?, ?)')
+          .bind(pid, sid, userName || '', now).run();
+      } else {
+        await d1.prepare('UPDATE presence SET user = ?, seen_at = ? WHERE pid = ? AND sid = ?')
+          .bind(userName || '', now, pid, sid).run();
+      }
+      const cnt = await d1.prepare('SELECT COUNT(*) AS c FROM presence WHERE pid = ?').bind(pid).first();
+      return { active: cnt.c, accepted: true, present: Boolean(had) };
+    },
+    async leavePresence(pid, sid) {
+      await d1.prepare('DELETE FROM presence WHERE pid = ? AND sid = ?').bind(pid, sid).run();
+    },
+    async presenceUsers(pid) {
+      const now = Date.now();
+      await d1.prepare('DELETE FROM presence WHERE seen_at < ?').bind(now - this.PRESENCE_WINDOW_MS).run();
+      const { results } = await d1.prepare(
+        "SELECT DISTINCT user FROM presence WHERE pid = ? AND user != '' ORDER BY seen_at DESC LIMIT 20"
+      ).bind(pid).all();
+      return results.map(r => r.user);
+    },
 
     // ---- accounts & sessions -------------------------------------------------
     async createUser({ name, phash, ip, email }) {
@@ -276,7 +445,7 @@ export function createD1Store(d1) {
       const s = await d1.prepare('SELECT * FROM sessions WHERE token = ?').bind(token).first();
       if (!s || s.exp < Date.now()) return null;
       const u = await d1.prepare('SELECT * FROM users WHERE id = ?').bind(s.user_id).first();
-      return u ? { userId: u.id, name: u.name } : null;
+      return u ? { id: u.id, userId: u.id, name: u.name } : null;
     },
     async deleteSession(token) {
       await d1.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run();

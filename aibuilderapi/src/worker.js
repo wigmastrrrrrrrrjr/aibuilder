@@ -20,6 +20,7 @@ async function ensureColumns(d1) {
     ['projects', 'model', 'TEXT'],
     ['projects', 'plan', 'TEXT'],
     ['projects', 'owner', "TEXT NOT NULL DEFAULT ''"],
+    ['projects', 'team_id', "TEXT NOT NULL DEFAULT ''"],
     ['files', 'encoding', "TEXT NOT NULL DEFAULT 'utf8'"],
     ['users', 'email', "TEXT NOT NULL DEFAULT ''"],
     ['users', 'verified', 'INTEGER NOT NULL DEFAULT 0'],
@@ -35,6 +36,22 @@ async function ensureColumns(d1) {
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     pid TEXT NOT NULL, room TEXT NOT NULL, data TEXT NOT NULL)`).run();
   await d1.prepare('CREATE INDEX IF NOT EXISTS idx_events_room ON events (pid, room, seq)').run();
+  // teambuild tables (CREATE IF NOT EXISTS is safe to re-run every boot).
+  await d1.prepare(`CREATE TABLE IF NOT EXISTS teams (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, owner TEXT NOT NULL,
+    invite_code TEXT UNIQUE NOT NULL, created_at INTEGER NOT NULL)`).run();
+  await d1.prepare(`CREATE TABLE IF NOT EXISTS team_members (
+    team_id TEXT NOT NULL, name TEXT NOT NULL, joined_at INTEGER NOT NULL,
+    PRIMARY KEY (team_id, name))`).run();
+  await d1.prepare('CREATE INDEX IF NOT EXISTS idx_team_members ON team_members (team_id)').run();
+  await d1.prepare(`CREATE TABLE IF NOT EXISTS interactions (
+    project_id TEXT NOT NULL, day TEXT NOT NULL, key TEXT NOT NULL,
+    created_at INTEGER NOT NULL, PRIMARY KEY (project_id, day, key))`).run();
+  await d1.prepare(`CREATE TABLE IF NOT EXISTS earnings (
+    name TEXT PRIMARY KEY, units INTEGER NOT NULL DEFAULT 0)`).run();
+  await d1.prepare(`CREATE TABLE IF NOT EXISTS presence (
+    pid TEXT NOT NULL, sid TEXT NOT NULL, user TEXT NOT NULL DEFAULT '',
+    seen_at INTEGER NOT NULL, PRIMARY KEY (pid, sid))`).run();
 }
 
 export default {

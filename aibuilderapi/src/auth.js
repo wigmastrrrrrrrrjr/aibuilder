@@ -88,8 +88,15 @@ export async function requireUser(c, next) {
   return next();
 }
 
-export function canWrite(project, user) {
-  return !project || !project.owner || Boolean(user && user.name === project.owner);
+export async function canWrite(project, user) {
+  if (!project || !project.owner) return true;
+  if (!user) return false;
+  if (user.name === project.owner) return true;
+  // teambuild: every member of the project's team can build on it too.
+  if (project.team_id) {
+    try { return Boolean(await store.isTeamMember(project.team_id, user.name)); } catch { return false; }
+  }
+  return false;
 }
 
 const NAME_RE = /^[a-zA-Z0-9_-]{3,24}$/;

@@ -10,6 +10,8 @@ import { builtinKey } from './keys.js';
 import { toBase64 } from './base64.js';
 import { live } from './live.js';
 import { auth, requireUser, canWrite } from './auth.js';
+import { teams } from './teams.js';
+import { teamPool, personalBalance } from './credits.js';
 import { fn } from './fn.js';
 import { rateLimit } from './rate-limit.js';
 import { blockDatacenterIps } from './vpn-block.js';
@@ -55,17 +57,60 @@ app.get('/api/meta', (c) =>
 app.get('/api/credits', requireUser, async (c) => {
   const user = c.get('user');
   const day = new Date().toISOString().slice(0, 10);
-  const total = Number(getVar('DAILY_CREDITS')) || FREE_DAILY_CREDITS;
-  const usedUnits = await store.getCredits(user.id, day);
-  const totalUnits = creditsToUnits(total);
+  const bal = await personalBalance(user, day);
+  const myTeams = await store.myTeams(user.name);
+  const first = myTeams[0] || null;
+  let team = null;
+  if (first) {
+    const pool = await teamPool(first.id, day);
+    team = {
+      id: first.id,
+      name: first.name,
+      owner: first.owner,
+      members: pool.memberCount,
+      totalCredits: unitsToCredits(pool.totalUnits),
+      usedCredits: unitsToCredits(pool.usedUnits),
+      leftCredits: unitsToCredits(pool.leftUnits),
+    };
+  }
   return c.json({
     credits: {
-      total,
-      used: unitsToCredits(usedUnits),
-      left: Math.max(0, unitsToCredits(totalUnits - usedUnits)),
+      total: bal.totalCredits,
+      used: unitsToCredits(bal.spent) + unitsToCredits(bal.earned),
+      left: bal.leftCredits,
       day,
     },
+    earned: unitsToCredits(bal.earned),
+    interactionsToday: undefined,
+    team,
+    teams: myTeams.map((t) => ({ id: t.id, name: t.name, owner: t.owner, members: Number(t.members || t.member_count || 0) })),
   });
+});
+
+// ---- teambuild: presence (who is building now + 10-person cap) -----------
+app.post('/api/projects/:pid/presence', requireUser, async (c) => {
+  const pid = c.req.param('pid');
+  const project = await store.getProject(pid);
+  if (!project) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const sid = String(body.sid || '').trim().slice(0, 64) || `cli:${crypto.randomUUID().slice(0, 12)}`;
+  const res = await store.touchPresence(pid, sid, c.get('user').name, Date.now());
+  return c.json({ active: res.active, accepted: res.accepted, present: res.present, limit: 10, sid });
+});
+
+app.post('/api/projects/:pid/presence/leave', requireUser, async (c) => {
+  const pid = c.req.param('pid');
+  const body = await c.req.json().catch(() => ({}));
+  const sid = String(body.sid || '').slice(0, 64);
+  if (sid) await store.leavePresence(pid, sid);
+  return c.json({ ok: true });
+});
+
+app.get('/api/projects/:pid/presence', async (c) => {
+  const pid = c.req.param('pid');
+  if (!(await store.getProject(pid))) return c.json({ error: 'not found' }, 404);
+  const users = await store.presenceUsers(pid);
+  return c.json({ active: users.length, limit: 10, users });
 });
 
 
@@ -98,7 +143,7 @@ app.delete('/api/projects/:pid', requireUser, async (c) => {
   const pid = c.req.param('pid');
   const project = await store.getProject(pid);
   if (!project) return c.json({ error: 'not found' }, 404);
-  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
+  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
   await store.deleteProject(pid);
   return c.json({ ok: true });
 });
@@ -107,7 +152,7 @@ app.post('/api/projects/:pid/rename', requireUser, async (c) => {
   const pid = c.req.param('pid');
   const project = await store.getProject(pid);
   if (!project) return c.json({ error: 'not found' }, 404);
-  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
+  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
   const body = await c.req.json().catch(() => ({}));
   const name = String(body.name || '').trim().slice(0, 60);
   if (!name) return c.json({ error: 'name required' }, 400);
@@ -123,7 +168,7 @@ app.post('/api/projects/:pid/publish', requireUser, async (c) => {
   const pid = c.req.param('pid');
   const project = await store.getProject(pid);
   if (!project) return c.json({ error: 'not found' }, 404);
-  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
+  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
   const body = await c.req.json().catch(() => ({}));
   const publish = body.publish !== false;
   const description = typeof body.description === 'string' ? body.description.slice(0, 300) : undefined;
@@ -164,7 +209,7 @@ app.post('/api/projects/:pid/restore-version', requireUser, async (c) => {
   const pid = c.req.param('pid');
   const project = await store.getProject(pid);
   if (!project) return c.json({ error: 'not found' }, 404);
-  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
+  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
   const body = await c.req.json().catch(() => ({}));
   const fpath = String(body.path || '').trim();
   const seq = Number(body.seq) || 0;
@@ -187,7 +232,7 @@ app.post('/api/projects/:pid/snapshots', requireUser, async (c) => {
   const pid = c.req.param('pid');
   const project = await store.getProject(pid);
   if (!project) return c.json({ error: 'not found' }, 404);
-  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
+  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
   const body = await c.req.json().catch(() => ({}));
   return c.json(await store.takeSnapshot(pid, String(body.label || '').trim()), 201);
 });
@@ -204,7 +249,7 @@ app.post('/api/projects/:pid/snapshots/:sid/restore', requireUser, async (c) => 
   const pid = c.req.param('pid');
   const project = await store.getProject(pid);
   if (!project) return c.json({ error: 'not found' }, 404);
-  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
+  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
   try {
     return c.json(await store.restoreSnapshot(pid, c.req.param('sid')));
   } catch (e) {
@@ -219,7 +264,7 @@ app.get('/api/discover', async (c) => c.json(await store.discover()));
 app.post('/api/projects/:pid/upload', requireUser, async (c) => {
   const project = await store.getProject(c.req.param('pid'));
   if (!project) return c.json({ error: 'not found' }, 404);
-  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
+  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
 
   let form;
   try {
@@ -274,6 +319,7 @@ app.route('/api/chat', chat);
 app.route('/', live);
 app.route('/', fn);
 app.route('/api/baas', baas);
+app.route('/', teams);
 app.route('/preview', preview);
 
 // 404s: API callers get JSON, browsers get bounced to the site with a notice

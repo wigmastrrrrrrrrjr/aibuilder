@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS projects (
   slug        TEXT,
   description TEXT NOT NULL DEFAULT '',
   owner       TEXT NOT NULL DEFAULT '',
-  plan        TEXT
+  plan        TEXT,
+  team_id     TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS files (
@@ -102,4 +103,49 @@ CREATE TABLE IF NOT EXISTS snapshot_files (
   content     TEXT NOT NULL,
   encoding    TEXT NOT NULL DEFAULT 'utf8',
   PRIMARY KEY (snapshot_id, path)
+);
+
+-- ---- teambuild: collaborative teams ---------------------------------------
+-- A team pools the daily credit grants of every member into one shared budget;
+-- any member's generation spends from the pool. Invite codes let others join.
+CREATE TABLE IF NOT EXISTS teams (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  owner       TEXT NOT NULL,
+  invite_code TEXT UNIQUE NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS team_members (
+  team_id   TEXT NOT NULL,
+  name      TEXT NOT NULL,
+  joined_at INTEGER NOT NULL,
+  PRIMARY KEY (team_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_team_members ON team_members (team_id);
+
+-- Credit exchange: one row per unique visitor per published project per day.
+-- A new row earns the project owner +1 credit (see `earnings`).
+CREATE TABLE IF NOT EXISTS interactions (
+  project_id TEXT NOT NULL,
+  day        TEXT NOT NULL,
+  key        TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, day, key)
+);
+
+-- Lifetime interaction rewarer balance (integer units of 1/10 credit).
+CREATE TABLE IF NOT EXISTS earnings (
+  name  TEXT PRIMARY KEY,
+  units INTEGER NOT NULL DEFAULT 0
+);
+
+-- Who is live on a project right now (server-side cap + roster).
+-- Used to enforce the 10-collaborator concurrency limit per project.
+CREATE TABLE IF NOT EXISTS presence (
+  pid     TEXT NOT NULL,
+  sid     TEXT NOT NULL,
+  user    TEXT NOT NULL DEFAULT '',
+  seen_at INTEGER NOT NULL,
+  PRIMARY KEY (pid, sid)
 );

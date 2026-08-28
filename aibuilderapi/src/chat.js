@@ -6,6 +6,7 @@ import { extractKey, builtinKey, localOllamaUrl } from './keys.js';
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
 import { modelCost, FREE_DAILY_CREDITS, creditsToUnits, unitsToCredits } from './models.js';
+import { teamPool, personalBalance } from './credits.js';
 import { createClient } from '@supabase/supabase-js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
@@ -56,11 +57,26 @@ chat.post('/', async (c) => {
   if (pid) {
     project = await store.getProject(pid);
     if (!project) pid = null;
-    else if (!canWrite(project, user)) return c.json({ error: "you don't own this project" }, 403);
+    else if (!(await canWrite(project, user))) return c.json({ error: "you don't own this project" }, 403);
   }
   if (!project) {
     // the owner names the project themselves — never name it after the prompt
     pid = (await store.createProject(undefined, user.name)).id;
+  }
+
+  // Concurrency cap: at most 10 people live on one project at once. Presence is
+  // keyed per client (sid = browser tab), so 10 tabs/people = the working set.
+  {
+    const sid = String(body.sid || '').trim().slice(0, 64) || `cli:${crypto.randomUUID().slice(0, 12)}`;
+    try {
+      const pr = await store.touchPresence(project.id, sid, user.name, Date.now());
+      if (!pr.accepted) {
+        return c.json({
+          error: 'This project is at its 10-people live limit right now. Wait a moment for a spot, or open it read-only.',
+          presence: { active: pr.active, limit: 10 },
+        }, 429);
+      }
+    } catch { /* presence is best-effort */ }
   }
 
   // model precedence: request > stored on project > env default
@@ -76,21 +92,50 @@ chat.post('/', async (c) => {
   );
   if (!hasOwnKey && user.name.toLowerCase() !== 'ai_dev') {
     const day = new Date().toISOString().slice(0, 10);
-    const cost = modelCost(model);
-    const total = Number(getVar('DAILY_CREDITS')) || FREE_DAILY_CREDITS;
-    const spent = await store.getCredits(user.id, day);
-    if (spent + creditsToUnits(cost) > creditsToUnits(total)) {
-      return c.json({
-        error: `Out of credits — ${total} credits/day and this model costs ${cost}. Add your own Ollama API key (🔑) for unlimited use.`,
-        credits: {
-          total,
-          used: unitsToCredits(spent),
-          left: Math.max(0, unitsToCredits(creditsToUnits(total) - spent)),
-          day,
-        },
-      }, 429);
+    const costUnits = creditsToUnits(modelCost(model));
+
+    // teambuild: chatting on a project their team shares spends from the team's
+    // shared pool (sum of every member's daily grant + earned interaction credits).
+    const shared = project && project.team_id
+      && await store.isTeamMember(project.team_id, user.name);
+
+    if (shared) {
+      const pool = await teamPool(project.team_id, day);
+      if (!pool || pool.leftUnits < costUnits) {
+        const cur = pool || { totalUnits: 0, usedUnits: 0, leftUnits: 0 };
+        return c.json({
+          error: `Your team's shared credit pool is out of credits — ${unitsToCredits(cur.leftUnits)} of ${unitsToCredits(cur.totalUnits)} left today. Add your own Ollama API key (🔑) for unlimited use.`,
+          credits: {
+            total: unitsToCredits(cur.totalUnits),
+            used: unitsToCredits(cur.usedUnits),
+            left: Math.max(0, unitsToCredits(cur.leftUnits)),
+            day,
+          },
+        }, 429);
+      }
+      await store.creditSpend(await store.teamCreditKey(project.team_id), day, costUnits);
+    } else {
+      // Personal account: draw the free daily grant first, then let interaction
+      // earnings (credit exchange) top the user up for the rest of the day.
+      const bal = await personalBalance(user, day);
+      const dailyLeft = bal.totalUnits - bal.spent;
+      if (dailyLeft >= costUnits) {
+        await store.spendCredits(user.id, day, costUnits);
+      } else if (dailyLeft + bal.earned >= costUnits) {
+        if (dailyLeft > 0) await store.spendCredits(user.id, day, dailyLeft);
+        await store.spendEarnings(user.name, costUnits - dailyLeft);
+      } else {
+        return c.json({
+          error: `Out of credits — ${bal.total} credits/day plus ${unitsToCredits(bal.earned)} earned, and this model costs ${modelCost(model)}. Add your own Ollama API key (🔑) for unlimited use.`,
+          credits: {
+            total: bal.totalCredits,
+            used: unitsToCredits(bal.spent) + unitsToCredits(bal.earned),
+            left: bal.leftCredits,
+            day,
+          },
+        }, 429);
+      }
     }
-    await store.spendCredits(user.id, day, creditsToUnits(cost));
   }
   await store.setModel(pid, model);
 
