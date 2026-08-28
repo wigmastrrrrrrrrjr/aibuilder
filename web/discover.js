@@ -22,11 +22,11 @@ function card(app) {
   open.href = `${API}/preview/${app.id}/`;
   open.target = '_blank';
   open.rel = 'noopener';
-  open.textContent = 'Open ↗';
+  open.textContent = 'Open';
 
   const remix = document.createElement('button');
   remix.className = 'cardBtn';
-  remix.textContent = 'Remix ✎';
+  remix.textContent = 'Remix';
   remix.onclick = async () => {
     remix.disabled = true; remix.textContent = 'Remixing…';
     try {
@@ -36,7 +36,7 @@ function card(app) {
       location.href = `index.html?project=${copy.id}`;
     } catch (e) {
       alert(`⚠ ${e.message}`);
-      remix.disabled = false; remix.textContent = 'Remix ✎';
+      remix.disabled = false; remix.textContent = 'Remix';
     }
   };
 
@@ -55,7 +55,7 @@ async function load() {
     grid.innerHTML = '';
     if (!apps.length) {
       grid.innerHTML = `<div class="empty"><h1>No published apps yet</h1>
-        <p>Build something in the <a href="index.html">builder</a> and hit Publish.</p></div>`;
+        <p>Build something in the <a href="index.html" style="color:var(--primary)">builder</a> and publish it to appear here.</p></div>`;
       return;
     }
     for (const a of apps) grid.appendChild(card(a));

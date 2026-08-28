@@ -455,10 +455,17 @@ function resetToNew() {
   $('delBtn').hidden = true;
   $('renameBtn').hidden = true;
   messagesEl.innerHTML = `
-    <div class="empty"><h1>Build an app by describing it</h1>
-    <p>Try: “a todo app with priorities and due dates”,<br>
-       “landing page for my bakery with an order form”,<br>
-       “kanban board with drag and drop”.</p></div>`;
+    <div class="empty">
+      <div class="emptyMark"><span class="ms">auto_awesome</span></div>
+      <h1>Describe it. aibuilder ships it.</h1>
+      <p>Type what you want to build and the platform engineers the full app with you —<br>
+         a live, editable preview on the right the whole way through.</p>
+      <div class="emptySteps">
+        <div class="step"><div class="n">01</div><div class="t">Describe</div><div class="s">“A billing dashboard with charts and CSV export.”</div></div>
+        <div class="step"><div class="n">02</div><div class="t">Iterate</div><div class="s">Refine with follow-up prompts in the same thread.</div></div>
+        <div class="step"><div class="n">03</div><div class="t">Publish</div><div class="s">Ship it to the discovery feed in one click.</div></div>
+      </div>
+    </div>`;
   setChips([]);
   frame.src = 'about:blank';
   renderPlan([]);
@@ -606,13 +613,13 @@ async function send() {
       if (res.status === 429) {
         if (d.credits) {
           loadCredits();
-          throw new Error(`Out of credits — ${fmtCredits(d.credits.left)} of ${fmtCredits(d.credits.total)} left today. Add your own Ollama API key (🔑) for unlimited use.`);
+          throw new Error(`Daily credit limit reached — ${fmtCredits(d.credits.left)} of ${fmtCredits(d.credits.total)} remaining today. Add your own API key (🔑) for unlimited use.`);
         }
-        throw new Error('Whoopsie! The server hit its head — you were using a little too much. Come back later!');
+        throw new Error('Request throttled — the service is temporarily rate-limited. Please try again shortly.');
       }
-      if (res.status === 401) throw new Error('Whoopsie! Sign up required — create an account to keep building.');
-      if (res.status === 403) throw new Error('Whoopsie! Access denied — you don\'t have permission for this.');
-      if (res.status === 500) throw new Error('Whoopsie! The server hit its head — something went wrong. Try again!');
+      if (res.status === 401) throw new Error('Authentication required — sign in to continue building.');
+      if (res.status === 403) throw new Error('Access denied — you do not have permission to modify this project.');
+      if (res.status === 500) throw new Error('Server error — something went wrong on our end. Please try again.');
       throw new Error(msg);
     }
 
@@ -632,11 +639,11 @@ async function send() {
         if (ev.type === 'meta') {
           if (!projectId) projectId = ev.projectId;
           projName.textContent = message.slice(0, 60);
-          activityText.textContent = `${ev.model} is building…`;
+          activityText.textContent = `${ev.model} is working…`;
         } else if (ev.type === 'think') {
           rawStream.textContent = (rawStream.textContent + ev.v).slice(-9000);
           rawStream.scrollTop = rawStream.scrollHeight;
-          activityText.textContent = 'thinking' + '.'.repeat(1 + (dots = (dots + 1) % 4));
+          activityText.textContent = 'Analyzing' + '.'.repeat(1 + (dots = (dots + 1) % 4));
         } else if (ev.type === 'token') {
           rawStream.textContent = (rawStream.textContent + ev.v).slice(-9000);
           rawStream.scrollTop = rawStream.scrollHeight;
@@ -644,17 +651,17 @@ async function send() {
         } else if (ev.type === 'file') {
           chipFiles.push(ev.path);
           setChips(chipFiles, chipFiles);
-          activityText.textContent = `wrote ${ev.path}`;
+          activityText.textContent = `Generated ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'edit') {
           chipFiles.push(ev.path);
           setChips(chipFiles, chipFiles);
-          activityText.textContent = `edited ${ev.path}`;
+          activityText.textContent = `Updated ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'delete') {
           chipFiles = chipFiles.filter((p) => p !== ev.path);
           setChips(chipFiles);
-          activityText.textContent = `deleted ${ev.path}`;
+          activityText.textContent = `Removed ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'plan') {
           renderPlan(ev.items || []);
@@ -663,15 +670,15 @@ async function send() {
           document.title = `${ev.name} — aibuilder`;
           loadProjects();
         } else if (ev.type === 'delegate') {
-          activityText.textContent = `sub-agent on ${ev.path}…`;
+          activityText.textContent = `Delegating ${ev.path} to a sub-agent…`;
         } else if (ev.type === 'subagent') {
           chipFiles.push(ev.path);
           setChips(chipFiles, chipFiles);
-          activityText.textContent = `sub-agent wrote ${ev.path}`;
+          activityText.textContent = `Sub-agent completed ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'refactor') {
           $('refactorBar').hidden = false;
-          activityText.textContent = 'refactoring code structure…';
+          activityText.textContent = 'Restructuring code…';
         } else if (ev.type === 'warn') {
           notify('Generator warning', ev.message);
         } else if (ev.type === 'error') {
