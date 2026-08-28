@@ -108,7 +108,7 @@ export default {
     try {
       const cleaned = await store.metaGet('clean:probe_events');
       if (!cleaned) {
-        await d1.prepare("DELETE FROM events WHERE pid = '6d77bf09f6ee49349a96' AND room = 'chat:main'").run();
+        await env.DB.prepare("DELETE FROM events WHERE pid = '6d77bf09f6ee49349a96' AND room = 'chat:main'").run();
         await store.metaSet('clean:probe_events', '1');
       }
     } catch (e) { console.error('[boot] test-event cleanup:', e.message); }
