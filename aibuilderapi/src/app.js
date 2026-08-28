@@ -336,6 +336,11 @@ app.notFound((c) => {
   return c.json({ error: '404 not found' }, 404);
 });
 
+app.onError((err, c) => {
+  console.error('route error:', (err && err.stack) || err);
+  return c.json({ error: 'Internal Server Error', detail: String((err && err.message) || err).slice(0, 300) }, 500);
+});
+
 // BaaS SDK for generated apps (absolute path so any page depth can load it)
 app.get('/__baas.js', (c) =>
   c.text(BAAS_SDK_JS, 200, { 'content-type': 'application/javascript; charset=utf-8' })
