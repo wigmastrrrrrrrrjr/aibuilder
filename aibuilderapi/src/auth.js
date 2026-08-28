@@ -222,7 +222,7 @@ auth.post('/api/auth/signup', async (c) => {
   if (tag) {
     const takenBy = await store.ipUsed(tag);
     if (takenBy) return c.json({
-      error: `Maximum accounts reached for this network. Log in as "${takenBy}" or reset its password below.`,
+      error: `A maximum of ${3} accounts may be created from one network. Log in as "${takenBy}" instead, or reset its password with the "Forgot password" option.`,
     }, 403);
   }
 

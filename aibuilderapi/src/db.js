@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { useStore } from './store.js';
 import { creditsToUnits } from './models.js';
 
+// Anti-abuse: allow a small number of signups per network before locking.
+const MAX_ACCOUNTS_PER_IP = 3;
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR || path.resolve(here, '../../data');
 fs.mkdirSync(dataDir, { recursive: true });
@@ -530,8 +533,9 @@ useStore({
     },
     async ipUsed(ip) {
       if (!ip) return null;
-      const r = db.prepare("SELECT name FROM users WHERE ip = ? LIMIT 1").get(ip);
-      return r ? r.name : null;
+      const r = db.prepare("SELECT name FROM users WHERE ip = ?").all(ip);
+      if (r.length < MAX_ACCOUNTS_PER_IP) return null;
+      return r[0].name;
     },
     async resetPassword(name, phash) {
       const r = db.prepare('UPDATE users SET phash = ? WHERE name = ?').run(phash, name);

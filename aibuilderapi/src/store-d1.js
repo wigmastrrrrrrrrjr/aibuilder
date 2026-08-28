@@ -3,6 +3,9 @@
 
 import { creditsToUnits } from './models.js';
 
+// Anti-abuse: allow a small number of signups per network before locking.
+const MAX_ACCOUNTS_PER_IP = 3;
+
 function slugify(name) {
   const s = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   return (s || 'app').slice(0, 40);
@@ -412,8 +415,9 @@ export function createD1Store(d1) {
     },
     async ipUsed(ip) {
       if (!ip) return null;
-      const r = await d1.prepare('SELECT name FROM users WHERE ip = ?').bind(ip).first();
-      return r ? r.name : null;
+      const r = await d1.prepare('SELECT name FROM users WHERE ip = ?').bind(ip).all();
+      if (!r.results || r.results.length < MAX_ACCOUNTS_PER_IP) return null;
+      return r.results[0].name;
     },
     async resetPassword(name, phash) {
       const u = await d1.prepare('SELECT * FROM users WHERE name = ?').bind(name).first();

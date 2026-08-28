@@ -74,7 +74,7 @@ export default {
         '  database_id = "<your-d1-id>"\n\n' +
         'then run:  npx wrangler d1 list   (verify id)\n' +
         '           npm run deploy',
-        { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8' } },
+        { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' } },
       );
     }
 
@@ -111,7 +111,7 @@ export default {
       console.error('worker error:', (e && e.stack) || e);
       return new Response('Internal Server Error', {
         status: 500,
-        headers: { 'content-type': 'text/plain; charset=utf-8' },
+        headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' },
       });
     }
   },
