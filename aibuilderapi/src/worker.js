@@ -110,9 +110,9 @@ export default {
       return await app.fetch(req, env, ctx);
     } catch (e) {
       console.error('worker error:', (e && e.stack) || e);
-      return new Response('Internal Server Error', {
+      return new Response(JSON.stringify({ error: 'Internal Server Error', detail: String((e && e.message) || e).slice(0, 300) }), {
         status: 500,
-        headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' },
+        headers: { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' },
       });
     }
   },
