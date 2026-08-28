@@ -84,6 +84,13 @@ button { font-family: inherit; }
   display: flex; align-items: center; gap: 10px;
   text-decoration: none; color: var(--text);
 }
+/* classic aibuilder wordmark: a + ibuilder */
+.logo {
+  font-weight: 800; font-size: 18px; letter-spacing: .5px;
+  color: var(--text);
+}
+.logo span { color: var(--primary); }
+.brand .logo { padding: 0; }
 .brandMark {
   width: 30px; height: 30px; border-radius: 9px;
   display: grid; place-items: center;
@@ -431,6 +438,8 @@ button { font-family: inherit; }
     linear-gradient(150deg, #4f46e5 0%, #4338ca 60%, #3730a3 100%);
 }
 .authBrand .brandTag { background: rgba(255,255,255,0.14); color: #fff; border-color: rgba(255,255,255,0.25); }
+.authBrand .logo { font-size: 22px; color: #fff; text-decoration: none; }
+.authBrand .logo span { color: #c7d2fe; }
 .authBrand .bHead { font-size: 25px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; margin: 26px 0 12px; }
 .authBrand .bSub { font-size: 14px; line-height: 1.65; color: rgba(255,255,255,0.82); margin: 0 0 28px; }
 .authBrand .bPoints { display: flex; flex-direction: column; gap: 12px; }
