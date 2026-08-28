@@ -72,43 +72,6 @@ app.get('/api/credits', requireUser, async (c) => {
 
 app.route('/api/models', models);
 
-// TEMP (remove after use): one-time production reset — clears app content on D1,
-// keeps users/sessions/usage/meta. Guarded by BOTBYE_SERVER_KEY, a worker secret.
-function safeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-app.post('/api/admin/reset', async (c) => {
-  const key = getVar('BOTBYE_SERVER_KEY') || '';
-  if (!key || !safeEqual(c.req.header('x-admin-key') || '', key)) {
-    return c.json({ error: 'forbidden' }, 403);
-  }
-  const db = c.env ? c.env.DB : null;
-  if (!db) return c.json({ error: 'no d1 binding' }, 500);
-  const count = async (t) => (await db.prepare(`SELECT count(*) c FROM ${t}`).first())?.c ?? 0;
-  const before = {
-    projects: await count('projects'), files: await count('files'),
-    messages: await count('messages'), events: await count('events'),
-    users: await count('users'), sessions: await count('sessions'),
-  };
-  const baas = (await db.prepare(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'baas\\_%' ESCAPE '\\'"
-  ).all()).results.map((r) => r.name);
-  for (const t of baas) await db.prepare(`DROP TABLE IF EXISTS \`${t}\``).run();
-  await db.prepare('DELETE FROM projects').run();
-  await db.prepare('DELETE FROM files').run();
-  await db.prepare('DELETE FROM messages').run();
-  await db.prepare('DELETE FROM events').run();
-  const after = {
-    projects: await count('projects'), files: await count('files'),
-    messages: await count('messages'), events: await count('events'),
-    users: await count('users'), sessions: await count('sessions'),
-  };
-  return c.json({ ok: true, baasDropped: baas.length, before, after });
-});
-
 // ---- global rate limit -------------------------------------------------------
 // TEMP: test new endpoint
 app.get('/api/debug-test', (c) => c.json({ ok: true }));;
