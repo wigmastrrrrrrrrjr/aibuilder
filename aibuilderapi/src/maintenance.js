@@ -1,4 +1,12 @@
-<!doctype html>
+// Maintenance lock for the whole platform. Flip MAINTENANCE_MODE to true to
+// temporarily take down every API and page; flip back to false to restore.
+
+export const MAINTENANCE_MODE = true;
+
+export const MAINTENANCE_MESSAGE =
+  'whoops looks like we are doing a maintenance be back in a couple hours';
+
+const MAINTENANCE_HTML = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -42,4 +50,30 @@
   </div>
 </main>
 </body>
-</html>
+</html>`;
+
+export function maintenanceResponse(pathname) {
+  if (pathname.startsWith('/api/') || pathname === '/__baas.js') {
+    return new Response(
+      JSON.stringify({ error: 'maintenance', message: MAINTENANCE_MESSAGE }),
+      {
+        status: 503,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-store',
+        },
+      },
+    );
+  }
+  return new Response(MAINTENANCE_HTML, {
+    status: 503,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'access-control-allow-origin': '*',
+      'cache-control': 'no-store',
+    },
+  });
+}
+
+export const maintenancePage = MAINTENANCE_HTML;

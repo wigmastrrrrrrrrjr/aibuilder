@@ -7,6 +7,7 @@ import { useStore, store } from './store.js';
 import { createD1Store } from './store-d1.js';
 import { setVars, getVar } from './env.js';
 import { hashPassword } from './auth.js';
+import { MAINTENANCE_MODE, maintenanceResponse } from './maintenance.js';
 
 // Runtime vars (OLLAMA_MODEL, secrets like OLLAMA_API_KEY) are read through
 // getVar() from src/env.js; setVars(env) makes Worker bindings visible there.
@@ -60,6 +61,9 @@ export default {
     setVars(env);
 
     const url = new URL(req.url);
+
+    if (MAINTENANCE_MODE) return maintenanceResponse(url.pathname);
+
     const needsApi =
       url.pathname.startsWith('/api/') ||
       url.pathname.startsWith('/preview') ||
