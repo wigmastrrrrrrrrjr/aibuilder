@@ -20,6 +20,7 @@ const SID = (() => {
   return s;
 })();
 let displayText = '';
+let canEdit = false; // may the signed-in user modify the open project?
 let defaultModel = 'gpt-oss:120b';
 
 /* ---------- strip generator blocks (FILE/EDIT/DELETE/PLAN) from output ---------- */
@@ -83,9 +84,22 @@ function setChips(files, markNew) {
   fileChips.innerHTML = '';
   for (const f of files) {
     const s = document.createElement('span');
-    s.className = 'chip' + (fresh.has(f.path || f) ? ' new' : '');
-    s.textContent = typeof f === 'string' ? f : f.path;
+    const path = typeof f === 'string' ? f : f.path;
+    s.className = 'chip' + (fresh.has(path) ? ' new' : '');
+    s.textContent = path;
+    s.title = `${path} — click to view version history`;
+    s.onclick = () => openFilePane(path);
     fileChips.appendChild(s);
+  }
+}
+
+function flashChip(path) {
+  for (const chip of fileChips.querySelectorAll('.chip')) {
+    if (chip.textContent === path) {
+      chip.classList.remove('flash');
+      void chip.offsetWidth;
+      chip.classList.add('flash');
+    }
   }
 }
 
@@ -427,6 +441,8 @@ async function selectProject(pid) {
   publishBtn.disabled = false;
   setPub(data.project.published);
   const mine = !data.project.owner || data.project.owner === sessName();
+  canEdit = mine;
+  snapModal.hidden = true;
   $('delBtn').hidden = !mine;
   $('renameBtn').hidden = !mine;
   if (data.project.model && [...modelSel.options].some(o => o.value === data.project.model)) {
@@ -448,6 +464,9 @@ async function selectProject(pid) {
 
 function resetToNew() {
   projectId = null;
+  canEdit = false;
+  snapModal.hidden = true;
+  fpPane.hidden = true;
   projName.textContent = 'New app';
   document.title = 'aibuilder';
   publishBtn.disabled = true;
@@ -637,7 +656,7 @@ async function send() {
         let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
 
         if (ev.type === 'meta') {
-          if (!projectId) projectId = ev.projectId;
+          if (!projectId) { projectId = ev.projectId; canEdit = true; }
           projName.textContent = message.slice(0, 60);
           activityText.textContent = `${ev.model} is working…`;
         } else if (ev.type === 'think') {
@@ -651,11 +670,13 @@ async function send() {
         } else if (ev.type === 'file') {
           chipFiles.push(ev.path);
           setChips(chipFiles, chipFiles);
+          flashChip(ev.path);
           activityText.textContent = `Generated ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'edit') {
           chipFiles.push(ev.path);
           setChips(chipFiles, chipFiles);
+          flashChip(ev.path);
           activityText.textContent = `Updated ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'delete') {
@@ -674,6 +695,7 @@ async function send() {
         } else if (ev.type === 'subagent') {
           chipFiles.push(ev.path);
           setChips(chipFiles, chipFiles);
+          flashChip(ev.path);
           activityText.textContent = `Sub-agent completed ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'refactor') {
@@ -771,37 +793,7 @@ $('uploadInput').addEventListener('change', async (e) => {
   const picked = [...e.target.files];
   e.target.value = '';
   if (!picked.length || busy) return;
-
-  const firstRel = picked[0].webkitRelativePath || picked[0].name;
-  const guessName = firstRel.includes('/') ? firstRel.split('/')[0] : firstRel.replace(/\.[^.]+$/, '');
-
-  busy = true;
-  try {
-    const p = await (await fetch(`${API}/api/projects`, {
-      method: 'POST',
-      headers: authHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({ name: guessName }),
-    })).json();
-
-    const fd = new FormData();
-    for (const f of picked.slice(0, 300)) {
-      fd.append('files', f, f.webkitRelativePath || f.name);
-    }
-    const res = await fetch(`${API}/api/projects/${p.id}/upload`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: fd,
-    });
-    if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
-    const out = await res.json();
-    if (out.skipped.length) console.warn('skipped:', out.skipped);
-    resetToNew();
-    await selectProject(p.id);
-  } catch (err) {
-    alert(`⚠ ${err.message}`);
-  } finally {
-    busy = false;
-  }
+  await uploadFiles(picked);
 });
 
 $('delBtn').addEventListener('click', async () => {
@@ -813,7 +805,342 @@ $('delBtn').addEventListener('click', async () => {
   await loadProjects(); resetToNew();
 });
 
+/* ---------- Phase 2: drag-and-drop upload (adds into the open project) ---------- */
+const dropOverlay = $('dropOverlay');
+let dragDepth = 0;
+window.addEventListener('dragenter', (e) => {
+  if (!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'))) return;
+  e.preventDefault();
+  dragDepth++;
+  dropOverlay.hidden = false;
+});
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropOverlay.hidden = true;
+});
+window.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  dropOverlay.hidden = true;
+  const files = e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
+  if (!files.length || busy) return;
+  await uploadFiles(files);
+});
+
+function guessProjectName(files) {
+  const first = files[0] && (files[0].webkitRelativePath || files[0].name);
+  if (!first) return 'app';
+  return first.includes('/') ? first.split('/')[0] : first.replace(/\.[^.]+$/, '').slice(0, 40);
+}
+
+async function uploadFiles(files) {
+  const intoExisting = projectId && canEdit;
+  busy = true; sendBtn.disabled = true;
+  try {
+    const fd = new FormData();
+    for (const f of files.slice(0, 300)) fd.append('files', f, f.webkitRelativePath || f.name);
+    let pid = projectId;
+    if (!intoExisting) {
+      const p = await (await fetch(`${API}/api/projects`, {
+        method: 'POST',
+        headers: authHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ name: guessProjectName(files) }),
+      })).json();
+      pid = p.id;
+    }
+    const res = await fetch(`${API}/api/projects/${pid}/upload`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    });
+    if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
+    const out = await res.json();
+    if (out.skipped.length) notify('Upload', `${out.skipped.length} files skipped (${out.skipped.slice(0, 3).join(', ')}…)`);
+    if (intoExisting) await selectProject(projectId);
+    else { resetToNew(); await selectProject(pid); }
+    for (const n of (out.uploaded || [])) flashChip(n);
+  } catch (err) {
+    notify('Upload failed', err.message);
+    alert(`⚠ ${err.message}`);
+  } finally {
+    busy = false; sendBtn.disabled = false;
+  }
+}
+
+/* ---------- Phase 2: prompt templates ---------- */
+const PROMPT_TEMPLATES = [
+  { label: 'Landing page', prompt: 'Build a polished corporate landing page: sticky navbar with logo, hero with headline and CTA, trusted-by logos, features grid, pricing cards, FAQ accordion, and footer. Modern and clean.' },
+  { label: 'Billing dashboard', prompt: 'Build a billing dashboard: KPI cards (MRR, churn, ARPU), a revenue line chart, an invoices table with status badges, and an export button.' },
+  { label: 'Todo app', prompt: 'Build a todo app with three priority levels, due dates, inline editing, completion toggle, filtering, and a progress summary.' },
+  { label: 'Chat app', prompt: 'Build a chat UI with a conversation list sidebar, message bubbles, read receipts, and a working composer that echoes messages locally.' },
+  { label: 'Travel planner', prompt: 'Build a travel itinerary planner: day-by-day timeline, budget tracker with categories, and a packing checklist saved to localStorage.' },
+];
+function renderTemplates() {
+  const row = $('templates');
+  row.innerHTML = '<span class="tplLabel">Start with</span>';
+  for (const t of PROMPT_TEMPLATES) {
+    const b = document.createElement('button');
+    b.className = 'tpl';
+    b.textContent = t.label;
+    b.title = t.prompt;
+    b.onclick = () => {
+      promptBox.value = t.prompt;
+      promptBox.focus();
+      promptBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    };
+    row.appendChild(b);
+  }
+}
+
+/* ---------- Phase 2: file viewer (version history, diff, selective revert) ---------- */
+const fpPane = $('filePane'), fpTitle = $('fpTitle'), fpCode = $('fpCode'),
+  fpVersions = $('fpVersions'), fpRawBtn = $('fpRawBtn'), fpDiffBtn = $('fpDiffBtn'),
+  fpRestore = $('fpRestore');
+
+let fpPath = null;         // open file
+let fpVersionsList = [];   // newest-first from GET versions
+let fpSelected = null;     // version selected for raw/diff
+let fpCurrentSeq = null;   // live content seq (highest)
+let fpCurrent = '';        // live content buffer
+
+function relTime(ts) {
+  if (!ts) return '';
+  const d = Date.now() - ts;
+  if (d < 60000) return 'just now';
+  if (d < 3600000) return Math.round(d / 60000) + 'm ago';
+  if (d < 86400000) return Math.round(d / 3600000) + 'h ago';
+  const dt = new Date(ts);
+  return `${dt.getMonth() + 1}/${dt.getDate()} ${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+}
+
+function lineDiff(aText, bText) {
+  const a = String(aText || '').split('\n');
+  const b = String(bText || '').split('\n');
+  const N = a.length, M = b.length;
+  const dp = Array.from({ length: N + 1 }, () => new Array(M + 1).fill(0));
+  for (let i = N - 1; i >= 0; i--)
+    for (let j = M - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const rows = [];
+  let i = 0, j = 0;
+  while (i < N && j < M) {
+    if (a[i] === b[j]) { rows.push({ t: '=', n: j + 1, x: a[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { rows.push({ t: '-', n: i + 1, x: a[i] }); i++; }
+    else { rows.push({ t: '+', n: j + 1, x: b[j] }); j++; }
+  }
+  while (i < N) rows.push({ t: '-', n: ++i, x: a[i - 1] });
+  while (j < M) rows.push({ t: '+', n: ++j, x: b[j - 1] });
+  return rows;
+}
+
+function showFpEmpty(text) {
+  fpCode.innerHTML = '';
+  const d = document.createElement('div');
+  d.className = 'fpEmpty';
+  d.textContent = text;
+  fpCode.appendChild(d);
+}
+
+async function openFilePane(path) {
+  if (!projectId || !path) return;
+  fpPath = path;
+  fpTitle.textContent = path;
+  fpSelected = null; fpCurrentSeq = null; fpCurrent = '';
+  fpVersionsList = [];
+  fpRawBtn.classList.add('on'); fpDiffBtn.classList.remove('on');
+  fpRestore.disabled = true;
+  fpPane.hidden = false;
+  showFpEmpty('Loading…');
+  try {
+    const list = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(path)}`)).json();
+    if (!Array.isArray(list) || !list.length) { showFpEmpty('No version history for this file yet.'); return; }
+    fpVersionsList = list;
+    fpCurrentSeq = list[0].seq;
+    const cur = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(path)}&seq=${fpCurrentSeq}`)).json();
+    fpCurrent = (cur && cur.content != null) ? cur.content : '';
+    renderVersionList();
+    renderRaw();
+  } catch (e) {
+    showFpEmpty(`⚠ ${e.message}`);
+  }
+}
+
+function renderVersionList() {
+  fpVersions.innerHTML = '';
+  for (const v of fpVersionsList) {
+    const b = document.createElement('button');
+    b.className = 'fpv'
+      + (v.deleted ? ' deleted' : '')
+      + (v.seq === fpCurrentSeq ? ' current' : '')
+      + (fpSelected && fpSelected.seq === v.seq ? ' on' : '');
+    const tag = v.seq === fpCurrentSeq ? ' · current' : v.deleted ? ' · deleted' : '';
+    b.innerHTML = `<b>v${v.seq}</b>${tag}<small>${relTime(v.updated_at)}${v.deleted ? '' : ' · ' + (v.bytes ?? 0) + ' B'}</small>`;
+    b.onclick = () => selectVersion(v);
+    fpVersions.appendChild(b);
+  }
+}
+
+async function selectVersion(v) {
+  fpSelected = v;
+  fpRestore.disabled = (v.seq === fpCurrentSeq);
+  renderVersionList();
+  if (fpDiffBtn.classList.contains('on')) await renderDiff();
+  else renderRaw();
+}
+
+async function versionContent(seq) {
+  if (seq === fpCurrentSeq) return fpCurrent;
+  try {
+    const j = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(fpPath)}&seq=${seq}`)).json();
+    return (j && j.content != null) ? j.content : '';
+  } catch { return ''; }
+}
+
+function showFpRaw(text) {
+  fpCode.innerHTML = '';
+  const pre = document.createElement('pre');
+  pre.className = 'fpCodeView';
+  pre.textContent = text;
+  fpCode.appendChild(pre);
+}
+
+async function renderRaw() {
+  const v = fpSelected || fpVersionsList[0];
+  if (!v) return;
+  const text = await versionContent(v.seq);
+  if (v.deleted && text === '') showFpEmpty('This version deleted the file.');
+  else showFpRaw(text);
+}
+
+async function renderDiff() {
+  if (!fpSelected) { showFpEmpty('Select a previous version to see the diff against the current file.'); return; }
+  if (fpSelected.seq === fpCurrentSeq) { showFpEmpty('This is the current version — nothing has changed.'); return; }
+  const before = await versionContent(fpCurrentSeq);
+  const after = await versionContent(fpSelected.seq);
+  fpCode.innerHTML = '';
+  const pre = document.createElement('pre');
+  pre.className = 'diffView';
+  const rows = lineDiff(before, after);
+  if (!rows.length) { pre.textContent = '(identical)'; }
+  else for (const r of rows) {
+    const d = document.createElement('div');
+    d.className = r.t === '+' ? 'add' : r.t === '-' ? 'del' : '';
+    d.textContent = (r.t === '-' ? '− ' : r.t === '+' ? '+ ' : '  ') + r.x;
+    pre.appendChild(d);
+  }
+  fpCode.appendChild(pre);
+}
+
+async function restoreVersion() {
+  if (!projectId || !fpSelected || fpSelected.seq === fpCurrentSeq) return;
+  const which = fpSelected;
+  if (!confirm(`Restore ${fpPath} to version v${which.seq}?${which.deleted ? ' (this will delete the file)' : ''}`)) return;
+  try {
+    const r = await fetch(`${API}/api/projects/${projectId}/restore-version`, {
+      method: 'POST',
+      headers: authHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ path: fpPath, seq: which.seq }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    fpPane.hidden = true;
+    flashChip(fpPath);
+    await selectProject(projectId);
+  } catch (e) {
+    notify('Restore failed', e.message);
+    alert(`⚠ ${e.message}`);
+  }
+}
+
+/* ---------- Phase 2: project snapshots ---------- */
+const snapModal = $('snapModal'), snapList = $('snapList');
+let snapBusy = false;
+
+async function loadSnapshots() {
+  if (!projectId) return;
+  snapList.innerHTML = '<div class="fpEmpty">Loading…</div>';
+  const takeBtn = $('snapTake');
+  takeBtn.disabled = !canEdit || busy;
+  try {
+    const list = await (await fetch(`${API}/api/projects/${projectId}/snapshots`)).json();
+    snapList.innerHTML = '';
+    if (!Array.isArray(list) || !list.length) {
+      snapList.innerHTML = '<div class="fpEmpty">No snapshots yet — one is captured automatically after every generation.</div>';
+      return;
+    }
+    for (const s of list) {
+      const row = document.createElement('div');
+      row.className = 'snap';
+      const when = document.createElement('span'); when.className = 'sWhen'; when.textContent = relTime(s.created_at);
+      const label = document.createElement('span'); label.className = 'sLabel'; label.textContent = s.label || '(auto)';
+      const files = document.createElement('span'); files.className = 'sFiles'; files.textContent = `${s.files} files`;
+      const btn = document.createElement('button');
+      btn.className = 'chipBtn danger';
+      btn.textContent = 'Restore';
+      btn.disabled = !canEdit;
+      btn.onclick = () => restoreSnapshot(s);
+      row.append(when, label, files, btn);
+      snapList.appendChild(row);
+    }
+  } catch (e) {
+    snapList.innerHTML = `<div class="fpEmpty">⚠ ${e.message}</div>`;
+  }
+}
+
+async function takeSnapshot() {
+  if (!projectId || snapBusy) return;
+  snapBusy = true;
+  const btn = $('snapTake');
+  btn.disabled = true;
+  btn.textContent = 'Capturing…';
+  try {
+    const r = await fetch(`${API}/api/projects/${projectId}/snapshots`, {
+      method: 'POST',
+      headers: authHeaders({ 'content-type': 'application/json' }),
+      body: '{}',
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    await loadSnapshots();
+  } catch (e) {
+    notify('Snapshot failed', e.message);
+  } finally {
+    snapBusy = false;
+    btn.disabled = false;
+    btn.textContent = 'Take snapshot';
+  }
+}
+
+async function restoreSnapshot(s) {
+  if (!projectId || !confirm(`Restore the project to the snapshot from ${relTime(s.created_at)}?\nAll current files will be reverted to that state.`)) return;
+  try {
+    snapModal.hidden = true;
+    const r = await fetch(`${API}/api/projects/${projectId}/snapshots/${s.id}/restore`, {
+      method: 'POST',
+      headers: authHeaders({ 'content-type': 'application/json' }),
+      body: '{}',
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    await selectProject(projectId);
+  } catch (e) {
+    notify('Restore failed', e.message);
+    alert(`⚠ ${e.message}`);
+  }
+}
+
 /* ---------- wire up ---------- */
+renderTemplates();
+fpClose.onclick = () => { fpPane.hidden = true; };
+fpRawBtn.onclick = async () => { fpRawBtn.classList.add('on'); fpDiffBtn.classList.remove('on'); await renderRaw(); };
+fpDiffBtn.onclick = async () => { fpDiffBtn.classList.add('on'); fpRawBtn.classList.remove('on'); await renderDiff(); };
+fpRestore.onclick = restoreVersion;
+snapModal.addEventListener('click', (e) => { if (e.target === snapModal) snapModal.hidden = true; });
+$('snapClose').onclick = () => { snapModal.hidden = true; };
+$('snapTake').onclick = takeSnapshot;
+$('snapBtn').onclick = () => {
+  if (!projectId) { notify('No project open', 'Open or build a project before taking snapshots.'); return; }
+  snapModal.hidden = false;
+  loadSnapshots();
+};
 sendBtn.onclick = send;
 modelSel.addEventListener('change', () => localStorage.setItem('ab.model', modelSel.value));
 $('newBtn').onclick = () => { if (!busy) resetToNew(); };

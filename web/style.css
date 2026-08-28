@@ -651,3 +651,122 @@ button { font-family: inherit; }
   ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
   ::-webkit-scrollbar-track { background: transparent; }
 }
+
+/* ==========================================================================
+   Phase 2 — file viewer, snapshots, templates, drag-drop, chip flash
+   ========================================================================== */
+.chip { cursor: pointer; }
+.chip.flash { animation: chipFlash 0.9s ease; }
+@keyframes chipFlash {
+  0% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.55); }
+  50% { box-shadow: 0 0 0 6px rgba(79, 70, 229, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); }
+}
+
+#filePane {
+  position: absolute; top: 48px; left: 10px; right: 10px; bottom: 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg); z-index: 35;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+#filePane > header {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border); background: var(--surface-2);
+  font-weight: 700; font-size: 13.5px; color: var(--text);
+}
+#filePane > header .ms { color: var(--primary); }
+.fpTitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.fpToolbar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
+.chipBtn {
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-2);
+  border-radius: var(--radius-sm); padding: 4px 10px; font-size: 12.5px; font-weight: 600;
+  cursor: pointer;
+}
+.chipBtn:hover { border-color: var(--primary); color: var(--primary); }
+.chipBtn.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.chipBtn.danger { border-color: var(--danger); color: var(--danger); }
+.chipBtn.danger:hover:not(:disabled) { background: var(--danger); color: #fff; }
+.chipBtn:disabled { opacity: 0.45; cursor: default; }
+.fpBody { flex: 1; display: flex; min-height: 0; }
+.fpVersions {
+  width: 172px; min-width: 172px; border-right: 1px solid var(--border);
+  overflow-y: auto; padding: 8px;
+}
+.fpv {
+  display: block; width: 100%; text-align: left; padding: 7px 10px;
+  border-radius: var(--radius-sm); cursor: pointer; background: none; border: 0;
+  font-size: 12px; color: var(--text-2); margin-bottom: 2px;
+}
+.fpv small { color: var(--muted); display: block; }
+.fpv:hover { background: var(--surface-2); }
+.fpv.on { background: var(--primary-soft); color: var(--primary-strong); font-weight: 600; }
+.fpv.current { border-left: 2px solid var(--success); }
+.fpv.deleted { border-left: 2px solid var(--danger); color: var(--danger); }
+.fpCode {
+  flex: 1; min-height: 0; margin: 0; padding: 0; overflow: auto;
+  display: flex;
+}
+.fpCodeView {
+  flex: 1; margin: 0; padding: 14px;
+  font: 12px/1.55 ui-monospace, 'SF Mono', Monaco, monospace;
+  white-space: pre-wrap; word-break: break-word; color: var(--text-2);
+}
+.fpEmpty { color: var(--muted); font-size: 13px; padding: 20px 16px; }
+.diffView { font: 12px/1.55 ui-monospace, 'SF Mono', Monaco, monospace; white-space: pre-wrap; word-break: break-word; flex: 1; margin: 0; padding: 14px; overflow: auto; }
+.diffView .ln { color: var(--muted-2); }
+.diffView .add { background: var(--success-soft); color: #166534; display: block; }
+.diffView .del { background: var(--danger-soft); color: #991b1b; display: block; }
+
+#snapModal {
+  position: fixed; inset: 0; z-index: 95; background: rgba(15, 23, 42, 0.45);
+  display: flex; align-items: center; justify-content: center; padding: 18px;
+}
+#snapModal[hidden] { display: none; }
+.snapCard {
+  width: min(94vw, 540px); max-height: 78vh; display: flex; flex-direction: column;
+  background: var(--surface); border-radius: var(--radius-lg); overflow: hidden;
+  border: 1px solid var(--border); box-shadow: var(--shadow-lg);
+}
+.snapCard > header {
+  display: flex; align-items: center; gap: 8px; padding: 14px 18px;
+  border-bottom: 1px solid var(--border); font-weight: 700; font-size: 14.5px;
+  background: var(--surface-2); color: var(--text);
+}
+.snapCard > header .ms { color: var(--primary); }
+.snapCard > header button { margin-left: auto; }
+#snapList { flex: 1; overflow-y: auto; padding: 8px 16px; }
+.snap {
+  display: flex; align-items: center; gap: 10px; padding: 11px 4px;
+  border-bottom: 1px dashed var(--border);
+}
+.snap:last-child { border-bottom: 0; }
+.snap .sWhen { font-size: 13px; font-weight: 600; color: var(--text); min-width: 108px; }
+.snap .sLabel { flex: 1; font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snap .sFiles { font-size: 11.5px; color: var(--muted-2); min-width: 52px; text-align: right; }
+.snapCorner { display: flex; gap: 8px; padding: 12px 16px 16px; justify-content: flex-end; }
+
+#templates { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tplLabel { font-size: 11.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); margin-right: 2px; }
+.tpl {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
+  color: var(--text-2); padding: 4px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.tpl:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+
+#dropOverlay {
+  position: fixed; inset: 0; z-index: 120;
+  background: rgba(79, 70, 229, 0.10);
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+#dropOverlay span {
+  background: var(--surface); color: var(--primary);
+  padding: 16px 26px; border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); font-weight: 700; font-size: 15px;
+  border: 2px dashed var(--primary);
+}
+
+@media (max-width: 760px) {
+  #filePane { left: 0; right: 0; top: 0; bottom: 0; border-radius: 0; }
+  .fpVersions { width: 128px; min-width: 128px; }
+}

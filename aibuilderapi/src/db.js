@@ -34,6 +34,21 @@ CREATE TABLE IF NOT EXISTS events (
   pid TEXT NOT NULL, room TEXT NOT NULL, data TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_room ON events (pid, room, seq);
+CREATE TABLE IF NOT EXISTS file_versions (
+  project_id TEXT NOT NULL, path TEXT NOT NULL, seq INTEGER NOT NULL,
+  content TEXT, encoding TEXT NOT NULL DEFAULT 'utf8', updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, path, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_file_versions ON file_versions (project_id, path, seq);
+CREATE TABLE IF NOT EXISTS snapshots (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+  label TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_snapshots_project ON snapshots (project_id, created_at);
+CREATE TABLE IF NOT EXISTS snapshot_files (
+  snapshot_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL,
+  encoding TEXT NOT NULL DEFAULT 'utf8', PRIMARY KEY (snapshot_id, path)
+);
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   name TEXT UNIQUE NOT NULL,
@@ -91,8 +106,11 @@ useStore({
   },
   async deleteProject(pid) {
     db.prepare('DELETE FROM files WHERE project_id = ?').run(pid);
+    db.prepare('DELETE FROM file_versions WHERE project_id = ?').run(pid);
     db.prepare('DELETE FROM messages WHERE project_id = ?').run(pid);
     db.prepare('DELETE FROM events WHERE pid = ?').run(pid);
+    db.prepare('DELETE FROM snapshot_files WHERE snapshot_id IN (SELECT id FROM snapshots WHERE project_id = ?)').run(pid);
+    db.prepare('DELETE FROM snapshots WHERE project_id = ?').run(pid);
     db.prepare('DELETE FROM projects WHERE id = ?').run(pid);
     return { ok: true };
   },
@@ -145,6 +163,20 @@ useStore({
                 ON CONFLICT (project_id, path) DO UPDATE SET content = excluded.content,
                   encoding = excluded.encoding, updated_at = excluded.updated_at`)
       .run(pid, fpath, content, encoding, Date.now());
+    this.recordVersion(pid, fpath, content, encoding);
+  },
+  recordVersion(pid, fpath, content, encoding) {
+    const { s } = db.prepare(
+      'SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM file_versions WHERE project_id = ? AND path = ?'
+    ).get(pid, fpath);
+    db.prepare('INSERT INTO file_versions (project_id, path, seq, content, encoding, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(pid, fpath, s, content, encoding || 'utf8', Date.now());
+    // prune to the latest 60 revisions per file
+    db.prepare(`DELETE FROM file_versions WHERE project_id = ? AND path = ? AND seq <
+      (SELECT COALESCE(MIN(seq), 0) FROM (
+         SELECT seq FROM file_versions WHERE project_id = ? AND path = ?
+         ORDER BY seq DESC LIMIT 60))`)
+      .run(pid, fpath, pid, fpath);
   },
   async getFile(pid, fpath) {
     return db.prepare('SELECT * FROM files WHERE project_id = ? AND path = ?').get(pid, fpath) ?? null;
@@ -156,7 +188,70 @@ useStore({
   },
   async deleteFile(pid, fpath) {
     db.prepare('DELETE FROM files WHERE project_id = ? AND path = ?').run(pid, fpath);
+    // record a deletion tombstone so the file can be restored
+    const { s } = db.prepare(
+      'SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM file_versions WHERE project_id = ? AND path = ?'
+    ).get(pid, fpath);
+    db.prepare('INSERT INTO file_versions (project_id, path, seq, content, updated_at) VALUES (?, ?, ?, NULL, ?)')
+      .run(pid, fpath, s, Date.now());
     return { ok: true };
+  },
+  async fileVersions(pid, fpath) {
+    return db.prepare(
+      'SELECT seq, updated_at, content IS NULL AS deleted, length(content) AS bytes FROM file_versions WHERE project_id = ? AND path = ? ORDER BY seq DESC'
+    ).all(pid, fpath);
+  },
+  async getFileVersion(pid, fpath, seq) {
+    return db.prepare(
+      'SELECT seq, content, encoding, updated_at FROM file_versions WHERE project_id = ? AND path = ? AND seq = ?'
+    ).get(pid, fpath, seq) ?? null;
+  },
+  async restoreFileVersion(pid, fpath, seq) {
+    const v = db.prepare(
+      'SELECT content, encoding FROM file_versions WHERE project_id = ? AND path = ? AND seq = ?'
+    ).get(pid, fpath, seq);
+    if (!v) throw new Error('version not found');
+    if (v.content == null) {
+      await this.deleteFile(pid, fpath);
+      return { ok: true, deleted: true, seq };
+    }
+    await this.saveFile(pid, fpath, v.content, v.encoding || 'utf8');
+    return { ok: true, deleted: false, seq };
+  },
+  async listSnapshots(pid) {
+    return db.prepare(
+      `SELECT s.id, s.created_at, s.label,
+        (SELECT count(*) FROM snapshot_files f WHERE f.snapshot_id = s.id) AS files
+        FROM snapshots s WHERE s.project_id = ? ORDER BY s.created_at DESC`
+    ).all(pid);
+  },
+  async takeSnapshot(pid, label) {
+    const id = crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+    db.prepare('INSERT INTO snapshots (id, project_id, created_at, label) VALUES (?, ?, ?, ?)')
+      .run(id, pid, Date.now(), String(label || '').slice(0, 80));
+    db.prepare('INSERT INTO snapshot_files (snapshot_id, path, content, encoding) SELECT ?, path, content, COALESCE(encoding, \'utf8\') FROM files WHERE project_id = ?')
+      .run(id, pid);
+    // keep only the 20 most recent snapshots per project
+    db.prepare(`DELETE FROM snapshots WHERE project_id = ? AND id NOT IN
+      (SELECT id FROM snapshots WHERE project_id = ? ORDER BY created_at DESC LIMIT 20)`)
+      .run(pid, pid);
+    db.prepare('DELETE FROM snapshot_files WHERE snapshot_id NOT IN (SELECT id FROM snapshots)').run();
+    return { id, pid, created_at: Date.now(), label: String(label || '').slice(0, 80) };
+  },
+  async getSnapshot(pid, sid) {
+    const s = db.prepare('SELECT * FROM snapshots WHERE id = ? AND project_id = ?').get(sid, pid);
+    if (!s) return null;
+    s.files = db.prepare('SELECT path, content, encoding FROM snapshot_files WHERE snapshot_id = ? ORDER BY path').all(sid);
+    return s;
+  },
+  async restoreSnapshot(pid, sid) {
+    const s = await this.getSnapshot(pid, sid);
+    if (!s) throw new Error('snapshot not found');
+    const have = await this.listFiles(pid);
+    const keep = new Set(s.files.map((f) => f.path));
+    for (const f of s.files) await this.saveFile(pid, f.path, f.content, f.encoding || 'utf8');
+    for (const f of have) if (!keep.has(f.path)) await this.deleteFile(pid, f.path);
+    return { ok: true, files: s.files.length };
   },
   async setPlan(pid, plan) {
     // plan: array of {text, done} — stored as JSON on the project row

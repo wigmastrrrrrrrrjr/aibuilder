@@ -23,8 +23,11 @@ export function createD1Store(d1) {
     },
     async deleteProject(pid) {
       await d1.prepare('DELETE FROM files WHERE project_id = ?').bind(pid).run();
+      await d1.prepare('DELETE FROM file_versions WHERE project_id = ?').bind(pid).run();
       await d1.prepare('DELETE FROM messages WHERE project_id = ?').bind(pid).run();
       await d1.prepare('DELETE FROM events WHERE pid = ?').bind(pid).run();
+      await d1.prepare('DELETE FROM snapshot_files WHERE snapshot_id IN (SELECT id FROM snapshots WHERE project_id = ?)').bind(pid).run();
+      await d1.prepare('DELETE FROM snapshots WHERE project_id = ?').bind(pid).run();
       await d1.prepare('DELETE FROM projects WHERE id = ?').bind(pid).run();
       return { ok: true };
     },
@@ -77,6 +80,22 @@ export function createD1Store(d1) {
                         ON CONFLICT (project_id, path) DO UPDATE SET content = excluded.content,
                           encoding = excluded.encoding, updated_at = excluded.updated_at`)
         .bind(pid, fpath, content, encoding, Date.now()).run();
+      await this.recordVersion(pid, fpath, content, encoding);
+    },
+    async recordVersion(pid, fpath, content, encoding) {
+      const cur = await d1.prepare(
+        'SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM file_versions WHERE project_id = ? AND path = ?'
+      ).bind(pid, fpath).first();
+      const s = cur?.s || 1;
+      await d1.prepare('INSERT INTO file_versions (project_id, path, seq, content, encoding, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(pid, fpath, s, content, encoding || 'utf8', Date.now()).run();
+      const min = await d1.prepare(
+        `SELECT COALESCE(MIN(seq), 0) AS m FROM (
+           SELECT seq FROM file_versions WHERE project_id = ? AND path = ?
+           ORDER BY seq DESC LIMIT 60)`
+      ).bind(pid, fpath).first();
+      await d1.prepare('DELETE FROM file_versions WHERE project_id = ? AND path = ? AND seq < ?')
+        .bind(pid, fpath, min?.m || 0).run();
     },
     async getFile(pid, fpath) {
       return await d1.prepare('SELECT * FROM files WHERE project_id = ? AND path = ?')
@@ -90,7 +109,74 @@ export function createD1Store(d1) {
     },
     async deleteFile(pid, fpath) {
       await d1.prepare('DELETE FROM files WHERE project_id = ? AND path = ?').bind(pid, fpath).run();
+      const cur = await d1.prepare(
+        'SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM file_versions WHERE project_id = ? AND path = ?'
+      ).bind(pid, fpath).first();
+      await d1.prepare('INSERT INTO file_versions (project_id, path, seq, content, updated_at) VALUES (?, ?, ?, NULL, ?)')
+        .bind(pid, fpath, cur?.s || 1, Date.now()).run();
       return { ok: true };
+    },
+    async fileVersions(pid, fpath) {
+      const { results } = await d1.prepare(
+        'SELECT seq, updated_at, content IS NULL AS deleted, length(content) AS bytes FROM file_versions WHERE project_id = ? AND path = ? ORDER BY seq DESC'
+      ).bind(pid, fpath).all();
+      return results;
+    },
+    async getFileVersion(pid, fpath, seq) {
+      return await d1.prepare(
+        'SELECT seq, content, encoding, updated_at FROM file_versions WHERE project_id = ? AND path = ? AND seq = ?'
+      ).bind(pid, fpath, seq).first();
+    },
+    async restoreFileVersion(pid, fpath, seq) {
+      const v = await d1.prepare(
+        'SELECT content, encoding FROM file_versions WHERE project_id = ? AND path = ? AND seq = ?'
+      ).bind(pid, fpath, seq).first();
+      if (!v) throw new Error('version not found');
+      if (v.content == null) {
+        await this.deleteFile(pid, fpath);
+        return { ok: true, deleted: true, seq };
+      }
+      await this.saveFile(pid, fpath, v.content, v.encoding || 'utf8');
+      return { ok: true, deleted: false, seq };
+    },
+    async listSnapshots(pid) {
+      const { results } = await d1.prepare(
+        `SELECT s.id, s.created_at, s.label,
+          (SELECT count(*) FROM snapshot_files f WHERE f.snapshot_id = s.id) AS files
+          FROM snapshots s WHERE s.project_id = ? ORDER BY s.created_at DESC`
+      ).bind(pid).all();
+      return results;
+    },
+    async takeSnapshot(pid, label) {
+      const id = crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+      await d1.prepare('INSERT INTO snapshots (id, project_id, created_at, label) VALUES (?, ?, ?, ?)')
+        .bind(id, pid, Date.now(), String(label || '').slice(0, 80)).run();
+      await d1.prepare('INSERT INTO snapshot_files (snapshot_id, path, content, encoding) SELECT ?, path, content, COALESCE(encoding, \'utf8\') FROM files WHERE project_id = ?')
+        .bind(id, pid).run();
+      await d1.prepare(`DELETE FROM snapshots WHERE project_id = ? AND id NOT IN
+        (SELECT id FROM snapshots WHERE project_id = ? ORDER BY created_at DESC LIMIT 20)`)
+        .bind(pid, pid).run();
+      await d1.prepare('DELETE FROM snapshot_files WHERE snapshot_id NOT IN (SELECT id FROM snapshots)').run();
+      return { id, pid, created_at: Date.now(), label: String(label || '').slice(0, 80) };
+    },
+    async getSnapshot(pid, sid) {
+      const s = await d1.prepare('SELECT * FROM snapshots WHERE id = ? AND project_id = ?')
+        .bind(sid, pid).first();
+      if (!s) return null;
+      const { results } = await d1.prepare(
+        'SELECT path, content, encoding FROM snapshot_files WHERE snapshot_id = ? ORDER BY path'
+      ).bind(sid).all();
+      s.files = results;
+      return s;
+    },
+    async restoreSnapshot(pid, sid) {
+      const s = await this.getSnapshot(pid, sid);
+      if (!s) throw new Error('snapshot not found');
+      const have = await this.listFiles(pid);
+      const keep = new Set(s.files.map((f) => f.path));
+      for (const f of s.files) await this.saveFile(pid, f.path, f.content, f.encoding || 'utf8');
+      for (const f of have) if (!keep.has(f.path)) await this.deleteFile(pid, f.path);
+      return { ok: true, files: s.files.length };
     },
     async addMessage(pid, role, content) {
       await d1.prepare(

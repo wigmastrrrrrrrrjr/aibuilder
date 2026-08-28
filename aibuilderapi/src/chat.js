@@ -422,6 +422,9 @@ chat.post('/', async (c) => {
           }
         }
         if (raw.trim()) await store.addMessage(pid, 'assistant', raw);
+        // Phase 2: capture a point-in-time snapshot after each generation so
+        // the project can be rolled back to any prior state (best-effort).
+        try { await store.takeSnapshot(pid, message.slice(0, 60)); } catch { /* snapshots are best-effort */ }
         send({ type: 'done', projectId: pid, files: written, edited, deleted, model });
         // co-build: tell everyone else watching this project that it changed
         try {

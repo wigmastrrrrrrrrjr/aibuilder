@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
-<link rel="stylesheet" href="style.css?v=13">
+<link rel="stylesheet" href="style.css?v=14">
 </head>
 <body>
 
@@ -67,6 +67,7 @@
       </div>
       <div id="activity" hidden><span id="activityText"></span><pre id="rawStream"></pre></div>
       <div id="composer">
+        <div id="templates"></div>
         <div id="composerTop">
           <span class="fieldLabel">Model</span>
           <select id="modelSel" title="Model used for generation"></select>
@@ -83,6 +84,7 @@
       <header id="previewHeader">
         <div id="fileChips"></div>
         <div class="headerBtns">
+          <button id="snapBtn" class="iconBtn" title="Project snapshots — roll back to any prior state"><span class="ms">history</span></button>
           <button id="refreshBtn" class="iconBtn" title="Reload preview"><span class="ms">refresh</span></button>
           <button id="openBtn" class="iconBtn" title="Open in new tab"><span class="ms">open_in_new</span></button>
         </div>
@@ -97,6 +99,25 @@
         </header>
         <ul id="planList"></ul>
       </aside>
+
+      <!-- file viewer: click a chip in #previewHeader to open (Phase 2) -->
+      <aside id="filePane" hidden>
+        <header>
+          <span class="ms">description</span>
+          <span id="fpTitle" class="fpTitle">index.html</span>
+          <button id="fpClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+        </header>
+        <div class="fpToolbar">
+          <button id="fpRawBtn" class="chipBtn on" title="Show the file as-is">Raw</button>
+          <button id="fpDiffBtn" class="chipBtn" title="Compare the loaded version with the current file">Diff</button>
+          <span style="flex:1"></span>
+          <button id="fpRestore" class="chipBtn danger" disabled title="Restore the loaded version">Restore version</button>
+        </div>
+        <div class="fpBody">
+          <div class="fpVersions" id="fpVersions"></div>
+          <div class="fpCode" id="fpCode"></div>
+        </div>
+      </aside>
     </section>
   </main>
 </div>
@@ -109,6 +130,22 @@
 </div>
 
 <div id="scrim" hidden></div>
+
+<!-- project snapshots dialog (Phase 2) -->
+<div id="snapModal" hidden>
+  <div class="snapCard">
+    <header><span class="ms">history</span> Project snapshots
+      <button id="snapClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+    </header>
+    <div id="snapList"></div>
+    <div class="snapCorner">
+      <button id="snapTake" class="chipBtn" title="Capture the current state as a snapshot">Take snapshot</button>
+    </div>
+  </div>
+</div>
+
+<!-- drag-and-drop target overlay (Phase 2) -->
+<div id="dropOverlay" hidden><span>Drop files to add them to this project</span></div>
 
 <div id="authGate" hidden>
   <div class="authCard">
@@ -171,6 +208,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=13"></script>
+    <script src="app.js?v=14"></script>
 </body>
 </html>

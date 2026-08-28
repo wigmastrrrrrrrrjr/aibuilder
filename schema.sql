@@ -71,3 +71,35 @@ CREATE TABLE IF NOT EXISTS events (
   data TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_room ON events (pid, room, seq);
+
+-- Per-file revision history (append-only). content NULL marks a deletion
+-- tombstone so deleted files can be restored. Newest revision is always the
+-- live content in `files`. Pruned to the latest N revisions per file.
+CREATE TABLE IF NOT EXISTS file_versions (
+  project_id TEXT NOT NULL,
+  path       TEXT NOT NULL,
+  seq        INTEGER NOT NULL,
+  content    TEXT,
+  encoding   TEXT NOT NULL DEFAULT 'utf8',
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, path, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_file_versions ON file_versions (project_id, path, seq);
+
+-- Project snapshots (point-in-time captures of every file). Auto-created at
+-- the end of each generation; lets users roll back to any prior state.
+CREATE TABLE IF NOT EXISTS snapshots (
+  id         TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  label      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_snapshots_project ON snapshots (project_id, created_at);
+
+CREATE TABLE IF NOT EXISTS snapshot_files (
+  snapshot_id TEXT NOT NULL,
+  path        TEXT NOT NULL,
+  content     TEXT NOT NULL,
+  encoding    TEXT NOT NULL DEFAULT 'utf8',
+  PRIMARY KEY (snapshot_id, path)
+);

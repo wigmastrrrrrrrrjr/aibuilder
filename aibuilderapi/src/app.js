@@ -141,6 +141,77 @@ app.post('/api/projects/:pid/remix', requireUser, async (c) => {
   return c.json(await store.remix(src.id, c.get('user').name), 201);
 });
 
+// ---- Phase 2: file version history & undo/redo -----------------------------
+// list revisions of one file                 GET  /api/projects/:pid/versions?path=index.html
+// fetch a specific revision's raw content    GET  /api/projects/:pid/versions?path=…&seq=N
+const versionPath = (c) => String(c.req.query('path') || '').trim();
+app.get('/api/projects/:pid/versions', async (c) => {
+  const pid = c.req.param('pid');
+  const fpath = versionPath(c);
+  if (!fpath) return c.json({ error: 'path query required' }, 400);
+  if (!(await store.getProject(pid))) return c.json({ error: 'not found' }, 404);
+  const seq = Number(c.req.query('seq')) || 0;
+  if (seq) {
+    const v = await store.getFileVersion(pid, fpath, seq);
+    if (!v) return c.json({ error: 'version not found' }, 404);
+    return c.json(v);
+  }
+  return c.json(await store.fileVersions(pid, fpath));
+});
+
+// restore a specific revision of one file (undo/redo per file)
+app.post('/api/projects/:pid/restore-version', requireUser, async (c) => {
+  const pid = c.req.param('pid');
+  const project = await store.getProject(pid);
+  if (!project) return c.json({ error: 'not found' }, 404);
+  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
+  const body = await c.req.json().catch(() => ({}));
+  const fpath = String(body.path || '').trim();
+  const seq = Number(body.seq) || 0;
+  if (!fpath || !seq) return c.json({ error: 'path and seq required' }, 400);
+  try {
+    return c.json(await store.restoreFileVersion(pid, fpath, seq));
+  } catch (e) {
+    return c.json({ error: String(e.message || e) }, 400);
+  }
+});
+
+// ---- Phase 2: project snapshots --------------------------------------------
+app.get('/api/projects/:pid/snapshots', async (c) => {
+  const pid = c.req.param('pid');
+  if (!(await store.getProject(pid))) return c.json({ error: 'not found' }, 404);
+  return c.json(await store.listSnapshots(pid));
+});
+
+app.post('/api/projects/:pid/snapshots', requireUser, async (c) => {
+  const pid = c.req.param('pid');
+  const project = await store.getProject(pid);
+  if (!project) return c.json({ error: 'not found' }, 404);
+  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
+  const body = await c.req.json().catch(() => ({}));
+  return c.json(await store.takeSnapshot(pid, String(body.label || '').trim()), 201);
+});
+
+app.get('/api/projects/:pid/snapshots/:sid', async (c) => {
+  const pid = c.req.param('pid');
+  const s = await store.getSnapshot(pid, c.req.param('sid'));
+  if (!s) return c.json({ error: 'not found' }, 404);
+  return c.json(s);
+});
+
+// restore a whole project to a prior snapshot (roll back a bad generation)
+app.post('/api/projects/:pid/snapshots/:sid/restore', requireUser, async (c) => {
+  const pid = c.req.param('pid');
+  const project = await store.getProject(pid);
+  if (!project) return c.json({ error: 'not found' }, 404);
+  if (!canWrite(project, c.get('user'))) return c.json({ error: "you don't own this project" }, 403);
+  try {
+    return c.json(await store.restoreSnapshot(pid, c.req.param('sid')));
+  } catch (e) {
+    return c.json({ error: String(e.message || e) }, 400);
+  }
+});
+
 // discovery feed
 app.get('/api/discover', async (c) => c.json(await store.discover()));
 
