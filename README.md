@@ -114,12 +114,12 @@ own repo or deployed straight to Workers; `web/` deploys to Pages as-is.
 - [x] BYOK support (user-supplied Ollama keys)
 
 ### Phase 2 — Iteration & Polish
-- [ ] Iterative edit UX (diff view, selective reverts)
-- [ ] File-level undo/redo in the builder
-- [ ] Streaming block highlighting in chat (visual parse feedback)
-- [ ] Drag-and-drop file upload into projects
-- [ ] Project versioning / snapshots (restore any prior state)
-- [ ] Prompt templates (pre-filled prompts for common app types)
+- [x] Iterative edit UX (diff view, selective reverts)
+- [x] File-level undo/redo in the builder
+- [x] Streaming block highlighting in chat (visual parse feedback)
+- [x] Drag-and-drop file upload into projects
+- [x] Project versioning / snapshots (restore any prior state)
+- [x] Prompt templates (pre-filled prompts for common app types)
 
 ### Phase 3 — Generated App Backend
 - [ ] Auth for generated apps (`creat.auth` — signup/login/roles)
