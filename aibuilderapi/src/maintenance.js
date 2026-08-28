@@ -29,6 +29,7 @@ const MAINTENANCE_HTML = `<!doctype html>
   .icon{width:56px;height:56px;margin:0 auto 20px;border-radius:16px;display:grid;place-items:center;background:var(--primary-soft);color:var(--primary)}
   h1{font-size:20px;font-weight:800;margin-bottom:10px}
   p{color:var(--muted);font-size:15px;line-height:1.6}
+  .eta{display:block;margin-top:8px;font-size:13px;font-weight:600;color:var(--primary);font-variant-numeric:tabular-nums}
   .pill{display:inline-block;margin-top:22px;font-size:11px;font-weight:600;color:var(--primary);background:var(--primary-soft);border:1px solid #e3e2fb;padding:4px 12px;border-radius:999px;letter-spacing:.02em}
 </style>
 </head>
@@ -46,9 +47,27 @@ const MAINTENANCE_HTML = `<!doctype html>
     </div>
     <h1>whoops looks like we are doing a maintenance</h1>
     <p>be back in a couple hours</p>
+    <span class="eta" id="eta"></span>
     <span class="pill">Scheduled maintenance</span>
   </div>
 </main>
+<script>
+(function () {
+  var back = new Date('2026-08-28T18:30:00Z').getTime();
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function tick() {
+    var el = document.getElementById('eta');
+    if (!el) return;
+    var d = back - Date.now();
+    if (d <= 0) { el.textContent = 'Back very shortly \u2014 flipping the switch.'; return; }
+    var s = Math.floor(d / 1000);
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    el.textContent = 'Back in ' + h + 'h ' + pad(m) + 'm ' + pad(sec) + 's' +
+      ' \u00b7 around ' + new Date(back).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  tick(); setInterval(tick, 1000);
+})();
+</script>
 </body>
 </html>`;
 
