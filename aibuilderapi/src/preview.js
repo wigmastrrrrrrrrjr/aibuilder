@@ -87,7 +87,7 @@ let BAAS_SDK_RAW = `(function () {
   function friendlyError(status) {
     if (status === 429) return 'Whoopsie! The server hit its head — this project was using a little too much. Come back later!';
     if (status === 404) return 'Whoopsie! The server hit its head — project might not exist or has been deleted!';
-    if (status === 403) return 'Whoopsie! Access denied — you don\'t have permission for this.';
+    if (status === 403) return "Whoopsie! Access denied — you don't have permission for this.";
     if (status === 500) return 'Whoopsie! The server hit its head — something went wrong. Try again!';
     return 'Whoopsie! The server hit its head — something went wrong.';
   }
