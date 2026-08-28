@@ -1,7 +1,7 @@
 // Maintenance lock for the whole platform. Flip MAINTENANCE_MODE to true to
 // temporarily take down every API and page; flip back to false to restore.
 
-export const MAINTENANCE_MODE = true;
+export const MAINTENANCE_MODE = false;
 
 export const MAINTENANCE_MESSAGE =
   'whoops looks like we are doing a maintenance - revamping basically the entire AI and fixing a couple of vulnerabilities, emails are now stored as hashes not plain text';

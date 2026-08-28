@@ -3,64 +3,232 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aibuilder — maintenance</title>
+<title>aibuilder — AI application studio</title>
+<meta name="description" content="Describe an app, and aibuilder generates and previews it live.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>
-  :root{--bg:#f3f5f9;--surface:#fff;--border:#e4e8f1;--text:#0f172a;--muted:#64748b;--primary:#4f46e5;--primary-soft:#eef2ff}
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
-  .topbar{display:flex;align-items:center;gap:10px;padding:16px 28px;background:var(--surface);border-bottom:1px solid var(--border)}
-  .brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--text)}
-  .brandMark{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:linear-gradient(135deg,#6366f1,#4f46e5 55%,#4338ca);color:#fff;font-size:16px;font-weight:800}
-  .brandName{font-size:16px;font-weight:700;letter-spacing:-.01em}
-  .brandName b{color:var(--primary);font-weight:800}
-  main{display:grid;place-items:center;min-height:calc(100vh - 63px);padding:40px 20px}
-  .card{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:48px 40px;max-width:520px;text-align:center;box-shadow:0 12px 32px rgba(15,23,42,.06)}
-  .icon{width:56px;height:56px;margin:0 auto 20px;border-radius:16px;display:grid;place-items:center;background:var(--primary-soft);color:var(--primary)}
-  h1{font-size:20px;font-weight:800;margin-bottom:10px}
-  p{color:var(--muted);font-size:15px;line-height:1.6}
-  .lead{color:var(--text);font-weight:600;font-size:16px}
-  .eta{display:block;margin-top:8px;font-size:13px;font-weight:600;color:var(--primary);font-variant-numeric:tabular-nums}
-  .pill{display:inline-block;margin-top:22px;font-size:11px;font-weight:600;color:var(--primary);background:var(--primary-soft);border:1px solid #e3e2fb;padding:4px 12px;border-radius:999px;letter-spacing:.02em}
-</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
+<link rel="stylesheet" href="style.css?v=15">
 </head>
 <body>
+
+<!-- Enterprise top navigation -->
 <header class="topbar">
-  <a class="brand" href="/">
-    <span class="brandMark">a</span>
-    <span class="brandName">a<b>ibuilder</b></span>
-  </a>
-</header>
-<main>
-  <div class="card">
-    <div class="icon">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-    </div>
-    <h1>whoops looks like we are doing a maintenance</h1>
-    <p class="lead">we are revamping basically the entire AI and fixing a couple of vulnerabilities</p>
-    <p>emails are now stored as hashes, not plain text - your data is protected</p>
-    <span class="eta" id="eta"></span>
-    <span class="pill">Scheduled maintenance</span>
+  <a class="brand" href="index.html"><div class="logo">a<span>ibuilder</span></div></a>
+  <div class="topbarRight">
+    <button id="whoBtn" title="Account — click to log out" hidden></button>
   </div>
-</main>
-<script>
-(function () {
-  var back = new Date('2026-08-28T18:30:00Z').getTime();
-  function pad(n) { return String(n).padStart(2, '0'); }
-  function tick() {
-    var el = document.getElementById('eta');
-    if (!el) return;
-    var d = back - Date.now();
-    if (d <= 0) { el.textContent = 'Back very shortly \u2014 flipping the switch.'; return; }
-    var s = Math.floor(d / 1000);
-    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-    el.textContent = 'Back in ' + h + 'h ' + pad(m) + 'm ' + pad(sec) + 's' +
-      ' \u00b7 around ' + new Date(back).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-  tick(); setInterval(tick, 1000);
-})();
-</script>
+</header>
+
+<div id="app">
+  <aside id="sidebar">
+    <div class="navSection">Workspace</div>
+    <button id="newBtn" class="navItem primary" title="Start a new app"><span class="ms">add</span> New project</button>
+    <label id="uploadBtn" class="navItem" for="uploadInput" title="Upload an existing HTML/JS app"><span class="ms">upload_file</span> Upload app</label>
+    <input type="file" id="uploadInput" multiple hidden>
+    <a id="discoverLink" class="navItem" href="discover.html"><span class="ms">explore</span> Discover apps</a>
+
+    <div class="navDivider"></div>
+    <div class="navSection">Your projects</div>
+    <div id="projectList"></div>
+
+    <button id="teamsBtn" class="navItem" title="Teams — share projects, credits and live presence"><span class="ms">groups</span> Teams</button>
+    <button id="keyBtn" class="navItem" title="Use your own Ollama API key"><span class="ms">key</span> <i id="keyLbl" style="font-style:normal">Own API key</i></button>
+    <div id="metaBar"></div>
+  </aside>
+
+  <main id="main">
+    <section id="chatPane">
+      <div id="cursorLayer"></div>
+      <header id="chatHeader">
+        <span class="headerBtns">
+          <button id="menuBtn" title="Show history"><span class="ms">menu</span></button>
+        </span>
+        <span id="projName" title="Click to rename">New app</span>
+        <span id="liveBadge" hidden></span>
+        <button id="renameBtn" class="iconBtn" title="Rename project" hidden><span class="ms">edit</span></button>
+        <span class="headerBtns">
+          <button id="planBtn" class="iconBtn" title="Plan" hidden><span class="ms">checklist</span><em id="planCount"></em></button>
+          <button id="publishBtn" title="Publish to the discovery feed" disabled><span class="ms">publish</span><i id="pubLbl" style="font-style:normal">Publish</i></button>
+          <button id="delBtn" class="iconBtn" title="Delete project" hidden><span class="ms">delete</span></button>
+        </span>
+      </header>
+      <div id="refactorBar" hidden><span class="ms">autorenew</span> Refactoring code structure…</div>
+      <div id="messages">
+        <div class="empty">
+          <div class="emptyMark"><span class="ms">auto_awesome</span></div>
+          <h1>Describe it. aibuilder ships it.</h1>
+          <p>Type what you want to build and the platform engineers the full app with you —<br>
+             a live, editable preview on the right the whole way through.</p>
+          <div class="emptySteps">
+            <div class="step"><div class="n">01</div><div class="t">Describe</div><div class="s">“A billing dashboard with charts and CSV export.”</div></div>
+            <div class="step"><div class="n">02</div><div class="t">Iterate</div><div class="s">Refine with follow-up prompts in the same thread.</div></div>
+            <div class="step"><div class="n">03</div><div class="t">Publish</div><div class="s">Ship it to the discovery feed in one click.</div></div>
+          </div>
+        </div>
+      </div>
+      <div id="activity" hidden><span id="activityText"></span><pre id="rawStream"></pre></div>
+      <div id="composer">
+        <div id="templates"></div>
+        <div id="composerTop">
+          <span class="fieldLabel">Model</span>
+          <select id="modelSel" title="Model used for generation"></select>
+          <span class="promptHint">Enter to send · Shift+Enter for a new line</span>
+        </div>
+        <div id="composerMain">
+          <textarea id="promptBox" rows="3" placeholder="Describe the app you want to build…"></textarea>
+          <button id="sendBtn" title="Generate"><span class="ms">arrow_upward</span></button>
+        </div>
+      </div>
+    </section>
+
+    <section id="previewPane">
+      <header id="previewHeader">
+        <div id="fileChips"></div>
+        <div class="headerBtns">
+          <button id="snapBtn" class="iconBtn" title="Project snapshots — roll back to any prior state"><span class="ms">history</span></button>
+          <button id="refreshBtn" class="iconBtn" title="Reload preview"><span class="ms">refresh</span></button>
+          <button id="openBtn" class="iconBtn" title="Open in new tab"><span class="ms">open_in_new</span></button>
+        </div>
+      </header>
+      <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
+              src="about:blank"></iframe>
+
+      <!-- plan sidebar: docked rail on desktop, slide-over on mobile -->
+      <aside id="planPane" hidden>
+        <header><span class="ms">checklist</span> Build plan
+          <button id="planClose" title="Close"><span class="ms">close</span></button>
+        </header>
+        <ul id="planList"></ul>
+      </aside>
+
+      <!-- file viewer: click a chip in #previewHeader to open (Phase 2) -->
+      <aside id="filePane" hidden>
+        <header>
+          <span class="ms">description</span>
+          <span id="fpTitle" class="fpTitle">index.html</span>
+          <button id="fpClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+        </header>
+        <div class="fpToolbar">
+          <button id="fpRawBtn" class="chipBtn on" title="Show the file as-is">Raw</button>
+          <button id="fpDiffBtn" class="chipBtn" title="Compare the loaded version with the current file">Diff</button>
+          <span style="flex:1"></span>
+          <button id="fpRestore" class="chipBtn danger" disabled title="Restore the loaded version">Restore version</button>
+        </div>
+        <div class="fpBody">
+          <div class="fpVersions" id="fpVersions"></div>
+          <div class="fpCode" id="fpCode"></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+</div>
+
+<!-- error notification tray -->
+<button id="notifBadge" hidden title="Problems"><span class="ms">priority_high</span><em id="notifCount">0</em></button>
+<div id="notifPanel" hidden>
+  <header><span class="ms">warning</span> Problems</header>
+  <div id="notifList"></div>
+</div>
+
+<div id="scrim" hidden></div>
+
+<!-- project snapshots dialog (Phase 2) -->
+<div id="snapModal" hidden>
+  <div class="snapCard">
+    <header><span class="ms">history</span> Project snapshots
+      <button id="snapClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+    </header>
+    <div id="snapList"></div>
+    <div class="snapCorner">
+      <button id="snapTake" class="chipBtn" title="Capture the current state as a snapshot">Take snapshot</button>
+    </div>
+  </div>
+</div>
+
+<!-- drag-and-drop target overlay (Phase 2) -->
+<div id="dropOverlay" hidden><span>Drop files to add them to this project</span></div>
+
+<!-- teams (teambuild) -->
+<div id="teamModal" hidden>
+  <div class="teamCard">
+    <header><span class="ms">groups</span> Teams
+      <button id="teamClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+    </header>
+    <div id="teamList" class="teamList"><div class="fpEmpty">Loading…</div></div>
+    <div class="teamRowIn">
+      <input id="teamName" class="teamInput" placeholder="New team name" maxlength="40" autocomplete="off">
+      <button id="teamCreate" class="chipBtn">Create team</button>
+    </div>
+    <div class="teamRowIn">
+      <input id="joinCode" class="teamInput" placeholder="Paste an invite code or link to join" maxlength="200" autocomplete="off" spellcheck="false">
+      <button id="teamJoin" class="chipBtn">Join team</button>
+    </div>
+  </div>
+</div>
+
+<div id="authGate" hidden>
+  <div class="authCard">
+    <aside class="authBrand">
+      <div>
+        <a class="logo" href="index.html" title="aibuilder">a<span>ibuilder</span></a>
+        <h1 class="bHead">Build production apps by describing them.</h1>
+        <p class="bSub">aibuilder engineers, iterates, and previews your app in real time — one prompt at a time.</p>
+        <div class="bPoints">
+          <div class="bPoint"><span class="ms">auto_awesome</span> AI-generated code with a live preview</div>
+          <div class="bPoint"><span class="ms">cache</span> 30 free credits every single day</div>
+          <div class="bPoint"><span class="ms">public</span> Publish to a public Discover feed</div>
+          <div class="bPoint"><span class="ms">lock</span> Bring your own API key for unlimited use</div>
+        </div>
+      </div>
+      <div class="bLegal">By continuing you agree to the <a href="tos.html" target="_blank" rel="noopener">Terms of Service</a> and <a href="tou.html" target="_blank" rel="noopener">Terms of Use</a>.</div>
+    </aside>
+
+    <div class="authForms">
+      <!-- Step 1: Signup form (username + password + email) -->
+      <form id="authForm" class="authFormBox" autocomplete="on">
+        <h1 id="authTitle">Create your account</h1>
+        <p id="authSub">Sign up free to build apps with AI — it takes 10 seconds.</p>
+        <input id="authUser" placeholder="username" autocomplete="username" required>
+        <input id="authPass" type="password" placeholder="password (min 6 characters)" autocomplete="new-password" required>
+        <input id="authEmail" type="email" placeholder="email address" autocomplete="email" required>
+        <label id="dobRow"><span>Date of birth (you must be 13 or older)</span>
+          <input id="authDob" type="date" required></label>
+        <div id="authErr"></div>
+        <label id="agreeRow"><input type="checkbox" id="agreeCheck" required>
+          <span>I agree to the <a href="tos.html" target="_blank" rel="noopener">Terms of Service</a> and <a href="tou.html" target="_blank" rel="noopener">Terms of Use</a>.</span></label>
+        <button id="authGo" type="submit">Sign up</button>
+        <button id="authSwitch" type="button">Already have an account? Log in</button>
+      </form>
+      <!-- Step 2: Email verification (shown after signup) -->
+      <form id="verifyForm" class="authFormBox" hidden>
+        <h1 id="authTitle2" class="hShared">Check your email</h1>
+        <p id="verifySub">We sent a 6-digit code to verify your email.</p>
+        <input id="verifyCode" placeholder="000000" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
+        <div id="verifyErr"></div>
+        <button id="verifyGo" type="submit">Verify & create account</button>
+        <button id="verifyResend" type="button">Resend code</button>
+        <button id="verifyBack" type="button">← Back to signup</button>
+      </form>
+      <!-- Step 3: 2FA verification (ai_dev only) -->
+      <form id="tfaForm" class="authFormBox" hidden>
+        <h1 id="authTitle3" class="hShared">Verification required</h1>
+        <p id="tfaSub">A 6-digit code was sent to your email.</p>
+        <input id="tfaCode" placeholder="000000" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
+        <div id="tfaErr"></div>
+        <button id="tfaGo" type="submit">Verify</button>
+        <button id="tfaBack" type="button">← Back to login</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script>
+      window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
+      window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
+    </script>
+    <script src="app.js?v=15"></script>
 </body>
 </html>
