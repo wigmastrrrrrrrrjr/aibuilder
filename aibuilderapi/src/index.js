@@ -7,6 +7,8 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { app as apiApp } from './app.js';
+import dns from 'node:dns';
+dns.setDefaultResultOrder('ipv4first');
 
 // ---- tiny .env loader (no dependency) ---------------------------------------
 const here = path.dirname(fileURLToPath(import.meta.url));

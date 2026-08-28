@@ -23,6 +23,11 @@ Rules:
 - Do not explain or narrate. Match the app's existing style and conventions.
 - The file must be complete and self-contained so it works on its own.`;
 
+const SUB_LOCAL_MODEL = 'tinyllama:1.1b';
+const PROVIDER_CAPS = { mistral: 4, ollama: 4, local: 4 };
+const active = { mistral: 0, ollama: 0, local: 0 };
+let subRound = 0;
+
 export const chat = new Hono();
 
 chat.post('/', async (c) => {
@@ -188,6 +193,7 @@ chat.post('/', async (c) => {
           }
         }
       }
+      active[provider]++;
 
       const parser = new FileStreamer();
       const written = [];
@@ -258,81 +264,110 @@ chat.post('/', async (c) => {
 
       // Spin off a parallel sub-agent: a focused single-file generator that
       // runs concurrently with the main response and merges its FILE output in.
+      const providerNames = ['mistral', 'ollama', 'local'];
+      const providerAvailable = (id) =>
+        id === 'mistral' ? Boolean(mistralKey)
+          : id === 'local' ? Boolean(localUrl)
+            : Boolean(key);
+      const cloudModel = model.startsWith('local:') ? (getVar('OLLAMA_MODEL') || 'gemma4:31b') : model;
+
+      // Route each sub-agent to a different provider than the main request
+      // when slots are free, round-robin across providers that have capacity,
+      // so Mistral never exceeds its 4-concurrent-model limit.
+      const pickSubProvider = () => {
+        const candidates = [];
+        for (const id of providerNames) {
+          if (id === provider || !providerAvailable(id)) continue;
+          if (active[id] < PROVIDER_CAPS[id]) candidates.push(id);
+        }
+        if (!candidates.length && providerAvailable(provider) && active[provider] < PROVIDER_CAPS[provider]) candidates.push(provider);
+        if (!candidates.length) return null;
+        const p = candidates[subRound++ % candidates.length];
+        active[p]++;
+        return p;
+      };
+
       const spawnSubAgent = async (subPath, task) => {
+        const pid = pickSubProvider();
+        if (!pid) throw new Error('all providers are at capacity — retry in a moment');
         const msg = [
           { role: 'system', content: SUB_AGENT_PROMPT },
           { role: 'user', content: `Your one assigned file: ${subPath}\n\n` +
             `Task from the main engineer:\n${task}\n\n` +
             `Return ONLY a single <<<FILE:${subPath}>>> ... <<<END>>> block.` },
         ];
-        let r;
-        if (provider === 'mistral') {
-          r = await fetch(MISTRAL_URL, {
-            method: 'POST',
-            signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
-            headers: { Authorization: `Bearer ${mistralKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: MISTRAL_MODEL, messages: msg, stream: true }),
-          });
-          if (!r.ok) throw new Error(`mistral ${r.status}`);
-        } else if (provider === 'local' && localUrl) {
-          r = await fetch(`${localUrl}/api/chat`, {
-            method: 'POST',
-            signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: localModel, messages: msg, stream: true }),
-          });
-          if (!r.ok) throw new Error(`local ollama ${r.status}`);
-        } else {
-          r = await fetch(OLLAMA_URL, {
-            method: 'POST',
-            signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
-            headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, messages: msg, stream: true }),
-          });
-          if (!r.ok) throw new Error(`ollama ${r.status}`);
-        }
-        const sp = new FileStreamer();
-        const evs = [];
-        const reader = r.body.getReader();
-        const d = new TextDecoder();
-        let lb = '';
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          lb += d.decode(value, { stream: true });
-          let nl;
-          while ((nl = lb.indexOf('\n')) !== -1) {
-            const line = lb.slice(0, nl).trim();
-            lb = lb.slice(nl + 1);
-            if (!line || line === 'data: [DONE]') continue;
-            let j;
-            try {
-              const payload = line.startsWith('data: ') ? line.slice(6) : line;
-              j = JSON.parse(payload);
-            } catch { continue; }
-            let tok = '';
-            if (provider === 'mistral') tok = j?.choices?.[0]?.delta?.content ?? '';
-            else tok = j?.message?.content ?? '';
-            if (!tok) continue;
-            for (const ev of sp.feed(tok)) {
-              if (ev.type === 'file' && ev.path) {
-                ev.path = subPath;
-                evs.push(ev);
-              } else if (ev.type === 'file') {
-                evs.push(ev);
+        try {
+          let r;
+          if (pid === 'mistral') {
+            r = await fetch(MISTRAL_URL, {
+              method: 'POST',
+              signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+              headers: { Authorization: `Bearer ${mistralKey}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model: MISTRAL_MODEL, messages: msg, stream: true }),
+            });
+            if (!r.ok) throw new Error(`mistral ${r.status}`);
+          } else if (pid === 'local') {
+            r = await fetch(`${localUrl}/api/chat`, {
+              method: 'POST',
+              signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model: SUB_LOCAL_MODEL, messages: msg, stream: true }),
+            });
+            if (!r.ok) throw new Error(`local ollama ${r.status}`);
+          } else {
+            r = await fetch(OLLAMA_URL, {
+              method: 'POST',
+              signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+              headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model: cloudModel, messages: msg, stream: true }),
+            });
+            if (!r.ok) throw new Error(`ollama ${r.status}`);
+          }
+          const sp = new FileStreamer();
+          const evs = [];
+          const reader = r.body.getReader();
+          const d = new TextDecoder();
+          let lb = '';
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            lb += d.decode(value, { stream: true });
+            let nl;
+            while ((nl = lb.indexOf('\n')) !== -1) {
+              const line = lb.slice(0, nl).trim();
+              lb = lb.slice(nl + 1);
+              if (!line || line === 'data: [DONE]') continue;
+              let j;
+              try {
+                const payload = line.startsWith('data: ') ? line.slice(6) : line;
+                j = JSON.parse(payload);
+              } catch { continue; }
+              let tok = '';
+              if (pid === 'mistral') tok = j?.choices?.[0]?.delta?.content ?? '';
+              else tok = j?.message?.content ?? '';
+              if (!tok) continue;
+              for (const ev of sp.feed(tok)) {
+                if (ev.type === 'file' && ev.path) {
+                  ev.path = subPath;
+                  evs.push(ev);
+                } else if (ev.type === 'file') {
+                  evs.push(ev);
+                }
               }
             }
           }
-        }
-        for (const ev of sp.flush()) {
-          if (ev.type === 'file' && ev.path) {
-            ev.path = subPath;
-            evs.push(ev);
-          } else if (ev.type === 'file') {
-            evs.push(ev);
+          for (const ev of sp.flush()) {
+            if (ev.type === 'file' && ev.path) {
+              ev.path = subPath;
+              evs.push(ev);
+            } else if (ev.type === 'file') {
+              evs.push(ev);
+            }
           }
+          return { evs, provider: pid };
+        } finally {
+          active[pid]--;
         }
-        return evs;
       };
 
       try {
@@ -380,9 +415,9 @@ chat.post('/', async (c) => {
               send({ type: 'warn', message: `sub-agent failed: ${String(res.reason?.message || res.reason).slice(0, 200)}` });
               continue;
             }
-            for (const ev of res.value) {
+            for (const ev of res.value.evs) {
               await handleGen(ev);
-              send({ type: 'subagent', path: ev.path, model });
+              send({ type: 'subagent', path: ev.path, model, provider: res.value.provider });
             }
           }
         }
@@ -403,6 +438,8 @@ chat.post('/', async (c) => {
         if (!ac.signal.aborted) {
           send({ type: 'error', message: String(e.message || e) });
         }
+      } finally {
+        active[provider]--;
       }
       try { controller.close(); } catch { /* already closed */ }
     },
