@@ -473,13 +473,13 @@ export function createD1Store(d1) {
     },
 
     // ---- live event log (multiplayer) ----------------------------------------
+    // seq is the table's GLOBAL autoincrement primary key — compute it the same
+    // way db.js does (let D1 assign it, read last_row_id) so separate rooms
+    // never collide on the same seq value.
     async appendEvent(pid, room, data) {
-      const cur = await d1.prepare('SELECT COALESCE(MAX(seq), 0) AS s FROM events WHERE pid = ? AND room = ?')
-        .bind(pid, room).first();
-      const seq = (cur?.s || 0) + 1;
-      await d1.prepare('INSERT INTO events (pid, room, data, seq) VALUES (?, ?, ?, ?)')
-        .bind(pid, room, JSON.stringify({ ...(data || {}), seq }), seq).run();
-      return seq;
+      const r = await d1.prepare('INSERT INTO events (pid, room, data) VALUES (?, ?, ?)')
+        .bind(pid, room, JSON.stringify(data ?? {})).run();
+      return r.meta.last_row_id;
     },
     async currentSeq(pid, room) {
       const r = await d1.prepare('SELECT COALESCE(MAX(seq), 0) AS s FROM events WHERE pid = ? AND room = ?')
