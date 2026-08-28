@@ -1,25 +1,47 @@
-// Streaming parser for the generator protocol:
-//   <<<FILE:index.html>>>   full file content            <<<END>>>
-//   <<<EDIT:js/app.js>>>    search/replace hunks         <<<END>>>
-//   <<<DELETE:old.js>>>     (no content needed)          <<<END>>>
-//   <<<PLAN>>>              markdown checklist lines      <<<END>>>
-//   <<<NAME:app title>>>    rename the project (no body)  (no END needed)
-//   <<<DELEGATE:path>>>     hand a file to a sub-agent    <<<END>>>
-//                          (body = task description for the sub-agent)
+// Streaming parser for the generator protocol. Feed chunks via feed(); each
+// call yields an array of events:
+//   text                               plain prose outside any block
+//   file/asset   -> wrote a full file (utf8 or base64/data-URI content)
+//   edit         -> SEARCH/REPLACE hunks for an existing file
+//   delete       -> remove a file
+//   rename       -> move a file and refactor references elsewhere
+//   plan/name    -> plan checklist / project title
+//   delegate     -> hand a file to a parallel sub-agent
+//   run          -> execute functions/<name>.js with JSON input
+//   seed         -> insert demo rows into a creat.db collection
+//   batch/endbatch -> group of ops applied atomically (BATCH ... BATCHEND)
+//
+// Block syntax:
+//   <<<FILE:index.html>>>   content              <<<END>>>
+//   <<<EDIT:js/app.js>>>    SEARCH/REPLACE hunks <<<END>>>
+//   <<<DELETE:old.js>>>                            (no body needed)
+//   <<<RENAME:old.js -> js/app.js>>>              (no body needed)
+//   <<<ASSET:img/logo.png>>> data URI or base64   <<<END>>>
+//   <<<RUN:score.js>>>       JSON input            <<<END>>>
+//   <<<SEED:products>>>      JSON rows             <<<END>>>
+//   <<<PLAN>>>              checklist lines        <<<END>>>
+//   <<<NAME:App title>>>                           (no body needed)
+//   <<<DELEGATE:css/t.min.css>>> task description  <<<END>>>
+//   <<<BATCH>>> ... any blocks above ... <<<BATCHEND>>>
+//
 // EDIT bodies use:
 //   <<<<<<< SEARCH
 //   old text
 //   =======
 //   new text
 //   >>>>>>> REPLACE
-// Feed chunks via feed(); yields {type:'text'|'file'|'edit'|'delete'|'plan'|'name'|'delegate'} events.
 
 const TAG_OPEN = '<<<';
 const TAG_CLOSE = '>>>';
 const END_TAG = '<<<END>>>';
+const BATCH_END = '<<<BATCHEND>>>';
 const S_MARK = '<<<<<<< SEARCH';
 const R_MARK = '>>>>>>> REPLACE';
 const M_MARK = '=======';
+
+const KINDS = ['FILE', 'EDIT', 'DELETE', 'PLAN', 'NAME', 'DELEGATE', 'RENAME', 'RUN', 'ASSET', 'SEED', 'BATCH'];
+const BODY_KINDS = ['FILE', 'EDIT', 'PLAN', 'DELEGATE', 'RUN', 'ASSET', 'SEED'];
+const PASS_THROUGH_KINDS = ['DELETE', 'NAME', 'RENAME'];
 
 function parsePlan(body) {
   const items = [];
@@ -47,100 +69,197 @@ function parseEditHunks(body) {
   return hunks;
 }
 
+function parseJsonOr(body, fallback) {
+  try {
+    return JSON.parse(body.trim());
+  } catch {
+    return fallback;
+  }
+}
+
+function assetPayload(body) {
+  const b = stripFences(String(body || '')).trim();
+  if (!b) return { encoding: 'utf8', data: '' };
+  if (/^data:/i.test(b)) return { encoding: 'base64', data: b };
+  if (/^base64:/i.test(b)) return { encoding: 'base64', data: b.slice(7) };
+  return { encoding: 'utf8', data: b };
+}
+
+function seedPayload(body) {
+  const raw = parseJsonOr(body, null);
+  if (Array.isArray(raw)) return { clear: false, items: raw };
+  if (raw && typeof raw === 'object') {
+    const items = Array.isArray(raw.items) ? raw.items
+      : raw.rows ? raw.rows
+        : [Object.fromEntries(Object.entries(raw).filter(([k]) => k !== 'clear'))];
+    return { clear: Boolean(raw.clear), items };
+  }
+  return { clear: false, items: [] };
+}
+
 export class FileStreamer {
   constructor() {
     this.buf = '';
-    this.tag = null;     // null = outside, '' = tag name incomplete, else {kind,path}
-    this.body = '';
+    this.frames = []; // stack of {kind, path, body}; stack top is the open block
   }
 
   feed(chunk) {
     const events = [];
     this.buf += chunk;
     for (;;) {
-      if (this.tag === null) {
-        const i = this.buf.indexOf(TAG_OPEN);
-        if (i === -1) {
-          const keep = Math.max(0, this.buf.length - (TAG_OPEN.length - 1));
-          if (keep > 0) {
-            events.push({ type: 'text', v: this.buf.slice(0, keep) });
-            this.buf = this.buf.slice(keep);
-          }
-          break;
-        }
-        if (i > 0) events.push({ type: 'text', v: this.buf.slice(0, i) });
-        this.buf = this.buf.slice(i + TAG_OPEN.length);
-        this.tag = '';
-        this.body = '';
-      } else if (this.tag === '') {
-        const j = this.buf.indexOf(TAG_CLOSE);
-        // '<<<END' could still be forming a close tag — wait for more input
-        if (j === -1) {
-          if (END_TAG.startsWith(TAG_OPEN + this.buf.slice(0, END_TAG.length - TAG_OPEN.length)) ||
-              this.buf.length < END_TAG.length) break;
-          // not an END tag forming and no '>' yet — keep waiting (harmless)
-          break;
-        }
-        const raw = this.buf.slice(0, j).trim();
-        this.buf = this.buf.slice(j + TAG_CLOSE.length);
-        if (raw.toUpperCase() === 'END') { this.tag = null; continue; }
-        const c = raw.indexOf(':');
-        const kind = (c === -1 ? raw : raw.slice(0, c)).trim().toUpperCase();
-        const path = c === -1 ? '' : raw.slice(c + 1).trim();
-        if (!['FILE', 'EDIT', 'DELETE', 'PLAN', 'NAME', 'DELEGATE'].includes(kind)) {
-          this.tag = null; // unknown tag — treat as plain text next round
-          events.push({ type: 'text', v: TAG_OPEN + raw + TAG_CLOSE });
+      const top = this.frames[this.frames.length - 1];
+
+      if (top && top.kind === 'BATCH') {
+        // Inside a batch: wait for a nested block to open or BATCHEND.
+        const be = this.buf.indexOf(BATCH_END);
+        const to = this.buf.indexOf(TAG_OPEN);
+        if (be !== -1 && (to === -1 || be <= to)) {
+          this.buf = this.buf.slice(be + BATCH_END.length);
+          this.frames.pop();
+          events.push(this.stamp({ type: 'endbatch' }));
           continue;
         }
-        this.tag = { kind, path };
-        this.body = '';
-        if (kind === 'DELETE') {
-          events.push({ type: 'delete', path });
-          this.tag = null;
-        } else if (kind === 'NAME') {
-          events.push({ type: 'name', name: path });
-          this.tag = null;
+        if (to === -1) {
+          const keep = Math.max(0, this.buf.length - Math.max(BATCH_END.length - 1, TAG_OPEN.length - 1));
+          if (keep > 0) this.buf = this.buf.slice(keep);
+          break;
         }
-      } else {
+        const j = this.buf.indexOf(TAG_CLOSE, to);
+        if (j === -1) break; // header not complete yet
+        const raw = this.buf.slice(to + TAG_OPEN.length, j).trim();
+        this.buf = this.buf.slice(j + TAG_CLOSE.length);
+        this._openHeader(raw, events);
+        continue;
+      }
+
+      if (top) {
+        // Inside a real block: accumulate until END_TAG.
         const k = this.buf.indexOf(END_TAG);
         if (k === -1) {
           const keep = Math.max(0, this.buf.length - (END_TAG.length - 1));
-          if (keep > 0) {
-            this.body += this.buf.slice(0, keep);
-            this.buf = this.buf.slice(keep);
-          }
+          if (keep > 0) { top.body += this.buf.slice(0, keep); this.buf = this.buf.slice(keep); }
           break;
         }
-        this.body += this.buf.slice(0, k);
+        top.body += this.buf.slice(0, k);
         this.buf = this.buf.slice(k + END_TAG.length);
-        const { kind, path } = this.tag;
-        this.tag = null;
-        if (kind === 'FILE') {
-          events.push({ type: 'file', path, content: stripFences(this.body.trim()) });
-        } else if (kind === 'EDIT') {
-          events.push({ type: 'edit', path, hunks: parseEditHunks(this.body) });
-        } else if (kind === 'PLAN') {
-          events.push({ type: 'plan', items: parsePlan(this.body) });
-        } else if (kind === 'DELEGATE') {
-          events.push({ type: 'delegate', path, task: stripFences(this.body.trim()) });
-        }
-        this.body = '';
+        this.frames.pop();
+        const ev = this._closeFrame(top, false);
+        if (ev) events.push(this.stamp(ev));
+        continue;
       }
+
+      // Top level: outside any block.
+      const i = this.buf.indexOf(TAG_OPEN);
+      if (i === -1) {
+        const keep = Math.max(0, this.buf.length - (TAG_OPEN.length - 1));
+        if (keep > 0) {
+          events.push({ type: 'text', v: this.buf.slice(0, keep) });
+          this.buf = this.buf.slice(keep);
+        }
+        break;
+      }
+      if (i > 0) events.push({ type: 'text', v: this.buf.slice(0, i) });
+      const j = this.buf.indexOf(TAG_CLOSE, i);
+      if (j === -1) {
+        this.buf = this.buf.slice(i);
+        break; // tag header incomplete — wait for more input
+      }
+      const raw = this.buf.slice(i + TAG_OPEN.length, j).trim();
+      this.buf = this.buf.slice(j + TAG_CLOSE.length);
+      this._openHeader(raw, events);
     }
-    return events;
+    const merged = [];
+    for (const ev of events) {
+      const last = merged[merged.length - 1];
+      if (ev.type === 'text' && last && last.type === 'text') last.v += ev.v;
+      else merged.push(ev);
+    }
+    return merged;
+  }
+
+  stamp(ev) {
+    if (this.frames.some((f) => f.kind === 'BATCH')) ev.batch = true;
+    return ev;
+  }
+
+  _openHeader(raw, events) {
+    raw = raw.replace(/^<+/, ''); // tolerate a stray '<' that clung to the tag
+    const up = raw.toUpperCase();
+    if (up === 'END') return;
+    const c = raw.indexOf(':');
+    const kind = (c === -1 ? raw : raw.slice(0, c)).trim().toUpperCase();
+    const arg = (c === -1 ? '' : raw.slice(c + 1)).trim();
+    if (!KINDS.includes(kind)) {
+      events.push({ type: 'text', v: TAG_OPEN + raw + TAG_CLOSE }); // unknown block — show as prose
+      return;
+    }
+    if (kind === 'BATCH') {
+      this.frames.push({ kind: 'BATCH', path: '', body: '' });
+      events.push(this.stamp({ type: 'batch' }));
+      return;
+    }
+    if (kind === 'DELETE') {
+      events.push(this.stamp({ type: 'delete', path: arg }));
+      return;
+    }
+    if (kind === 'NAME') {
+      events.push(this.stamp({ type: 'name', name: arg }));
+      return;
+    }
+    if (kind === 'RENAME') {
+      const m = arg.match(/^(.*?)\s*(?:->|→)\s*(.*)$/);
+      if (m) events.push(this.stamp({ type: 'rename', from: m[1].trim(), to: m[2].trim() }));
+      else events.push({ type: 'text', v: TAG_OPEN + raw + TAG_CLOSE });
+      return;
+    }
+    if (BODY_KINDS.includes(kind)) {
+      this.frames.push({ kind, path: arg, body: '' });
+      return;
+    }
+    events.push({ type: 'text', v: TAG_OPEN + raw + TAG_CLOSE });
+  }
+
+  _closeFrame(frame, truncated) {
+    const { kind, path } = frame;
+    switch (kind) {
+      case 'FILE':
+        return { type: 'file', path, content: stripFences(frame.body.trim()), truncated };
+      case 'EDIT':
+        return { type: 'edit', path, hunks: parseEditHunks(frame.body), truncated };
+      case 'PLAN':
+        return { type: 'plan', items: parsePlan(frame.body) };
+      case 'DELEGATE':
+        return { type: 'delegate', path, task: stripFences(frame.body.trim()), truncated };
+      case 'RUN':
+        return { type: 'run', name: path, input: parseJsonOr(frame.body, frame.body.trim() || null), truncated };
+      case 'ASSET': {
+        const p = assetPayload(frame.body);
+        return { type: 'asset', path, data: p.data, encoding: p.encoding, truncated };
+      }
+      case 'SEED': {
+        const s = seedPayload(frame.body);
+        return { type: 'seed', collection: path, items: s.items, clear: s.clear, truncated };
+      }
+      default:
+        return null;
+    }
   }
 
   flush() {
     const out = [];
-    if (this.tag && typeof this.tag === 'object') {
-      const { kind, path } = this.tag;
-      if (kind === 'FILE') out.push({ type: 'file', path, content: stripFences(this.body.trim()), truncated: true });
-      else if (kind === 'EDIT') out.push({ type: 'edit', path, hunks: parseEditHunks(this.body), truncated: true });
-      else if (kind === 'PLAN') out.push({ type: 'plan', items: parsePlan(this.body) });
-    } else if (this.buf && this.tag === null) {
-      out.push({ type: 'text', v: this.buf });
+    while (this.frames.length) {
+      const frame = this.frames.pop();
+      if (frame.kind === 'BATCH') {
+        out.push(this.stamp({ type: 'endbatch' }));
+        continue;
+      }
+      const ev = this._closeFrame(frame, true);
+      if (ev) out.push(this.stamp(ev));
     }
-    this.buf = ''; this.body = ''; this.tag = null;
+    if (this.buf) {
+      out.push({ type: 'text', v: this.buf });
+      this.buf = '';
+    }
     return out;
   }
 }

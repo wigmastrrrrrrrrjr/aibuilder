@@ -25,45 +25,46 @@ let defaultModel = 'gpt-oss:120b';
 
 /* ---------- strip generator blocks (FILE/EDIT/DELETE/PLAN) from output ---------- */
 function BlockFilter() {
-  let buf = '', state = 0; // 0=out 1=header 2=in-block
+  let buf = '';
+  let depth = 0;
   this.push = function (chunk) {
     buf += chunk;
     let out = '';
     for (;;) {
-      if (state === 0) {
-        const i = buf.search(/<<<(FILE|EDIT|DELETE|PLAN):?/);
-        if (i === -1) {
-          const keep = Math.max(0, buf.length - 12);
-          out += buf.slice(0, keep); buf = buf.slice(keep);
-          break;
+      const i = buf.indexOf('<<<');
+      if (i === -1) {
+        const keep = Math.max(0, buf.length - (depth > 0 ? 9 : 2));
+        if (keep > 0) {
+          if (depth === 0) out += buf.slice(0, keep);
+          buf = buf.slice(keep);
         }
-        out += buf.slice(0, i);
-        buf = buf.slice(i);
-        const j = buf.indexOf('>>>');
-        if (j === -1) { buf = ''; break; }
-        buf = buf.slice(j + 3); state = 1;
-      } else if (state === 1) state = 2;
-      else {
-        const k = buf.indexOf('<<<END>>>');
-        if (k === -1) {
-          const keep = Math.max(0, buf.length - 9);
-          buf = buf.slice(keep); break;
-        }
-        buf = buf.slice(k + 9); state = 0;
+        break;
+      }
+      let start = i;
+      if (i > 0 && depth === 0) out += buf.slice(0, i);
+      else if (i > 0) { buf = buf.slice(i); start = 0; }
+      const e = buf.indexOf('>>>', start);
+      if (e === -1) { buf = buf.slice(start); break; }
+      const hdr = buf.slice(start + 3, e).trim().toUpperCase();
+      const kind = hdr.split(':')[0];
+      buf = buf.slice(e + 3);
+      if (kind === 'END' || kind === 'BATCHEND') {
+        depth = Math.max(0, depth - 1);
+      } else if (['FILE', 'EDIT', 'PLAN', 'DELEGATE', 'RUN', 'ASSET', 'SEED', 'BATCH'].includes(kind)) {
+        depth++;
       }
     }
     return out;
   };
   this.drain = function () {
-    const rest = state === 0 ? buf : '';
-    buf = ''; return rest;
+    if (depth > 0) { buf = ''; return ''; }
+    const rest = buf; buf = ''; return rest;
   };
 }
 
 function stripBlocks(text) {
-  return String(text || '')
-    .replace(/<<<(FILE|EDIT|DELETE|PLAN)[^>]*>>>[\s\S]*?(<<<END>>>|$)/g, '')
-    .trim();
+  const f = new BlockFilter();
+  return (f.push(String(text || '')) + f.drain()).trim();
 }
 
 /* ---------- bubbles & UI helpers ---------- */
@@ -853,6 +854,89 @@ document.addEventListener('mousemove', (() => {
   };
 })(), { passive: true });
 
+/* ---------- structured AI messages ---------- */
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function mdHtml(src) {
+  let s = escHtml(src);
+  s = s.replace(/```[a-zA-Z0-9]*\n?([\s\S]+?)\n?```/g, '<pre class="fence"><code>$1</code></pre>');
+  s = s.replace(/(^|[^\w`])`([^`\n]{1,160})`/g, '$1<code>$2</code>');
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  s = s.replace(/^#{1,3}\s*(.*)$/gm, '<h4>$1</h4>');
+  const lines = s.split('\n');
+  let html = '', inUl = false;
+  for (const ln of lines) {
+    const l = ln.trim();
+    if (/^[-*]\s+/.test(l)) {
+      if (!inUl) { html += '<ul>'; inUl = true; }
+      html += '<li>' + l.replace(/^[-*]\s+/, '') + '</li>';
+    } else {
+      if (inUl) { html += '</ul>'; inUl = false; }
+      html += (l ? l : '<br>');
+    }
+  }
+  if (inUl) html += '</ul>';
+  return html;
+}
+function makeAiMsg(model) {
+  const el = document.createElement('div');
+  el.className = 'msg ai wrap';
+  const head = document.createElement('div');
+  head.className = 'aiHead';
+  const m = document.createElement('span');
+  m.className = 'aiModel';
+  m.textContent = model || '';
+  const st = document.createElement('span');
+  st.className = 'aiStatus';
+  st.textContent = 'thinking…';
+  head.append(m, st);
+  const prose = document.createElement('div');
+  prose.className = 'aiProse';
+  const acts = document.createElement('div');
+  acts.className = 'aiActs';
+  el.append(head, prose, acts);
+  messagesEl.appendChild(el);
+  scrollBottom();
+  return {
+    el, prose, acts, status: st, full: '',
+    setStatus(txt) {
+      st.textContent = txt;
+      if (txt === 'done') st.dataset.done = '1';
+      else if (txt === 'interrupted' || txt === 'error') delete st.dataset.done;
+      else delete st.dataset.done;
+    },
+    append(txt) {
+      this.full += txt;
+      prose.innerHTML = mdHtml(this.full);
+      scrollBottom();
+    },
+    card(html) {
+      const c = document.createElement('div');
+      c.className = 'actCard';
+      c.innerHTML = html;
+      acts.appendChild(c);
+      scrollBottom();
+    },
+  };
+}
+// live action-card builders (monogram chips; paths are escaped)
+const actCards = {
+  w: (p) => '<span class="acIco">W</span><span class="acBody"><b>wrote</b> ' + escHtml(p) + '</span>',
+  e: (p) => '<span class="acIco">E</span><span class="acBody"><b>edited</b> ' + escHtml(p) + '</span>',
+  d: (p) => '<span class="acIco">D</span><span class="acBody"><b>removed</b> ' + escHtml(p) + '</span>',
+  r: (f, t, n) => '<span class="acIco">R</span><span class="acBody"><b>renamed</b> ' + escHtml(f) + ' → ' + escHtml(t) + (n ? ' <em>+' + n + ' ref' + (n === 1 ? '' : 's') + '</em>' : '') + '</span>',
+  a: (p) => '<span class="acIco">A</span><span class="acBody"><b>asset</b> ' + escHtml(p) + '</span>',
+  runok: (n) => '<span class="acIco">R</span><span class="acBody"><b>ran</b> ' + escHtml(n) + '</span>',
+  runbad: (n, err) => '<span class="acIco">R</span><span class="acBody"><b>ran</b> ' + escHtml(n) + '<em> — ' + escHtml(err) + '</em></span>',
+  seed: (c, n) => '<span class="acIco">DB</span><span class="acBody"><b>seeded</b> “' + escHtml(c) + '” with ' + n + ' row' + (n === 1 ? '' : 's') + '</span>',
+  sub: (p) => '<span class="acIco">S</span><span class="acBody"><b>sub-agent</b> finished ' + escHtml(p) + '</span>',
+  plan: () => '<span class="acIco">P</span><span class="acBody"><b>plan</b> updated</span>',
+  warn: (m) => '<span class="acIco warn">!</span><span class="acBody">' + escHtml(m) + '</span>',
+  summary: (bits) => '<span class="acIco">OK</span><span class="acBody">' + bits + '</span>',
+};
+
 /* ---------- chat streaming ---------- */
 async function send() {
   const message = promptBox.value.trim();
@@ -867,8 +951,9 @@ async function send() {
     liveChannel.send({ type: 'broadcast', event: 'msg', payload: { user: sessName(), message, sid: SID } }).then(() => {}).catch(() => {});
   }
 
-  displayText = ''; rawStream.textContent = '';
+  displayText = ''; rawStream.textContent = ''; rawStream.hidden = true;
   const filter = new BlockFilter();
+  let aiMsg = null;
   dots = 0;
   activityText.textContent = 'thinking…';
   activityEl.hidden = false;
@@ -930,73 +1015,115 @@ async function send() {
         if (ev.type === 'meta') {
           if (!projectId) { projectId = ev.projectId; canEdit = true; }
           projName.textContent = message.slice(0, 60);
+          aiMsg = makeAiMsg(ev.model);
           activityText.textContent = `${ev.model} is working…`;
         } else if (ev.type === 'think') {
-          rawStream.textContent = (rawStream.textContent + ev.v).slice(-9000);
-          rawStream.scrollTop = rawStream.scrollHeight;
-          activityText.textContent = 'Analyzing' + '.'.repeat(1 + (dots = (dots + 1) % 4));
+          dots = (dots + 1) % 4;
+          if (aiMsg) aiMsg.setStatus('analyzing' + '.'.repeat(1 + dots));
+          activityText.textContent = 'Analyzing' + '.'.repeat(1 + dots);
         } else if (ev.type === 'token') {
-          rawStream.textContent = (rawStream.textContent + ev.v).slice(-9000);
-          rawStream.scrollTop = rawStream.scrollHeight;
           displayText += ev.v;
+          if (aiMsg) {
+            const clean = filter.push(ev.v);
+            if (clean) aiMsg.append(clean);
+          }
         } else if (ev.type === 'file') {
           chipFiles.push(ev.path);
           setChips(chipFiles, chipFiles);
           flashChip(ev.path);
+          if (aiMsg) aiMsg.card(actCards.w(ev.path));
           activityText.textContent = `Generated ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'edit') {
           chipFiles.push(ev.path);
           setChips(chipFiles, chipFiles);
           flashChip(ev.path);
+          if (aiMsg) aiMsg.card(actCards.e(ev.path));
           activityText.textContent = `Updated ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'delete') {
           chipFiles = chipFiles.filter((p) => p !== ev.path);
           setChips(chipFiles);
+          if (aiMsg) aiMsg.card(actCards.d(ev.path));
           activityText.textContent = `Removed ${ev.path}`;
+          schedulePreview();
+        } else if (ev.type === 'rename') {
+          if (aiMsg) aiMsg.card(actCards.r(ev.from, ev.to, ev.refs || 0));
+          chipFiles = chipFiles.map((p) => (p === ev.from ? ev.to : p));
+          if (!chipFiles.includes(ev.to)) chipFiles.push(ev.to);
+          setChips(chipFiles, chipFiles);
+          activityText.textContent = `Renamed ${ev.from} → ${ev.to}`;
+          schedulePreview();
+        } else if (ev.type === 'asset') {
+          if (aiMsg) aiMsg.card(actCards.a(ev.path));
+          activityText.textContent = `Saved asset ${ev.path}`;
+          schedulePreview();
+        } else if (ev.type === 'run') {
+          if (aiMsg) aiMsg.card(ev.ok ? actCards.runok(ev.name) : actCards.runbad(ev.name, ev.error || ''));
+          activityText.textContent = ev.ok ? `Ran ${ev.name}` : `Run failed: ${ev.name}`;
+        } else if (ev.type === 'seed') {
+          if (aiMsg) aiMsg.card(actCards.seed(ev.collection, ev.count || 0));
+          activityText.textContent = `Seeded ${ev.collection} (${ev.count || 0} rows)`;
           schedulePreview();
         } else if (ev.type === 'plan') {
           renderPlan(ev.items || []);
+          if (aiMsg) aiMsg.card(actCards.plan());
         } else if (ev.type === 'name') {
           projName.textContent = ev.name;
           document.title = `${ev.name} — aibuilder`;
           loadProjects();
         } else if (ev.type === 'delegate') {
+          if (aiMsg) aiMsg.setStatus(`delegating ${ev.path}…`);
           activityText.textContent = `Delegating ${ev.path} to a sub-agent…`;
         } else if (ev.type === 'subagent') {
           chipFiles.push(ev.path);
           setChips(chipFiles, chipFiles);
           flashChip(ev.path);
+          if (aiMsg) aiMsg.card(actCards.sub(ev.path));
           activityText.textContent = `Sub-agent completed ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'refactor') {
           $('refactorBar').hidden = false;
           activityText.textContent = 'Restructuring code…';
+          if (aiMsg) aiMsg.setStatus('restructuring…');
         } else if (ev.type === 'warn') {
           notify('Generator warning', ev.message);
+          if (aiMsg) aiMsg.card(actCards.warn(ev.message || ''));
         } else if (ev.type === 'error') {
+          if (aiMsg) aiMsg.setStatus('error');
           addAiBubble(`⚠ ${ev.message}`);
           notify('Generation error', ev.message);
         } else if (ev.type === 'done') {
           doneReceived = true;
           $('refactorBar').hidden = true;
-          addAiBubble((displayText + filter.drain()).trim());
-          loadCredits();
-          if ((ev.edited || []).length || (ev.deleted || []).length) {
+          if (aiMsg) {
+            aiMsg.setStatus('done');
+            const rest = filter.drain();
+            if (rest.trim()) aiMsg.append(rest);
             const bits = [];
-            if (ev.files?.length) bits.push(`${ev.files.length} written`);
-            if (ev.edited.length) bits.push(`${ev.edited.length} edited`);
-            if (ev.deleted.length) bits.push(`${ev.deleted.length} deleted`);
-            addAiBubble(`✓ ${bits.join(', ')}`);
+            if (ev.files?.length) bits.push(`${ev.files.length} file${ev.files.length === 1 ? '' : 's'} written`);
+            if (ev.edited?.length) bits.push(`${ev.edited.length} edited`);
+            if (ev.deleted?.length) bits.push(`${ev.deleted.length} removed`);
+            if (ev.renamed?.length) bits.push(`${ev.renamed.length} renamed`);
+            if (ev.seeds?.length) bits.push(`${ev.seeds.length} seeded`);
+            if (ev.assets?.length) bits.push(`${ev.assets.length} asset${ev.assets.length === 1 ? '' : 's'}`);
+            if (bits.length) aiMsg.card(actCards.summary(bits.join(' · ')));
+          } else {
+            addAiBubble((displayText + filter.drain()).trim());
           }
+          loadCredits();
         }
       }
     }
     // Stream ended without a done event (server crashed / connection dropped)
-    if (!doneReceived && displayText.trim()) {
-      addAiBubble((displayText + filter.drain()).trim());
-      notify('Stream interrupted', 'Connection ended before the model finished responding.');
+    if (!doneReceived) {
+      if (displayText.trim() && !aiMsg) addAiBubble((displayText + filter.drain()).trim());
+      if (aiMsg) {
+        aiMsg.setStatus('interrupted');
+        const rest = filter.drain();
+        if (rest.trim()) aiMsg.append(rest);
+      }
+      if (displayText.trim()) notify('Stream interrupted', 'Connection ended before the model finished responding.');
     }
   } catch (e) {
     addAiBubble(`⚠ ${e.message}`);

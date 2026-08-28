@@ -244,9 +244,15 @@ chat.post('/', async (c) => {
       const written = [];
       const edited = [];
       const deleted = [];
+      const renamed = [];
+      const assets = [];
+      const runs = [];
+      const seeds = [];
       const subAgentTasks = [];
       let ops = 0;
       let refactorSent = false;
+      let inBatch = false;
+      const batchOps = [];
       const maybeRefactor = () => {
         if (!refactorSent && (deleted.length >= 2 || edited.length >= 3 || ops >= 6)) {
           refactorSent = true;
@@ -256,6 +262,9 @@ chat.post('/', async (c) => {
 
       // apply one generator op; returns an SSE event for the client
       const handleGen = async (ev) => {
+        if (ev.type === 'batch') { inBatch = true; return; }
+        if (ev.type === 'endbatch') { inBatch = false; await flushBatch(); return; }
+        if (ev.batch && inBatch) { batchOps.push(ev); return; }
         if (ev.type === 'file' && ev.path) {
           await store.saveFile(pid, ev.path, ev.content);
           written.push(ev.path);
@@ -282,6 +291,40 @@ chat.post('/', async (c) => {
           } catch (e) {
             send({ type: 'warn', message: `delete failed on ${ev.path}: ${e.message}` });
           }
+        } else if (ev.type === 'rename' && ev.from && ev.to) {
+          try {
+            const refs = await applyRename(pid, ev.from, ev.to);
+            renamed.push({ from: ev.from, to: ev.to });
+            ops += 1 + refs;
+            maybeRefactor();
+            send({ type: 'rename', from: ev.from, to: ev.to, refs });
+          } catch (e) {
+            send({ type: 'warn', message: `rename failed: ${String(e.message || e)}` });
+          }
+        } else if (ev.type === 'asset' && ev.path) {
+          try {
+            await store.saveFile(pid, ev.path, ev.data, ev.encoding);
+            assets.push(ev.path);
+            ops++;
+            maybeRefactor();
+            send({ type: 'asset', path: ev.path, encoding: ev.encoding });
+          } catch (e) {
+            send({ type: 'warn', message: `asset failed on ${ev.path}: ${String(e.message || e)}` });
+          }
+        } else if (ev.type === 'run' && ev.name) {
+          const res = await runFunction(pid, ev.name, ev.input);
+          runs.push({ name: ev.name, ok: res.ok });
+          send({ type: 'run', name: ev.name, ok: res.ok, error: res.error || null, result: res.result });
+        } else if (ev.type === 'seed' && ev.collection) {
+          try {
+            const n = await seedCollection(pid, ev.collection, ev.items || [], ev.clear);
+            seeds.push({ collection: ev.collection, n });
+            ops++;
+            maybeRefactor();
+            send({ type: 'seed', collection: ev.collection, count: n });
+          } catch (e) {
+            send({ type: 'warn', message: `seed failed on ${ev.collection}: ${String(e.message || e)}` });
+          }
         } else if (ev.type === 'plan') {
           try {
             await store.setPlan(pid, ev.items || []);
@@ -303,6 +346,20 @@ chat.post('/', async (c) => {
           }
           send({ type: 'delegate', path: ev.path });
           subAgentTasks.push(spawnSubAgent(ev.path, task));
+        }
+      };
+      // apply a queued BATCH group atomically-ish (sequentially, abort on first failure)
+      const flushBatch = async () => {
+        if (!batchOps.length) return;
+        const opsToApply = batchOps.slice();
+        batchOps.length = 0;
+        for (const ev of opsToApply) {
+          try {
+            await handleGen({ ...ev, batch: false });
+          } catch (e) {
+            send({ type: 'warn', message: `batch op failed: ${String(e.message || e)}` });
+            break;
+          }
         }
       };
       let raw = '';
@@ -470,7 +527,7 @@ chat.post('/', async (c) => {
         // Phase 2: capture a point-in-time snapshot after each generation so
         // the project can be rolled back to any prior state (best-effort).
         try { await store.takeSnapshot(pid, message.slice(0, 60)); } catch { /* snapshots are best-effort */ }
-        send({ type: 'done', projectId: pid, files: written, edited, deleted, model });
+        send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, runs, seeds, model });
         // co-build: tell everyone else watching this project that it changed
         try {
           const sbUrl = getVar('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co';
@@ -517,6 +574,88 @@ async function applyEdit(pid, fpath, hunks) {
   }
   await store.saveFile(pid, fpath, text);
   return { ok: true };
+}
+
+// Move a file and refresh every other text file that references it
+// (src="...", href="...", url(...), fetch('...'), import "...", scripts).
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const BANNED = /\b(import|require|fetch|XMLHttpRequest|WebSocket|EventSource|eval|Function|globalThis|localStorage|sessionStorage|indexedDB|setTimeout|setInterval|setImmediate|queueMicrotask|constructor|process|Deno|document|window)\b/;
+const LOOPS = /while\s*\(\s*(true|1)\s*\)|for\s*\(\s*;\s*;\s*\)/;
+
+async function applyRename(pid, from, to) {
+  const row = await store.getFile(pid, from);
+  if (!row) throw new Error(`file not found: ${from}`);
+  const oldBase = from.split('/').pop();
+  const newBase = to.split('/').pop();
+  let refs = 0;
+  let files = [];
+  try { files = await store.listFiles(pid); } catch { files = []; }
+  const nameRe = new RegExp(`(?<=[\\s"'()=/]|^)${escRe(oldBase)}(?=[\\s"'()\\.\\?#/&]|$)`, 'g');
+  for (const f of files) {
+    if (f.path === from || f.path === to) continue;
+    let r;
+    try { r = await store.getFile(pid, f.path); } catch { continue; }
+    if (!r || (r.encoding && r.encoding !== 'utf8')) continue;
+    let text = String(r.content ?? '');
+    const before = text;
+    // exact path references (plain, ./ , / and quoted)
+    text = text
+      .replace(new RegExp(`['"]${escRe(from)}['"]`, 'g'), (m) => m.replace(from, to))
+      .replace(new RegExp(escRe(from), 'g'), to);
+    // bare basename references bound by delimiters
+    text = text.replace(nameRe, newBase);
+    if (text !== before) {
+      await store.saveFile(pid, f.path, text);
+      refs++;
+    }
+  }
+  await store.saveFile(pid, to, row.content, row.encoding || 'utf8');
+  try { await store.deleteFile(pid, from); } catch { /* already gone */ }
+  return refs;
+}
+
+// RUN blocks execute functions/<name>.js in the same sandbox as the /fn
+// endpoint: a scoped function of `input` with a hard 1.5s cap, no network,
+// no timers, no DOM — pure computation (math, logic, ordering, transforms).
+async function runFunction(pid, name, input) {
+  const norm = name.startsWith('functions/') ? name : `functions/${name}`;
+  let row;
+  try { row = await store.getFile(pid, norm); } catch { row = null; }
+  if (!row) return { ok: false, error: `functions/${name}.js not found — write it first with <<<FILE>>>` };
+  if (row.encoding && row.encoding !== 'utf8') return { ok: false, error: 'not a text function file' };
+  const code = String(row.content ?? '');
+  if (BANNED.test(code) || LOOPS.test(code)) {
+    return { ok: false, error: 'function must be pure computation (no network, timers, I/O, loops)' };
+  }
+  try {
+    const factory = new Function('input', `"use strict";\n${code};\nif (typeof main === 'function') return main(input);\nif (typeof handler === 'function') return handler(input);\nreturn null;`);
+    const result = await Promise.race([
+      Promise.resolve(factory(input ?? null)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout (max 1.5s)')), 1500)),
+    ]);
+    return { ok: true, result: result ?? null };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+// SEED blocks insert rows (optionally clearing first) into a creat.db-style
+// collection using the same lazy-table BaaS storage the SDK exposes.
+async function seedCollection(pid, coll, items, clear) {
+  const tname = store.baasTable(pid, coll);
+  if (!tname) throw new Error('unsupported collection name');
+  let n = 0;
+  if (clear) {
+    const existing = await store.baasList(pid, coll);
+    for (const row of existing) {
+      try { await store.baasRemove(pid, coll, row.id); } catch { /* skip */ }
+    }
+  }
+  for (const it of items) {
+    if (!it || typeof it !== 'object') continue;
+    try { await store.baasInsert(pid, coll, it); n++; } catch { /* skip bad row */ }
+  }
+  return n;
 }
 
 // Give the model eyes on the current project: full file list plus contents
