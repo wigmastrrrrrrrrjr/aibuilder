@@ -53,8 +53,12 @@ chat.post('/', async (c) => {
   if (!key && !isLocalModel) {
     return c.json({ error: 'no API key — add one in the UI (🔑) or set OLLAMA_API_KEY/MISTRAL_API_KEY in .env' }, 500);
   }
-  if (isORModel && !orKey) {
-    return c.json({ error: 'no OPENROUTER_API_KEY configured — set it to use OpenRouter free models' }, 500);
+  {
+    const reqOR = typeof body.model === 'string'
+      && (body.model.includes('/') || body.model === 'openrouter/free');
+    if (reqOR && !openrouterKey()) {
+      return c.json({ error: 'no OPENROUTER_API_KEY configured — set it to use OpenRouter free models' }, 500);
+    }
   }
 
   let pid = body.projectId;
