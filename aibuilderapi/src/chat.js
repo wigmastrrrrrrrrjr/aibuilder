@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { store } from './store.js';
 import { FileStreamer } from './parser.js';
 import { systemPrompt } from './prompt.js';
-import { extractKey, builtinKey, localOllamaUrl } from './keys.js';
+import { extractKey, builtinKey, localOllamaUrl, openrouterKey } from './keys.js';
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
 import { modelCost, FREE_DAILY_CREDITS, creditsToUnits, unitsToCredits } from './models.js';
@@ -11,8 +11,9 @@ import { createClient } from '@supabase/supabase-js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MISTRAL_MODEL = 'mistral-small-latest';
-const MODEL_RE = /^[A-Za-z0-9._:+%-]{1,64}$/;
+const MODEL_RE = /^[A-Za-z0-9._:/+%-]{1,64}$/;
 const SUB_AGENT_PROMPT = `You are a sub-agent of AIBuilder, an expert engineer, working on ONE file as part of a larger web app that another engineer is building.
 Respond with a single generator block that writes your assigned file:
 <<<FILE:path>>>
@@ -25,8 +26,9 @@ Rules:
 - The file must be complete and self-contained so it works on its own.`;
 
 const SUB_LOCAL_MODEL = 'tinyllama:1.1b';
-const PROVIDER_CAPS = { mistral: 4, ollama: 4, local: 4 };
-const active = { mistral: 0, ollama: 0, local: 0 };
+const OR_SUB_MODEL = 'z-ai/glm-5.2:free';
+const PROVIDER_CAPS = { mistral: 4, ollama: 4, local: 4, openrouter: 4 };
+const active = { mistral: 0, ollama: 0, local: 0, openrouter: 0 };
 let subRound = 0;
 
 export const chat = new Hono();
@@ -50,6 +52,9 @@ chat.post('/', async (c) => {
   ) || builtinKey();
   if (!key && !isLocalModel) {
     return c.json({ error: 'no API key — add one in the UI (🔑) or set OLLAMA_API_KEY/MISTRAL_API_KEY in .env' }, 500);
+  }
+  if (isORModel && !orKey) {
+    return c.json({ error: 'no OPENROUTER_API_KEY configured — set it to use OpenRouter free models' }, 500);
   }
 
   let pid = body.projectId;
@@ -83,6 +88,8 @@ chat.post('/', async (c) => {
   const requested = typeof body.model === 'string' && MODEL_RE.test(body.model) ? body.model : '';
   const model = requested || (project && MODEL_RE.test(project.model || '') ? project.model : '')
     || getVar('OLLAMA_MODEL') || 'gemma4:31b';
+  const isORModel = typeof model === 'string' && (model.includes('/') || model === 'openrouter/free');
+  const orKey = openrouterKey();
 
   // Credit system: free users get FREE_DAILY_CREDITS per day and each chat
   // deducts the chosen model's credit cost. BYOK users ride their own key;
@@ -208,10 +215,38 @@ chat.post('/', async (c) => {
         return { response: r, provider: 'local' };
       };
 
+      const tryOpenRouter = async () => {
+        if (!orKey) throw new Error('no OPENROUTER_API_KEY configured');
+        const r = await fetch(OPENROUTER_URL, {
+          method: 'POST',
+          signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+          headers: {
+            Authorization: `Bearer ${orKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://github.com/wigmastrrrrrrrrjr/aibuilder',
+            'X-Title': 'aibuilder',
+          },
+          body: JSON.stringify({ model, messages, stream: true }),
+        });
+        if (!r.ok) {
+          const t = await r.text().catch(() => '');
+          throw new Error(`openrouter ${r.status}: ${t.slice(0, 200)}`);
+        }
+        return { response: r, provider: 'openrouter' };
+      };
+
       let upstream;
       let provider = 'ollama';
 
-      if (isLocalModel && localUrl) {
+      if (isORModel) {
+        try {
+          ({ response: upstream, provider } = await tryOpenRouter());
+        } catch (e) {
+          send({ type: 'error', message: `openrouter failed: ${e.message}` });
+          try { controller.close(); } catch {}
+          return;
+        }
+      } else if (isLocalModel && localUrl) {
         try {
           ({ response: upstream, provider } = await tryLocal());
         } catch (e) {
@@ -366,11 +401,12 @@ chat.post('/', async (c) => {
 
       // Spin off a parallel sub-agent: a focused single-file generator that
       // runs concurrently with the main response and merges its FILE output in.
-      const providerNames = ['mistral', 'ollama', 'local'];
+      const providerNames = ['mistral', 'ollama', 'local', 'openrouter'];
       const providerAvailable = (id) =>
         id === 'mistral' ? Boolean(mistralKey)
           : id === 'local' ? Boolean(localUrl)
-            : Boolean(key);
+            : id === 'openrouter' ? Boolean(orKey)
+              : Boolean(key);
       const cloudModel = model.startsWith('local:') ? (getVar('OLLAMA_MODEL') || 'gemma4:31b') : model;
 
       // Route each sub-agent to a different provider than the main request
@@ -408,6 +444,19 @@ chat.post('/', async (c) => {
               body: JSON.stringify({ model: MISTRAL_MODEL, messages: msg, stream: true }),
             });
             if (!r.ok) throw new Error(`mistral ${r.status}`);
+          } else if (pid === 'openrouter') {
+            r = await fetch(OPENROUTER_URL, {
+              method: 'POST',
+              signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+              headers: {
+                Authorization: `Bearer ${orKey}`,
+                'Content-Type': 'application/json',
+                'HTTP-Referer': 'https://github.com/wigmastrrrrrrrrjr/aibuilder',
+                'X-Title': 'aibuilder',
+              },
+              body: JSON.stringify({ model: OR_SUB_MODEL, messages: msg, stream: true }),
+            });
+            if (!r.ok) throw new Error(`openrouter ${r.status}`);
           } else if (pid === 'local') {
             r = await fetch(`${localUrl}/api/chat`, {
               method: 'POST',
@@ -445,7 +494,7 @@ chat.post('/', async (c) => {
                 j = JSON.parse(payload);
               } catch { continue; }
               let tok = '';
-              if (pid === 'mistral') tok = j?.choices?.[0]?.delta?.content ?? '';
+              if (pid === 'mistral' || pid === 'openrouter') tok = j?.choices?.[0]?.delta?.content ?? '';
               else tok = j?.message?.content ?? '';
               if (!tok) continue;
               for (const ev of sp.feed(tok)) {
@@ -491,7 +540,7 @@ chat.post('/', async (c) => {
             j = JSON.parse(payload);
           } catch { continue; }
           let tok = '';
-          if (provider === 'mistral') {
+          if (provider === 'mistral' || provider === 'openrouter') {
             tok = j?.choices?.[0]?.delta?.content ?? '';
           } else {
             // ollama cloud + local ollama both use message.content

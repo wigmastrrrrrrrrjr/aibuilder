@@ -5,11 +5,13 @@
 //   whatever plan that key entitles, unfiltered.
 
 import { Hono } from 'hono';
-import { extractKey, builtinKey, mistralKey, localOllamaUrl } from './keys.js';
+import { extractKey, builtinKey, mistralKey, localOllamaUrl, openrouterKey } from './keys.js';
 import { getVar } from './env.js';
 
 const BASE = 'https://ollama.com/api/tags';
+const OR_BASE = 'https://openrouter.ai/api/v1/models';
 const cache = { t: 0, names: [] };
+const orCache = { t: 0, names: [] };
 
 // Models the free plan can actually run (verified via /api/chat probes;
 // see test/probe-models.sh to re-check after Ollama changes entitlements).
@@ -21,6 +23,31 @@ const FREE_MODELS = new Set([
   'nemotron-3-nano:30b',
   'nemotron-3-super',
   'nemotron-3-ultra',
+]);
+
+// OpenRouter's :free endpoints (no credit card, rate-limited per key).
+// Live catalogue is fetched when OPENROUTER_API_KEY is configured; this is
+// the offline/fallback snapshot (synced with the live list Aug 2026).
+const OR_FREE_MODELS = new Set([
+  'z-ai/glm-5.2:free',
+  'google/gemma-4-31b-it:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'nvidia/nemotron-3-super-120b-a12b:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+  'nvidia/nemotron-3.5-lightning:free',
+  'nvidia/nemotron-3.5-content-safety:free',
+  'minimax/minimax-m3:free',
+  'minimax/minimax-m2.7:free',
+  'poolside/laguna-s-2.1:free',
+  'poolside/laguna-xs-2.1:free',
+  'cohere/north-mini-code:free',
+  'inclusionai/ling-3.0-flash-fin:free',
+  'liquid/lfm-2.5-2.6b:free',
+  'dots-studio/dots-3-note-preview:free',
+  'thinkingmachines/inkling:free',
+  'thinkingmachines/inkling-small:free',
+  'openrouter/free', // auto-router: picks the best free model per request
 ]);
 
 // Best-for-coding preference order within the free tier.
@@ -59,6 +86,7 @@ const LOCAL_COST = 0.4;
 
 export function modelCost(model) {
   if (typeof model === 'string' && model.startsWith('local:')) return LOCAL_COST;
+  if (typeof model === 'string' && (model.endsWith(':free') || model === 'openrouter/free')) return FREE_TIER_COST;
   return CREDIT_COST[model] || FREE_TIER_COST;
 }
 
@@ -66,9 +94,19 @@ export const models = new Hono();
 
 function sortForCoding(names) {
   return [...names].sort((a, b) => {
-    const ra = CODING_RANK.indexOf(a); const rb = CODING_RANK.indexOf(b);
+    const ra = rankOf(a); const rb = rankOf(b);
     return (ra === -1 ? 99 : ra) - (rb === -1 ? 99 : rb);
   });
+}
+
+// OpenRouter free coding picks rank just below Ollama's top tier.
+const OR_RANK = ['z-ai/glm-5.2:free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'cohere/north-mini-code:free'];
+function rankOf(m) {
+  const i = CODING_RANK.indexOf(m);
+  if (i !== -1) return i;
+  const j = OR_RANK.indexOf(m);
+  if (j !== -1) return CODING_RANK.length + 1 + j;
+  return -1;
 }
 
 models.get('/', async (c) => {
@@ -87,6 +125,26 @@ models.get('/', async (c) => {
   }
 
   const bypassFreeFilter = Boolean(userKey) || String(getVar('ALLOW_ALL_MODELS') || '') === '1';
+
+  // Fetch OpenRouter's :free catalogue (only if a key is configured) and add
+  // those model names to the dropdown, sorted for coding after the Ollama set.
+  const orKey = openrouterKey();
+  const orNames = [];
+  if (orKey) {
+    if (orCache.names.length === 0 || Date.now() - orCache.t > 3600_000) {
+      try {
+        const or = await fetch(OR_BASE, { headers: { Authorization: `Bearer ${orKey}` } });
+        if (or.ok) {
+          const oj = await or.json();
+          orCache.names = (oj.data || [])
+            .map(m => m.id)
+            .filter(id => id === 'openrouter/free' || id.endsWith(':free'));
+        }
+        orCache.t = Date.now();
+      } catch { /* serve fallback */ }
+    }
+    orNames.push(...(orCache.names.length ? orCache.names : [...OR_FREE_MODELS]));
+  }
 
   // Per-key catalogue cache (built-in key cached; user keys fetched fresh).
   if (!userKey && (cache.names.length === 0 || Date.now() - cache.t > 120_000) || userKey) {
@@ -128,13 +186,20 @@ models.get('/', async (c) => {
       if (!names.includes(m)) names.push(m);
     }
   }
+  // Append OpenRouter free models (only when a key is configured)
+  if (orKey) {
+    for (const m of orNames) {
+      if (!names.includes(m)) names.push(m);
+    }
+  }
   return c.json({
     models: sortForCoding(names),
     recommended: recommendedPick(names.length ? names : [...FREE_MODELS]),
     freePlanOnly: !bypassFreeFilter,
+    openrouter: Boolean(orKey),
   });
 });
 
 function recommendedPick(avail) {
-  return CODING_RANK.find(m => avail.includes(m)) || avail[0] || 'gemma4:31b';
+  return CODING_RANK.find(m => avail.includes(m)) || OR_RANK.find(m => avail.includes(m)) || avail[0] || 'gemma4:31b';
 }

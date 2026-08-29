@@ -22,6 +22,11 @@ export function mistralKey() {
   return k && !k.startsWith('your_') ? k : '';
 }
 
+export function openrouterKey() {
+  const k = getVar('OPENROUTER_API_KEY');
+  return k && !k.startsWith('your_') ? k : '';
+}
+
 export function localOllamaUrl() {
   const u = getVar('LOCAL_OLLAMA_URL');
   return u && u.startsWith('http') ? u.replace(/\/+$/, '') : '';
