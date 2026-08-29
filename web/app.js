@@ -314,6 +314,8 @@ function paintAuth() {
   $('authPass').placeholder = authMode === 'reset' ? 'new password (min 6 chars)' : 'password (min 6 chars)';
   $('authEmail').hidden = authMode !== 'signup';
   $('dobRow').hidden = authMode !== 'signup';
+  $('agreeRow').hidden = authMode !== 'signup';
+  $('agreeCheck').required = authMode === 'signup';
 }
 $('authSwitch').addEventListener('click', () => {
   authMode = authMode === 'signup' ? 'login' : authMode === 'login' ? 'reset' : 'signup';
