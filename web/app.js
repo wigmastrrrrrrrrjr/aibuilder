@@ -394,6 +394,55 @@ $('keyBtn').addEventListener('click', () => {
   loadModels();
 });
 
+/* ---------- gift credits ---------- */
+function topConfirm(message, okLabel) {
+  return new Promise((resolve) => {
+    const ov = document.createElement('div');
+    ov.id = 'giftConfirm';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(8,10,18,.72);' +
+      'backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;' +
+      'font-family:system-ui,-apple-system,sans-serif';
+    ov.innerHTML =
+      '<div style="width:min(92vw,380px);background:#12141f;color:#e8eaf6;border:1px solid #2a2d44;' +
+      'border-radius:16px;padding:26px;box-shadow:0 24px 80px rgba(0,0,0,.55);box-sizing:border-box">' +
+      `<p style="margin:0 0 20px;font-size:14px;color:#e8eaf6;line-height:1.5">${String(message)}</p>` +
+      '<div style="display:flex;gap:10px">' +
+      '<button id="giftConfirmNo" style="flex:1;padding:12px;border:1px solid #2a2d44;border-radius:10px;' +
+      'background:#0c0e18;color:#9aa0c3;font-size:14px;cursor:pointer">No</button>' +
+      `<button id="giftConfirmOk" style="flex:1;padding:12px;border:0;border-radius:10px;` +
+      `background:linear-gradient(135deg,#7c5cff,#5ca9ff);color:#fff;font-weight:600;font-size:14px;cursor:pointer">` +
+      `${String(okLabel || 'Yes')}</button></div></div>`;
+    document.body.appendChild(ov);
+    const done = (v) => { ov.remove(); resolve(v); };
+    ov.addEventListener('click', (e) => { if (e.target === ov) done(false); });
+    $('giftConfirmNo').onclick = () => done(false);
+    $('giftConfirmOk').onclick = () => done(true);
+  });
+}
+
+$('giftBtn').addEventListener('click', async () => {
+  if (!sessTok()) { $('authGate').hidden = false; paintAuth(); return; }
+  const to = (prompt('Enter the username to gift credits to:' ) || '').trim();
+  if (!to) return;
+  const amtRaw = prompt('How many credits to gift?');
+  if (amtRaw === null || amtRaw === '') return;
+  const amount = Number(amtRaw);
+  if (!Number.isFinite(amount) || amount <= 0) { notify('Gift credits', 'Enter a positive number of credits.'); return; }
+  const qty = amount === 1 ? '1 credit' : `${amount} credits`;
+  const ok = await topConfirm(`Are you sure you want to gift ${to} ${qty}?`, 'Yes, gift');
+  if (!ok) return;
+  try {
+    const r = await fetch(`${API}/api/credits/gift`, {
+      method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ to, amount }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    notify('Gift credits', `Gifted ${qty} to ${to}.`);
+    await loadCredits();
+  } catch (e) { notify('Gift credits', e.message); }
+});
+
 /* ---------- data loading ---------- */
 async function loadMeta() {
   try {

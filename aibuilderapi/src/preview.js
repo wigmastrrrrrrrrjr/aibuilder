@@ -132,6 +132,33 @@ let BAAS_SDK_RAW = `(function () {
     });
   }
 
+  /* ---- always-on-top confirm (used by creat.credits.gift) ---- */
+  function topConfirm(message, okLabel) {
+    return new Promise(function (resolve) {
+      if (document.getElementById('__ab_confirm')) { resolve(false); return; }
+      var d = document.createElement('div');
+      d.id = '__ab_confirm';
+      d.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(8,10,18,.72);' +
+        'backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;' +
+        'font-family:system-ui,-apple-system,sans-serif';
+      d.innerHTML =
+        '<div style="width:min(92vw,380px);background:#12141f;color:#e8eaf6;border:1px solid #2a2d44;' +
+        'border-radius:16px;padding:26px;box-shadow:0 24px 80px rgba(0,0,0,.55);box-sizing:border-box">' +
+        '<p style="margin:0 0 20px;font-size:14px;color:#e8eaf6;line-height:1.5">' + String(message) + '</p>' +
+        '<div style="display:flex;gap:10px">' +
+        '<button id="__ab_cancel" style="flex:1;padding:12px;border:1px solid #2a2d44;border-radius:10px;' +
+        'background:#0c0e18;color:#9aa0c3;font-size:14px;cursor:pointer">No</button>' +
+        '<button id="__ab_ok" style="flex:1;padding:12px;border:0;border-radius:10px;' +
+        'background:linear-gradient(135deg,#7c5cff,#5ca9ff);color:#fff;font-weight:600;font-size:14px;cursor:pointer">' +
+        String(okLabel || 'Yes') + '</button></div></div>';
+      document.body.appendChild(d);
+      d.addEventListener('click', function (e) { if (e.target === d) { done(false); } });
+      function done(v) { d.remove(); resolve(v); }
+      document.getElementById('__ab_cancel').onclick = function () { done(false); };
+      document.getElementById('__ab_ok').onclick = function () { done(true); };
+    });
+  }
+
   window.creat = {
     db: {
       list:    function (c)        { return req('GET', [c]); },
@@ -339,6 +366,49 @@ let BAAS_SDK_RAW = `(function () {
           return j.result;
         });
       });
+    },
+    credits: {
+      // Current credit balance for the signed-in user (daily grant + earnings).
+      balance: function () {
+        return fetch('/api/credits', authHeaders())
+          .then(function (r) {
+            return r.text().then(function (t) {
+              var j = t ? JSON.parse(t) : {};
+              if (!r.ok) throw new Error(j.error || friendlyError(r.status));
+              return j.credits || j;
+            });
+          });
+      },
+      // Gift credits to another username. Always shows an on-top confirm first:
+      //   var res = await creat.credits.gift('bob', 5);
+      //   if (res.ok) ... else if (res.cancelled) ...
+      gift: function (to, amount) {
+        amount = Number(amount);
+        if (!/^[a-zA-Z0-9_-]{3,24}$/.test(String(to || '').trim()))
+          return Promise.reject(new Error('gift: username must be 3-24 letters, digits, - or _'));
+        if (!Number.isFinite(amount) || amount <= 0)
+          return Promise.reject(new Error('gift: amount must be a positive number of credits'));
+        var target = String(to).trim();
+        return topConfirm('Are you sure you want to gift ' + target + ' ' + amount + (amount === 1 ? ' credit' : ' credits') + '?', 'Yes, gift')
+          .then(function (confirmed) {
+            if (!confirmed) return { ok: false, cancelled: true };
+            return fetch('/api/credits/gift', {
+              method: 'POST',
+              headers: authHeaders({ 'content-type': 'application/json' }),
+              body: JSON.stringify({ to: target, amount: amount })
+            }).then(function (r) {
+              return r.text().then(function (t) {
+                var j = t ? JSON.parse(t) : {};
+                if (!r.ok) {
+                  var msg = j.error || friendlyError(r.status);
+                  if (r.status === 404) msg += ' <a href="/" style="color:#7c5cff;text-decoration:underline">Create one here</a>';
+                  throw new Error(msg);
+                }
+                return j;
+              });
+            });
+          });
+      }
     },
     lib: {
       _loaded: {},

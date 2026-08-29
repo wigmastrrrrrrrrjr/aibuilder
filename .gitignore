@@ -3,8 +3,11 @@ node_modules/
 .dev.vars
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 *.log
 dist/
 .wrangler/
 .DS_Store
 chat-test.out
+data/

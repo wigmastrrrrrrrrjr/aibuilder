@@ -32,7 +32,7 @@ export const app = new Hono();
 // Auth endpoints stay reachable from VPN/mobile/datacenter IPs so users can
 // always log in / sign up; the block protects the remaining API surface.
 app.use('/api/*', async (c, next) => {
-  if (c.req.path.startsWith('/api/auth') || c.req.path === '/api/credits') return next();
+  if (c.req.path.startsWith('/api/auth') || c.req.path.startsWith('/api/credits')) return next();
   return blockDatacenterIps()(c, next);
 });
 
@@ -40,10 +40,11 @@ app.use('/api/*', async (c, next) => {
 const DAY = 86400000;
 const MIN = 60000;
 const globalLimit = rateLimit({ windowMs: DAY, max: 200 });   // 200 API calls/day per IP
-const chatLimit   = rateLimit({ windowMs: DAY, max: 30 });    // 30 chats/day per IP
+const chatLimit   = rateLimit({ windowMs: MIN, max: 3000 });  // 3000 chats/min per IP
 const authLimit   = rateLimit({ windowMs: MIN, max: 3 });     // 3 auth attempts/min per IP
 const fnLimit     = rateLimit({ windowMs: DAY, max: 50 });    // 50 function calls/day per IP
 const uploadLimit = rateLimit({ windowMs: MIN, max: 3 });     // 3 uploads/min per IP
+const giftLimit   = rateLimit({ windowMs: MIN, max: 3 });     // 3 gifts/min per IP
 
 // ---- meta & models ----------------------------------------------------------
 app.get('/api/meta', (c) =>
@@ -83,6 +84,62 @@ app.get('/api/credits', requireUser, async (c) => {
     earned: unitsToCredits(bal.earned),
     team,
     teams: myTeams.map((t) => ({ id: t.id, name: t.name, owner: t.owner, members: Number(t.members || t.member_count || 0) })),
+  });
+});
+
+// gift credits to another user (deducts daily grant first, then earnings;
+// credits the recipient's lifetime earnings ledger so they can spend anytime)
+app.post('/api/credits/gift', requireUser, async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => ({}));
+  const targetName = String(body.to || '').trim();
+  const amountCredits = Number(body.amount);
+  const day = new Date().toISOString().slice(0, 10);
+
+  if (!targetName) return c.json({ error: 'recipient username required' }, 400);
+  if (!Number.isFinite(amountCredits) || amountCredits <= 0) return c.json({ error: 'amount must be a positive number of credits' }, 400);
+  const MAX = 10000;
+  if (amountCredits > MAX) return c.json({ error: `max gift is ${MAX} credits` }, 400);
+  if (targetName.toLowerCase() === user.name.toLowerCase()) return c.json({ error: 'gift to another user' }, 400);
+
+  const recipient = await store.findUserByName(targetName);
+  if (!recipient) return c.json({ error: `no user named "${targetName}"` }, 404);
+
+  const units = creditsToUnits(amountCredits);
+  const bal = await personalBalance(user, day);
+  if (bal.leftUnits < units) {
+    return c.json({
+      error: `You only have ${bal.leftCredits} credits available right now. Earn more by getting visits to published apps, or bring your own Ollama API key (🔑) for unlimited use.`,
+      credits: {
+        total: bal.totalCredits,
+        used: unitsToCredits(bal.spent) + unitsToCredits(bal.earned),
+        left: bal.leftCredits,
+        day,
+      },
+    }, 400);
+  }
+
+  // deduct daily grant first, then top up from earnings (same order as chat spend)
+  const dailyLeft = bal.totalUnits - bal.spent;
+  if (dailyLeft >= units) {
+    await store.spendCredits(user.id, day, units);
+  } else {
+    if (dailyLeft > 0) await store.spendCredits(user.id, day, dailyLeft);
+    await store.spendEarnings(user.name, units - dailyLeft);
+  }
+  await store.earnCredits(recipient.name, units);
+
+  const after = await personalBalance(user, day);
+  return c.json({
+    ok: true,
+    gift: { to: recipient.name, amount: unitsToCredits(units), day },
+    credits: {
+      total: after.totalCredits,
+      used: unitsToCredits(after.spent) + unitsToCredits(after.earned),
+      left: after.leftCredits,
+      day,
+    },
+    earned: unitsToCredits(after.earned),
   });
 });
 
@@ -313,6 +370,7 @@ app.use('/api/auth/*', authLimit);
 app.use('/api/chat', chatLimit);
 app.use('/api/projects/*/fn/*', fnLimit);
 app.use('/api/projects/*/upload', uploadLimit);
+app.use('/api/credits/gift', giftLimit);
 app.route('/', auth);
 app.route('/api/chat', chat);
 app.route('/', live);

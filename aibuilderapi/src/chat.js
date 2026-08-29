@@ -5,8 +5,6 @@ import { systemPrompt } from './prompt.js';
 import { extractKey, builtinKey, localOllamaUrl, openrouterKey } from './keys.js';
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
-import { modelCost, FREE_DAILY_CREDITS, creditsToUnits, unitsToCredits } from './models.js';
-import { teamPool, personalBalance } from './credits.js';
 import { createClient } from '@supabase/supabase-js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
@@ -95,59 +93,8 @@ chat.post('/', async (c) => {
   const isORModel = typeof model === 'string' && (model.includes('/') || model === 'openrouter/free');
   const orKey = openrouterKey();
 
-  // Credit system: free users get FREE_DAILY_CREDITS per day and each chat
-  // deducts the chosen model's credit cost. BYOK users ride their own key;
-  // Ai_Dev (the builder) is unlimited on the shared key too.
-  const hasOwnKey = Boolean(
-    extractKey(c.req.header('x-api-key'), typeof body.apiKey === 'string' ? body.apiKey : ''),
-  );
-  if (!hasOwnKey && user.name.toLowerCase() !== 'ai_dev') {
-    const day = new Date().toISOString().slice(0, 10);
-    const costUnits = creditsToUnits(modelCost(model));
-
-    // teambuild: chatting on a project their team shares spends from the team's
-    // shared pool (sum of every member's daily grant + earned interaction credits).
-    const shared = project && project.team_id
-      && await store.isTeamMember(project.team_id, user.name);
-
-    if (shared) {
-      const pool = await teamPool(project.team_id, day);
-      if (!pool || pool.leftUnits < costUnits) {
-        const cur = pool || { totalUnits: 0, usedUnits: 0, leftUnits: 0 };
-        return c.json({
-          error: `Your team's shared credit pool is out of credits — ${unitsToCredits(cur.leftUnits)} of ${unitsToCredits(cur.totalUnits)} left today. Add your own Ollama API key (🔑) for unlimited use.`,
-          credits: {
-            total: unitsToCredits(cur.totalUnits),
-            used: unitsToCredits(cur.usedUnits),
-            left: Math.max(0, unitsToCredits(cur.leftUnits)),
-            day,
-          },
-        }, 429);
-      }
-      await store.creditSpend(await store.teamCreditKey(project.team_id), day, costUnits);
-    } else {
-      // Personal account: draw the free daily grant first, then let interaction
-      // earnings (credit exchange) top the user up for the rest of the day.
-      const bal = await personalBalance(user, day);
-      const dailyLeft = bal.totalUnits - bal.spent;
-      if (dailyLeft >= costUnits) {
-        await store.spendCredits(user.id, day, costUnits);
-      } else if (dailyLeft + bal.earned >= costUnits) {
-        if (dailyLeft > 0) await store.spendCredits(user.id, day, dailyLeft);
-        await store.spendEarnings(user.name, costUnits - dailyLeft);
-      } else {
-        return c.json({
-          error: `Out of credits — ${bal.total} credits/day plus ${unitsToCredits(bal.earned)} earned, and this model costs ${modelCost(model)}. Add your own Ollama API key (🔑) for unlimited use.`,
-          credits: {
-            total: bal.totalCredits,
-            used: unitsToCredits(bal.spent) + unitsToCredits(bal.earned),
-            left: bal.leftCredits,
-            day,
-          },
-        }, 429);
-      }
-    }
-  }
+  // Chat is rate-limited only (3000 req/min per IP in app.js) — no per-request
+  // credit cost. Credit balances are still tracked for the gift feature.
   await store.setModel(pid, model);
 
   const history = (await store.history(pid)).map(m => ({ role: m.role, content: m.content }));
