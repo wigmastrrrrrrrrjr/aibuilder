@@ -68,16 +68,15 @@ the web builder. Chat with the generator, then it materializes every generated
 file into your working directory as real files you can polish in your editor.
 
 ```sh
-# build (needs cargo — CI also builds on push to main)
-cd tui && cargo build --release
+# install (macOS · Linux · Windows · Android/Termux) — no Rust required
+curl -fsSL https://wigmastrrrrrrrrjr.github.io/aibuilder/install.sh | sh
+# Windows (PowerShell):
+#   irm https://wigmastrrrrrrrrjr.github.io/aibuilder/install.ps1 | iex
 
-# start the REPL (first run asks for your account)
-./target/release/aib
-
-# one-shot commands
-./target/release/aib login
-./target/release/aib projects
-./target/release/aib export <project-id>   # write all files to ./<name>/
+aib login                    # sign in with your account
+aib                          # start the REPL
+aib projects                 # list projects
+aib export <project-id>      # write all files to ./<name>/
 ```
 
 Inside the REPL: just type a message to build. `/model <id>` sets the model,
