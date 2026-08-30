@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn file_edit_asset_are_writes() {
-        for t in ["file", "edit", "asset"] {
+        for t in ["file", "edit"] {
             let ev = crate::client::parse_event(&json!({ "type": t, "path": "src/x.js", "content": "abc" }));
             match ev {
                 Some(SseEvent::Write { path, content, encoding }) => {
@@ -119,6 +119,15 @@ mod tests {
                 }
                 other => panic!("{t}: expected Write, got {:?}", other.map(|_| "other")),
             }
+        }
+        let ev = crate::client::parse_event(&json!({ "type": "asset", "path": "img.png", "data": "aGVsbG8=", "encoding": "base64" }));
+        match ev {
+            Some(SseEvent::Write { path, content, encoding }) => {
+                assert_eq!(path, "img.png");
+                assert_eq!(content.as_deref(), Some("aGVsbG8="));
+                assert_eq!(encoding.as_deref(), Some("base64"));
+            }
+            other => panic!("asset: expected Write, got {:?}", other.map(|_| "other")),
         }
     }
 
