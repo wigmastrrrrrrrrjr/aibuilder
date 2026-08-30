@@ -89,13 +89,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp "tui/target/${{ matrix.target }}/release/aib${{ matrix.ext }}" "dist/aib-${{ matrix.target }}"
+          cp "tui/target/${{ matrix.target }}/release/aib${{ matrix.ext }}" "dist/aib-${{ matrix.target }}${{ matrix.ext }}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aib-${{ matrix.target }}
-          path: dist/aib-${{ matrix.target }}
+          name: aib-${{ matrix.target }}${{ matrix.ext }}
+          path: dist/aib-${{ matrix.target }}${{ matrix.ext }}
           if-no-files-found: error
 
   release:
