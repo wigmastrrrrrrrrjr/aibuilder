@@ -51,26 +51,33 @@ fi
 chmod +x "$TMP/$PROG"
 
 # --- install ----------------------------------------------------------------
-if command -v install >/dev/null 2>&1 && [ -w /usr/local/bin ]; then
+INSTALLED=""
+if [ -n "$PREFIX" ] && [ -d "$PREFIX/bin" ] && [ -w "$PREFIX/bin" ]; then
+  # Termux / Android: $PREFIX/bin is already on PATH
+  install -m 0755 "$TMP/$PROG" "$PREFIX/bin/$PROG"
+  INSTALLED="$PREFIX/bin"
+elif command -v install >/dev/null 2>&1 && [ -w /usr/local/bin ]; then
   install -m 0755 "$TMP/$PROG" /usr/local/bin/$PROG
-  DEST=/usr/local/bin
+  INSTALLED=/usr/local/bin
 elif [ -d "$HOME/.local/bin" ] || mkdir -p "$HOME/.local/bin" 2>/dev/null; then
   install -m 0755 "$TMP/$PROG" "$HOME/.local/bin/$PROG"
-  DEST="$HOME/.local/bin"
+  INSTALLED="$HOME/.local/bin"
 else
   install -m 0755 "$TMP/$PROG" "$PWD/$PROG"
-  DEST="$PWD"
+  INSTALLED="$PWD"
 fi
 
-say "Installed $PROG to $DEST"
-"$DEST/$PROG" --version 2>/dev/null || true
+say "Installed $PROG to $INSTALLED"
+if [ "$(command -v $PROG 2>/dev/null || true)" != "$INSTALLED/$PROG" ]; then
+  hash -r 2>/dev/null || true
+  if ! command -v $PROG >/dev/null 2>&1; then
+    say "PATH note: add $(dirname "$INSTALLED") to your PATH, or run:"
+    echo "  export PATH=\"$INSTALLED:\$PATH\""
+  fi
+fi
+"$INSTALLED/$PROG" --version 2>/dev/null || true
 echo
 say "Next steps:"
 echo "  aib login          sign in (or create an account)"
 echo "  aib                start the terminal builder"
 echo "  aib --help         all commands"
-if [ "$DEST" = "$HOME/.local/bin" ]; then
-  echo
-  echo "  Add to your PATH (if needed):"
-  echo '    export PATH="$HOME/.local/bin:$PATH"'
-fi
