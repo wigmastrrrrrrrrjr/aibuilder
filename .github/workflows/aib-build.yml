@@ -13,6 +13,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: aib-release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -112,13 +116,18 @@ jobs:
         run: ls -la bin/
 
       - name: Publish rolling "latest" release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release delete aib-latest --yes --cleanup-tag 2>/dev/null || true
-          gh release create aib-latest bin/aib-* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "aib — latest build" \
-            --notes "Auto-built from main ($GITHUB_SHA). Install with:
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: aib-latest
+          name: aib — latest build
+          body: |
+            Auto-built from main (${{ github.sha }}). Install with:
 
-            curl -fsSL https://wigmastrrrrrrrrjr.github.io/aibuilder/install.sh | sh"
+            curl -fsSL https://wigmastrrrrrrrrjr.github.io/aibuilder/install.sh | sh
+
+            Manual download: https://github.com/wigmastrrrrrrrrjr/aibuilder/releases/latest
+          files: bin/*
+          fail_on_unmatched_files: true
+          update_only: false
+          allow_updates: true
+          update_release_body: true
