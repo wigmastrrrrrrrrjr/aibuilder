@@ -113,6 +113,12 @@ export function createD1Store(d1) {
       ).bind(pid).all();
       return results;
     },
+    async listFilesWithContent(pid) {
+      const { results } = await d1.prepare(
+        'SELECT path, content, encoding, updated_at FROM files WHERE project_id = ? ORDER BY path'
+      ).bind(pid).all();
+      return results;
+    },
     async deleteFile(pid, fpath) {
       await d1.prepare('DELETE FROM files WHERE project_id = ? AND path = ?').bind(pid, fpath).run();
       const cur = await d1.prepare(

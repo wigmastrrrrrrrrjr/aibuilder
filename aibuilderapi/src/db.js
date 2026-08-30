@@ -225,6 +225,11 @@ useStore({
       'SELECT path, updated_at FROM files WHERE project_id = ? ORDER BY path'
     ).all(pid);
   },
+  async listFilesWithContent(pid) {
+    return db.prepare(
+      'SELECT path, content, encoding, updated_at FROM files WHERE project_id = ? ORDER BY path'
+    ).all(pid);
+  },
   async deleteFile(pid, fpath) {
     db.prepare('DELETE FROM files WHERE project_id = ? AND path = ?').run(pid, fpath);
     // record a deletion tombstone so the file can be restored

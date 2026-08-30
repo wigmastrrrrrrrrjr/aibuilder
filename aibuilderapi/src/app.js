@@ -195,6 +195,17 @@ app.get('/api/projects/:pid', async (c) => {
   });
 });
 
+// raw file export for the terminal client (and external tooling) — full contents
+app.get('/api/projects/:pid/export', async (c) => {
+  const project = await store.getProject(c.req.param('pid'));
+  if (!project) return c.json({ error: 'not found' }, 404);
+  return c.json({
+    name: project.name,
+    updated_at: project.updated_at || 0,
+    files: await store.listFilesWithContent(project.id),
+  });
+});
+
 app.delete('/api/projects/:pid', requireUser, async (c) => {
   const pid = c.req.param('pid');
   const project = await store.getProject(pid);

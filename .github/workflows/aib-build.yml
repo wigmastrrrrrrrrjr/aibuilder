@@ -1,0 +1,48 @@
+name: Build aib (terminal client)
+
+on:
+  push:
+    paths:
+      - "tui/**"
+      - ".github/workflows/aib-build.yml"
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tui/target
+          key: aib-${{ runner.os }}-cargo-${{ hashFiles('tui/Cargo.toml', 'tui/Cargo.lock') }}
+          restore-keys: |
+            aib-${{ runner.os }}-cargo-
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests (SSE parser, materialize path-guard)
+        working-directory: tui
+        run: cargo test
+
+      - name: Build release binary
+        working-directory: tui
+        run: cargo build --release
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: aib-linux
+          path: tui/target/release/aib
+
+      - name: Smoke-test the binary
+        working-directory: tui
+        run: |
+          ./target/release/aib --help 2>&1 | head -5 || true
+          ./target/release/aib projects 2>&1 | head -3 || echo "(!) no session — expected without token"
