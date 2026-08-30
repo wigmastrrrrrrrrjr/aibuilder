@@ -583,7 +583,6 @@ function buildWorkspaceContext(files) {
 
 async function workspaceChat(c, body, message, user) {
   const files = Array.isArray(body.files) ? body.files.slice(0, 200) : [];
-  if (!files.length) return c.json({ error: 'workspace files required' }, 400);
   const cleaned = [];
   const seen = new Set();
   for (const f of files) {
@@ -594,7 +593,6 @@ async function workspaceChat(c, body, message, user) {
     seen.add(path);
     cleaned.push({ path, content });
   }
-  if (!cleaned.length) return c.json({ error: 'workspace files required' }, 400);
 
   const isLocalModel = typeof body.model === 'string' && body.model.startsWith('local:');
   const key = extractKey(
@@ -698,6 +696,11 @@ async function workspaceChat(c, body, message, user) {
           send({ type: 'plan', items: ev.items });
         } else if (ev.type === 'name' && ev.name) {
           send({ type: 'name', name: ev.name });
+        } else if (ev.type === 'cmd' && ev.command) {
+          // Relay a shell command the client should run on the user's device.
+          // The client runs it locally (with approval) and sends the output
+          // back in a follow-up request so the model can keep working.
+          send({ type: 'cmd', command: String(ev.command) });
         }
       };
 

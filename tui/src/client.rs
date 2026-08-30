@@ -92,6 +92,30 @@ impl Client {
         serde_json::from_str(&text).map_err(|e| ApiError::Network(e.to_string()))
     }
 
+    pub async fn models(&self) -> Result<Vec<crate::api::ModelInfo>, ApiError> {
+        let r = self.http.get(format!("{}/api/models", self.base))
+            .headers(self.headers(false))
+            .send().await.map_err(|e| ApiError::Network(e.to_string()))?;
+        let status = r.status().as_u16();
+        let text = r.text().await.unwrap_or_default();
+        if status >= 300 {
+            return Err(ApiError::Http { status, message: text });
+        }
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            models: Vec<crate::api::ModelInfo>,
+            recommended: Option<String>,
+        }
+        let parsed: Resp = serde_json::from_str(&text).map_err(|e| ApiError::Network(e.to_string()))?;
+        let mut out = parsed.models;
+        if let Some(r) = parsed.recommended {
+            if !out.iter().any(|m| m.id == r) {
+                out.insert(0, crate::api::ModelInfo { id: r.clone(), name: Some(format!("{r} (recommended)")) });
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn list_projects(&self) -> Result<Vec<api::Project>, ApiError> {
         let r = self.http.get(format!("{}/api/projects", self.base))
             .headers(self.headers(false))
@@ -213,6 +237,7 @@ pub(crate) fn parse_event(v: &Value) -> Option<SseEvent> {
             content: None,
             encoding: None,
         }),
+        "cmd" => Some(SseEvent::Cmd(v.get("command").and_then(|x| x.as_str()).unwrap_or("").to_string())),
         "delete" => Some(SseEvent::Delete(v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_string())),
         "rename" => Some(SseEvent::Rename(
             v.get("from").and_then(|x| x.as_str()).unwrap_or("").to_string(),

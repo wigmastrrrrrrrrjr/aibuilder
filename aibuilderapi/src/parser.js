@@ -7,6 +7,7 @@
 //   rename       -> move a file and refactor references elsewhere
 //   plan/name    -> plan checklist / project title
 //   delegate     -> hand a file to a parallel sub-agent
+//   cmd          -> a shell command the client should run on the device
 //   run          -> execute functions/<name>.js with JSON input
 //   seed         -> insert demo rows into a creat.db collection
 //   batch/endbatch -> group of ops applied atomically (BATCH ... BATCHEND)
@@ -22,6 +23,7 @@
 //   <<<PLAN>>>              checklist lines        <<<END>>>
 //   <<<NAME:App title>>>                           (no body needed)
 //   <<<DELEGATE:css/t.min.css>>> task description  <<<END>>>
+//   <<<CMD>>>              shell command           <<<END>>>  (or <<<CMD:ls -la>>> one-liner)
 //   <<<BATCH>>> ... any blocks above ... <<<BATCHEND>>>
 //
 // EDIT bodies use:
@@ -39,8 +41,8 @@ const S_MARK = '<<<<<<< SEARCH';
 const R_MARK = '>>>>>>> REPLACE';
 const M_MARK = '=======';
 
-const KINDS = ['FILE', 'EDIT', 'DELETE', 'PLAN', 'NAME', 'DELEGATE', 'RENAME', 'RUN', 'ASSET', 'SEED', 'BATCH'];
-const BODY_KINDS = ['FILE', 'EDIT', 'PLAN', 'DELEGATE', 'RUN', 'ASSET', 'SEED'];
+const KINDS = ['FILE', 'EDIT', 'DELETE', 'PLAN', 'NAME', 'DELEGATE', 'RENAME', 'RUN', 'ASSET', 'SEED', 'BATCH', 'CMD'];
+const BODY_KINDS = ['FILE', 'EDIT', 'PLAN', 'DELEGATE', 'RUN', 'ASSET', 'SEED', 'CMD'];
 const PASS_THROUGH_KINDS = ['DELETE', 'NAME', 'RENAME'];
 
 function parsePlan(body) {
@@ -206,6 +208,15 @@ export class FileStreamer {
       events.push(this.stamp({ type: 'name', name: arg }));
       return;
     }
+    if (kind === 'CMD') {
+      // One-liner form: <<<CMD:ls -la>>>  (takes priority over the body form)
+      if (arg) {
+        events.push(this.stamp({ type: 'cmd', command: arg }));
+        return;
+      }
+      this.frames.push({ kind, path: '', body: '' }); // body form
+      return;
+    }
     if (kind === 'RENAME') {
       const m = arg.match(/^(.*?)\s*(?:->|→)\s*(.*)$/);
       if (m) events.push(this.stamp({ type: 'rename', from: m[1].trim(), to: m[2].trim() }));
@@ -240,6 +251,8 @@ export class FileStreamer {
         const s = seedPayload(frame.body);
         return { type: 'seed', collection: path, items: s.items, clear: s.clear, truncated };
       }
+      case 'CMD':
+        return { type: 'cmd', command: stripFences(frame.body.trim()), truncated };
       default:
         return null;
     }

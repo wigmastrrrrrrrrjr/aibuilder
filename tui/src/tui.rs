@@ -13,7 +13,6 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Terminal;
 use std::io::stdout;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
 const MAX_FILE_BYTES: u64 = 512 * 1024; // per file cap for context
@@ -28,6 +27,8 @@ pub enum UiEvent {
     Rename(String, String),
     Warn(String),
     Error(String),
+    Cmd(String),               // the model wants to run a shell command
+    CmdResult { cmd: String, output: String },
     Done(String),              // summary line
     End(String),               // stream closed cleanly
 }
@@ -46,6 +47,14 @@ pub struct App {
     rx: mpsc::UnboundedReceiver<UiEvent>,
     tx: mpsc::UnboundedSender<UiEvent>,
     status: String,
+    reply_line: Option<usize>,   // log index of the live assistant reply
+    pending_cmds: Vec<String>,
+    cmd_outputs: Vec<String>,
+    confirm_idx: usize,
+    awaiting_confirm: bool,
+    accept_all: bool,
+    cmd_running: bool,
+    followup_round: u32,
 }
 
 impl App {
@@ -59,7 +68,7 @@ impl App {
             cfg,
             log: vec![
                 "aib — terminal coding agent".to_string(),
-                "type a message to edit files, or /help for commands".to_string(),
+                "type a message to chat or edit files, /help for commands".to_string(),
             ],
             files: files.iter().map(|f| f.path.clone()).collect(),
             history: Vec::new(),
@@ -72,6 +81,14 @@ impl App {
             rx,
             tx,
             status,
+            reply_line: None,
+            pending_cmds: Vec::new(),
+            cmd_outputs: Vec::new(),
+            confirm_idx: 0,
+            awaiting_confirm: false,
+            accept_all: false,
+            cmd_running: false,
+            followup_round: 0,
         }
     }
 
@@ -79,7 +96,11 @@ impl App {
         let s = s.into();
         self.log.push(s);
         if self.log.len() > 2000 {
-            self.log.drain(..self.log.len() - 2000);
+            let drop = self.log.len() - 2000;
+            self.log.drain(..drop);
+            if let Some(ri) = self.reply_line {
+                self.reply_line = Some(ri.saturating_sub(drop));
+            }
         }
     }
 
@@ -92,21 +113,42 @@ impl App {
 
     fn submit(&mut self) {
         let msg = self.input.trim().to_string();
-        if msg.is_empty() || self.busy {
+        if msg.is_empty() {
             return;
         }
+        self.input.clear();
 
         if let Some(cmd) = msg.strip_prefix('/') {
-            self.input.clear();
             self.handle_command(cmd);
             return;
         }
 
-        self.input.clear();
+        if self.awaiting_confirm {
+            self.answer_confirm(&msg);
+            return;
+        }
+
+        if self.busy {
+            self.log("(busy — wait for the reply, or run /refresh)");
+            return;
+        }
+
+        self.start_turn(msg);
+    }
+
+    /// Kick off a single chat request that streams edits + maybe commands.
+    fn start_turn(&mut self, msg: String) {
         self.log(format!("> {}", msg));
         self.busy = true;
         self.assistant_buf.clear();
         self.last_user_msg = msg.clone();
+        self.reply_line = None;
+        self.pending_cmds.clear();
+        self.cmd_outputs.clear();
+        self.confirm_idx = 0;
+        self.awaiting_confirm = false;
+        self.accept_all = false;
+        self.cmd_running = false;
         self.status = "working…".to_string();
 
         let base = self.cfg.base.clone();
@@ -135,6 +177,7 @@ impl App {
                         }
                         crate::api::SseEvent::Delete(p) => UiEvent::Delete(p),
                         crate::api::SseEvent::Rename(a, b) => UiEvent::Rename(a, b),
+                        crate::api::SseEvent::Cmd(c) => UiEvent::Cmd(c),
                         crate::api::SseEvent::Warn(m) => UiEvent::Warn(m),
                         crate::api::SseEvent::Error(m) => UiEvent::Error(m),
                         crate::api::SseEvent::Done(d) => {
@@ -152,9 +195,118 @@ impl App {
                 .await;
             match res {
                 Ok(()) => { let _ = tx.send(UiEvent::End("done".to_string())); }
-                Err(e) => { let _ = tx.send(UiEvent::Error(format!("{}", e))); }
+                Err(e) => {
+                    let _ = tx.send(UiEvent::Error(format!("{}", e)));
+                    let _ = tx.send(UiEvent::End("error".to_string()));
+                }
             }
         });
+    }
+
+    fn answer_confirm(&mut self, answer: &str) {
+        if self.confirm_idx >= self.pending_cmds.len() {
+            self.finish_with_cmds();
+            return;
+        }
+        let cmd_text = self.pending_cmds[self.confirm_idx].clone();
+        match answer.trim().to_lowercase().as_str() {
+            "y" | "yes" | "run" => {
+                self.accept_all = false;
+                if !self.cmd_running {
+                    self.run_one(cmd_text);
+                }
+            }
+            "n" | "no" | "skip" | "" => {
+                self.cmd_outputs.push(format!("$ {}  (skipped)\n(no output — command declined)", cmd_text));
+                self.confirm_idx += 1;
+                self.step_confirm();
+            }
+            "a" | "all" => {
+                self.accept_all = true;
+                if !self.cmd_running {
+                    self.run_one(cmd_text);
+                }
+            }
+            other => {
+                self.log(format!("[cmd] answer y / n / a, got: {}", other));
+            }
+        }
+    }
+
+    /// Run one command on the device (in the workspace dir) via sh.
+    fn run_one(&mut self, cmd: String) {
+        self.cmd_running = true;
+        self.status = format!("running: {}", cmd);
+        let dir = self.in_dir.clone();
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .current_dir(&dir)
+                .output();
+            let text = match out {
+                Ok(o) => {
+                    let mut s = String::from_utf8_lossy(&o.stdout).to_string();
+                    if !o.stderr.is_empty() {
+                        s.push_str(&String::from_utf8_lossy(&o.stderr));
+                    }
+                    if s.trim().is_empty() { "[exit {status} — no output]".replace("{status}", &o.status.code().map(|c| c.to_string()).unwrap_or("?".into())) }
+                    else { s }
+                }
+                Err(e) => format!("[failed to run: {}]", e),
+            };
+            let _ = tx.send(UiEvent::CmdResult { cmd, output: text });
+        });
+    }
+
+    /// Move to the next queued command, or finish once all are resolved.
+    fn step_confirm(&mut self) {
+        if self.cmd_running {
+            return;
+        }
+        if self.confirm_idx >= self.pending_cmds.len() {
+            self.finish_with_cmds();
+            return;
+        }
+        let cmd_text = self.pending_cmds[self.confirm_idx].clone();
+        if self.accept_all {
+            self.run_one(cmd_text);
+        } else {
+            self.awaiting_confirm = true;
+            self.status = format!("run command? [y]es [n]o [a]ll: {}", cmd_text);
+        }
+    }
+
+    /// All commands resolved: stash the turn, feed outputs back as a follow-up,
+    /// or finish if there was nothing to run (or we've looped enough).
+    fn finish_with_cmds(&mut self) {
+        self.awaiting_confirm = false;
+        if !self.cmd_outputs.is_empty() && self.followup_round < 6 {
+            let outputs = self.cmd_outputs.join("\n");
+            // the model asked to run commands — hand it the results as a follow-up turn
+            let last = std::mem::take(&mut self.last_user_msg);
+            let ab = std::mem::take(&mut self.assistant_buf);
+            self.push_history("user".into(), last);
+            self.push_history("assistant".into(), ab);
+            self.followup_round += 1;
+            self.log("[cmd] output returned to model, continuing…");
+            self.start_turn(format!("Here is the output of the shell command(s) you requested (declined ones are marked):\n\n{outputs}\n\nContinue with your task."));
+            return;
+        }
+        self.complete_turn();
+    }
+
+    fn complete_turn(&mut self) {
+        let last = std::mem::take(&mut self.last_user_msg);
+        let ab = std::mem::take(&mut self.assistant_buf);
+        self.push_history("user".into(), last);
+        self.push_history("assistant".into(), ab);
+        self.busy = false;
+        self.status = "ready — edits applied to disk".to_string();
+        self.reply_line = None;
+        self.followup_round = 0;
+        self.files = gather_workspace_files(&self.in_dir).iter().map(|f| f.path.clone()).collect();
     }
 
     fn handle_command(&mut self, cmd: &str) {
@@ -163,7 +315,19 @@ impl App {
         let arg = parts.next().unwrap_or("").trim().to_string();
         match name.as_str() {
             "help" => {
-                self.log("commands: /help /model <m> /cd <dir> /ls /clear /refresh /history /logout /quit");
+                self.log("commands:");
+                self.log("  /model <name>   set the model (default gemma4:31b)");
+                self.log("  /models         list available models");
+                self.log("  /cd <dir>       change working directory");
+                self.log("  /ls             show files in the workspace");
+                self.log("  /history        show recent conversation");
+                self.log("  /clear          forget the current reply");
+                self.log("  /refresh        reset after an error / interrupt");
+                self.log("  /logout         sign out");
+                self.log("  /quit           exit");
+                self.log("");
+                self.log("just type a message to chat or edit files; the model can");
+                self.log("run shell commands in your project folder when you approve.");
             }
             "model" => {
                 if arg.is_empty() {
@@ -173,6 +337,22 @@ impl App {
                     let _ = crate::config::save(&self.cfg);
                     self.log(format!("model set: {}", arg));
                 }
+            }
+            "models" => {
+                let base = self.cfg.base.clone();
+                let token = self.cfg.token.clone();
+                let tx = self.tx.clone();
+                self.log("fetching model list…");
+                tokio::spawn(async move {
+                    let c = Client::new(&base, Some(token));
+                    match c.models().await {
+                        Ok(list) => {
+                            let ids: Vec<String> = list.iter().map(|m| m.id.clone()).collect();
+                            let _ = tx.send(UiEvent::Meta(String::new(), ids.join("\n")));
+                        }
+                        Err(e) => { let _ = tx.send(UiEvent::Error(format!("models: {}", e))); }
+                    }
+                });
             }
             "cd" => {
                 if arg.is_empty() {
@@ -219,6 +399,12 @@ impl App {
             }
             "refresh" => {
                 self.busy = false;
+                self.awaiting_confirm = false;
+                self.cmd_running = false;
+                self.pending_cmds.clear();
+                self.cmd_outputs.clear();
+                self.confirm_idx = 0;
+                self.reply_line = None;
                 self.status = "ready".to_string();
                 self.log("reset completed");
             }
@@ -236,7 +422,15 @@ impl App {
     fn drain_events(&mut self) {
         while let Ok(ev) = self.rx.try_recv() {
             match ev {
-                UiEvent::Meta(model, _extra) => {
+                UiEvent::Meta(model, extra) => {
+                    if !extra.is_empty() {
+                        self.log("available models:");
+                        for line in extra.lines() {
+                            self.log(format!("  {}", line));
+                        }
+                        self.log("pick one with /model <name>");
+                        return;
+                    }
                     if !model.is_empty() {
                         self.config_model(&model);
                     }
@@ -244,7 +438,14 @@ impl App {
                 }
                 UiEvent::Token(v) => {
                     self.assistant_buf.push_str(&v);
-                    self.status.push('▊');
+                    if let Some(idx) = self.reply_line {
+                        if idx < self.log.len() {
+                            self.log[idx].push_str(&v);
+                        }
+                    } else {
+                        self.log.push(format!("aib: {}", v));
+                        self.reply_line = Some(self.log.len() - 1);
+                    }
                 }
                 UiEvent::Write { path, content, encoding } => {
                     self.apply_write(&path, content, encoding);
@@ -264,25 +465,43 @@ impl App {
                     }
                     self.log(format!("[renamed] {} → {}", a, b));
                 }
+                UiEvent::Cmd(cmd) => {
+                    self.pending_cmds.push(cmd.clone());
+                    self.log(format!("[cmd] model wants to run: {}", cmd));
+                }
+                UiEvent::CmdResult { cmd, output } => {
+                    self.cmd_running = false;
+                    let head: String = if output.len() > 400 {
+                        let clipped: String = output.chars().take(400).collect();
+                        format!("{}…", clipped)
+                    } else {
+                        output.clone()
+                    };
+                    self.log(format!("[cmd] {} → {}", cmd, head));
+                    self.cmd_outputs.push(format!("$ {}\n{}", cmd, output));
+                    self.confirm_idx += 1;
+                    self.step_confirm();
+                }
                 UiEvent::Warn(m) => self.log(format!("[warn] {}", m)),
                 UiEvent::Error(m) => {
                     self.log(format!("[error] {}", m));
-                    self.busy = false;
+                    self.complete_turn();
                     self.status = "error — /refresh to continue".to_string();
                 }
                 UiEvent::Done(sum) => {
                     self.log(format!("[done] {}", sum));
-                    self.push_history("user".into(), self.last_user_msg.clone());
-                    self.push_history("assistant".into(), self.assistant_buf.clone());
-                    self.busy = false;
-                    self.status = "ready — edits applied to disk".to_string();
-                    // re-scan so the file list matches disk
-                    self.files = gather_workspace_files(&self.in_dir).iter().map(|f| f.path.clone()).collect();
                 }
                 UiEvent::End(_) => {
                     if self.busy {
-                        self.status = "stream ended".to_string();
-                        self.busy = false;
+                        if !self.pending_cmds.is_empty() {
+                            self.status = format!("model wants to run shell command: {}", self.pending_cmds[0]);
+                            self.awaiting_confirm = true;
+                        } else if self.followup_round > 0 {
+                            self.complete_turn();
+                            self.status = "ready".to_string();
+                        } else {
+                            self.complete_turn();
+                        }
                     }
                 }
             }
@@ -542,32 +761,61 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Min(3),
             Constraint::Length(3),
             Constraint::Length(1),
         ])
         .split(f.area());
 
+    // header
+    let model = if app.cfg.model.is_empty() { "gemma4:31b".to_string() } else { app.cfg.model.clone() };
+    let header = Line::from(vec![
+        Span::styled(" aib ", Style::default().bg(Color::Cyan).fg(Color::Black).add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" {} ", app.cfg.username), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw(" ▸ "),
+        Span::styled(model.clone(), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+        Span::raw(" · "),
+        Span::styled(format!("{} files", app.files.len()), Style::default().fg(Color::Yellow)),
+        Span::raw(" · "),
+        Span::styled(app.in_dir.display().to_string(), Style::default().fg(Color::DarkGray)),
+    ]);
+    f.render_widget(Paragraph::new(header), areas[0]);
+
     let main = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(75), Constraint::Percentage(25)])
-        .split(areas[0]);
+        .split(areas[1]);
 
-    // chat log
-    let title = format!(" chat — {} ", if app.busy { "working…" } else { "ready" });
+    // chat log — style by prefix, and keep the live reply visible
+    let title = if app.busy {
+        format!(" chat — {} ", if app.awaiting_confirm { "awaiting command approval" } else { "working…" })
+    } else {
+        " chat — aib ".to_string()
+    };
     let log_text: Vec<Line> = {
-        let start = app.log.len().saturating_sub((app.scroll as usize) + 0);
-        let _ = start;
-        app.log.iter().map(|l| Line::from(Span::styled(
-            l.clone(),
-            if l.starts_with("> ") {
+        app.log.iter().map(|l| {
+            let st = if l.starts_with("> ") {
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else if l.starts_with('[') {
+            } else if l.starts_with("aib:") {
+                Style::default().fg(Color::White)
+            } else if l.starts_with("[cmd]") {
+                Style::default().fg(Color::Magenta)
+            } else if l.starts_with("[error]") {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            } else if l.starts_with("[warn]") {
+                Style::default().fg(Color::Yellow)
+            } else if l.starts_with("[written]") || l.starts_with("[wrote]") || l.starts_with("[done]") {
                 Style::default().fg(Color::Green)
+            } else if l.starts_with("[deleted]") {
+                Style::default().fg(Color::Red)
+            } else if l.starts_with("[renamed]") {
+                Style::default().fg(Color::Yellow)
             } else {
-                Style::default()
-            },
-        ))).collect()
+                Style::default().fg(Color::DarkGray)
+            };
+            Line::from(Span::styled(l.clone(), st))
+        }).collect()
     };
     let log_par = Paragraph::new(log_text)
         .block(Block::default().borders(Borders::ALL).title(title))
@@ -576,32 +824,34 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     f.render_widget(log_par, main[0]);
 
     // file list
+    let files_title = format!(" files — {} ", app.files.len());
     let files_text: Vec<Line> = app.files.iter().map(|p| Line::from(Span::styled(
         p.clone(), Style::default().fg(Color::Yellow),
     ))).collect();
     let files_par = Paragraph::new(files_text)
-        .block(Block::default().borders(Borders::ALL).title(" files "))
+        .block(Block::default().borders(Borders::ALL).title(files_title))
         .wrap(Wrap { trim: false });
     f.render_widget(files_par, main[1]);
 
     // input
+    let input_label = if app.awaiting_confirm { " y/n/a → " } else if app.busy { " working… " } else { " message " };
     let input_par = Paragraph::new(app.input.as_str())
-        .block(Block::default().borders(Borders::ALL).title(" prompt "))
-        .style(if app.busy { Style::default().fg(Color::DarkGray) } else { Style::default() });
-    f.render_widget(input_par, areas[1]);
-    if !app.busy {
-        f.set_cursor_position(cursor_pos(areas[1], &app.input));
+        .block(Block::default().borders(Borders::ALL).title(input_label))
+        .style(if app.busy && !app.awaiting_confirm { Style::default().fg(Color::DarkGray) } else { Style::default() });
+    f.render_widget(input_par, areas[2]);
+    if !app.busy || app.awaiting_confirm {
+        f.set_cursor_position(cursor_pos(areas[2], &app.input));
     }
 
     // status bar
     let status = Line::from(vec![
         Span::raw(" "),
         Span::styled(&app.status, Style::default().fg(Color::Blue)),
-        Span::raw(" · in:"),
-        Span::styled(app.in_dir.display().to_string(), Style::default().fg(Color::Magenta)),
-        Span::raw(" · /quit to exit "),
+        Span::raw(" · /help · /model · "),
+        Span::styled("/quit", Style::default().fg(Color::DarkGray)),
+        Span::raw(" "),
     ]);
-    f.render_widget(Paragraph::new(status), areas[2]);
+    f.render_widget(Paragraph::new(status), areas[3]);
 }
 
 fn cursor_pos(area: Rect, input: &str) -> (u16, u16) {

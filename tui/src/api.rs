@@ -55,8 +55,16 @@ pub enum SseEvent {
     Name(String),
     Warn(String),
     Error(String),
+    Cmd(String),
     Done(DoneInfo),
     Other(serde_json::Value),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
