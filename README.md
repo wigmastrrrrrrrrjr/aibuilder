@@ -61,6 +61,33 @@ npm run logs                             # tail production logs
 
 Local development stays plain Node: `npm start` (no wrangler needed).
 
+## Terminal client (`tui/`)
+
+Build full projects from the terminal — a Rust REPL that talks to the same API as
+the web builder. Chat with the generator, then it materializes every generated
+file into your working directory as real files you can polish in your editor.
+
+```sh
+# build (needs cargo — CI also builds on push to main)
+cd tui && cargo build --release
+
+# start the REPL (first run asks for your account)
+./target/release/aib
+
+# one-shot commands
+./target/release/aib login
+./target/release/aib projects
+./target/release/aib export <project-id>   # write all files to ./<name>/
+```
+
+Inside the REPL: just type a message to build. `/model <id>` sets the model,
+`/out <dir>` changes where files land, `/ls` lists current files, `/quit` exits.
+Session (token, project) is stored in `~/.config/aib/config.json`.
+
+Backend support: `GET /api/projects/:pid/export` returns raw file contents
+(decoded from `base64` when stored that way) so a project can be materialized
+locally. Files are written with path-traversal protection.
+
 ## Layout
 
 ```
@@ -78,6 +105,7 @@ aibuilderapi/  the API — deployable standalone to Cloudflare Workers (wrangler
   src/index.js     local runner (`npm start`)
   src/worker.js    Workers entrypoint (D1 + static assets)
 web/      no-build vanilla JS SPA: builder (index.html) + discovery feed (discover.html)
+tui/      Rust terminal client — `aib` REPL, chat + materialize to disk (ratatui)
 schema.sql  shared local/D1 schema
 ```
 
