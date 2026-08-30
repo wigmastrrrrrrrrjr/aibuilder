@@ -745,6 +745,14 @@ fn handle_key(app: &mut App, k: KeyEvent) -> bool {
             app.input.push(c);
             false
         }
+        KeyCode::Up => {
+            app.scroll = app.scroll.saturating_add(3);
+            false
+        }
+        KeyCode::Down => {
+            app.scroll = app.scroll.saturating_sub(3);
+            false
+        }
         KeyCode::PageUp => {
             app.scroll = app.scroll.saturating_add(10);
             false
@@ -782,10 +790,17 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     ]);
     f.render_widget(Paragraph::new(header), areas[0]);
 
+    // on narrow (mobile) screens give the whole width to the log
+    let narrow = f.area().width < 60;
     let main = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(75), Constraint::Percentage(25)])
+        .constraints(if narrow {
+            vec![Constraint::Percentage(100)]
+        } else {
+            vec![Constraint::Percentage(75), Constraint::Percentage(25)]
+        })
         .split(areas[1]);
+    let log_area = main[0];
 
     // chat log — style by prefix, and keep the live reply visible
     let title = if app.busy {
@@ -817,21 +832,32 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(Span::styled(l.clone(), st))
         }).collect()
     };
+    // live view = newest messages pinned to the bottom; app.scroll counts
+    // lines scrolled back from the bottom (0 = follow the reply as it streams)
+    let rows = log_area.height.saturating_sub(2) as usize;
+    let total = app.log.len();
+    let offset_from_top = if app.scroll == 0 {
+        total.saturating_sub(rows)
+    } else {
+        total.saturating_sub(rows.saturating_add(app.scroll as usize))
+    };
     let log_par = Paragraph::new(log_text)
         .block(Block::default().borders(Borders::ALL).title(title))
         .wrap(Wrap { trim: false })
-        .scroll((app.scroll, 0));
-    f.render_widget(log_par, main[0]);
+        .scroll((offset_from_top as u16, 0));
+    f.render_widget(log_par, log_area);
 
-    // file list
-    let files_title = format!(" files — {} ", app.files.len());
-    let files_text: Vec<Line> = app.files.iter().map(|p| Line::from(Span::styled(
-        p.clone(), Style::default().fg(Color::Yellow),
-    ))).collect();
-    let files_par = Paragraph::new(files_text)
-        .block(Block::default().borders(Borders::ALL).title(files_title))
-        .wrap(Wrap { trim: false });
-    f.render_widget(files_par, main[1]);
+    if !narrow {
+        // file list
+        let files_title = format!(" files — {} ", app.files.len());
+        let files_text: Vec<Line> = app.files.iter().map(|p| Line::from(Span::styled(
+            p.clone(), Style::default().fg(Color::Yellow),
+        ))).collect();
+        let files_par = Paragraph::new(files_text)
+            .block(Block::default().borders(Borders::ALL).title(files_title))
+            .wrap(Wrap { trim: false });
+        f.render_widget(files_par, main[1]);
+    }
 
     // input
     let input_label = if app.awaiting_confirm { " y/n/a → " } else if app.busy { " working… " } else { " message " };
@@ -847,7 +873,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let status = Line::from(vec![
         Span::raw(" "),
         Span::styled(&app.status, Style::default().fg(Color::Blue)),
-        Span::raw(" · /help · /model · "),
+        Span::raw(" · up/down scroll · /help · /model · "),
         Span::styled("/quit", Style::default().fg(Color::DarkGray)),
         Span::raw(" "),
     ]);
