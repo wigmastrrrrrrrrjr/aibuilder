@@ -11,10 +11,15 @@ say() { printf '\033[1;36m%s\033[0m\n' "$*"; }
 die() { printf '\033[1;31m%s\033[0m\n' "error: $*" >&2; exit 1; }
 
 # --- detect OS -------------------------------------------------------------
+IS_ANDROID=0
+if [ -n "$PREFIX" ] && [ -d /system/lib64 ]; then
+  IS_ANDROID=1
+fi
 case "$(uname -s)" in
-  Linux)  OS="unknown-linux-gnu" ;;
+  Linux)
+    if [ "$IS_ANDROID" = "1" ]; then OS="linux-android"; EXT="";
+    else OS="unknown-linux-gnu"; fi ;;
   Darwin) OS="apple-darwin" ;;
-  FreeBSD) OS="unknown-freebsd" ;;
   MINGW*|MSYS*|CYGWIN*) OS="pc-windows-msvc"; EXT=".exe" ;;
   *) die "unsupported OS: $(uname -s)" ;;
 esac
