@@ -17,9 +17,15 @@ OPTIONS:
   --base <url>   API base (default https://aibuilderapi.csomeone301.workers.dev)
 ";
 
+const VERSION: &str = "0.1.0";
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version" || a == "-V" || a == "version") {
+        println!("aib {} (aibuilder terminal client)", VERSION);
+        return;
+    }
     let mut base = client::DEFAULT_BASE.to_string();
     let mut i = 0;
     while i < args.len() {

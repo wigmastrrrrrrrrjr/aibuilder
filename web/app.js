@@ -606,6 +606,34 @@ $('teamsBtn').addEventListener('click', () => {
   openTeams();
 });
 
+/* ---------- install CLI ---------- */
+const installModal = $('installModal');
+const copyTip = (btn) => {
+  const t = btn.textContent;
+  btn.textContent = 'Copied!';
+  setTimeout(() => { btn.textContent = t; }, 1400);
+};
+$('installBtn').addEventListener('click', () => { installModal.hidden = false; });
+$('authInstallLink').addEventListener('click', (e) => { e.preventDefault(); installModal.hidden = false; });
+$('installClose').addEventListener('click', () => { installModal.hidden = true; });
+installModal.addEventListener('click', (e) => { if (e.target === installModal) installModal.hidden = true; });
+document.querySelectorAll('.copyBtn').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    const code = $(btn.dataset.copy);
+    if (!code) return;
+    const text = code.textContent.trim();
+    try {
+      await navigator.clipboard.writeText(text);
+      copyTip(btn);
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy'); ta.remove();
+      copyTip(btn);
+    }
+  });
+});
+
 async function loadModels() {
   try {
     const r = await fetch(`${API}/api/models`, { headers: authHeaders() });

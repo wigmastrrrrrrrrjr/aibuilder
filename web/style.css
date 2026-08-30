@@ -920,3 +920,41 @@ button { font-family: inherit; }
   color: var(--text); outline: none;
 }
 .teamInput:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-tint); }
+
+/* ---- install CLI modal ---- */
+#installModal {
+  position: fixed; inset: 0; z-index: 110; background: rgba(15, 23, 42, 0.45);
+  display: flex; align-items: center; justify-content: center; padding: 18px;
+}
+#installModal[hidden] { display: none; }
+.installCard { width: min(94vw, 620px); }
+.installBody { padding: 18px 20px 20px; overflow-y: auto; }
+.installLead { font-size: 13.5px; line-height: 1.6; color: var(--muted); margin: 0 0 16px; }
+.installLead b { color: var(--text); }
+.osGroup { margin-bottom: 14px; }
+.osLabel {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;
+}
+.osLabel .ms { font-size: 16px; }
+.cmdBox {
+  display: flex; align-items: center; gap: 8px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 9px 10px 9px 14px;
+}
+.cmdBox code {
+  flex: 1; min-width: 0; font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', monospace;
+  font-size: 12px; color: var(--primary); white-space: nowrap; overflow-x: auto;
+}
+.cmdBox .copyBtn { flex: none; }
+.installSteps { display: flex; gap: 12px; padding: 9px 0; border-top: 1px dashed var(--border); align-items: flex-start; }
+.installSteps .n {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--primary); color: #fff; font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; margin-top: 2px;
+}
+.installSteps .t { font-size: 13.5px; line-height: 1.55; color: var(--text); }
+.installSteps code { font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--primary); }
+.installPw { font-size: 12px; color: var(--muted); margin: 12px 0 0; }
+.installPw code { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--text); }

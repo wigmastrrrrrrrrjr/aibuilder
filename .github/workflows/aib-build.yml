@@ -1,15 +1,20 @@
-name: Build aib (terminal client)
+name: Build & release aib (terminal client)
 
 on:
   push:
     paths:
       - "tui/**"
       - ".github/workflows/aib-build.yml"
+      - "web/install.sh"
+      - "web/install.ps1"
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,9 +26,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             tui/target
-          key: aib-${{ runner.os }}-cargo-${{ hashFiles('tui/Cargo.toml', 'tui/Cargo.lock') }}
+          key: aib-test-cargo-${{ hashFiles('tui/Cargo.toml', 'tui/Cargo.lock') }}
           restore-keys: |
-            aib-${{ runner.os }}-cargo-
+            aib-test-cargo-
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -31,18 +36,87 @@ jobs:
         working-directory: tui
         run: cargo test
 
+  build:
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            cross: true
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tui/target
+          key: aib-${{ matrix.target }}-cargo-${{ hashFiles('tui/Cargo.toml', 'tui/Cargo.lock') }}
+          restore-keys: |
+            aib-${{ matrix.target }}-cargo-
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compiler (aarch64 linux)
+        if: matrix.cross
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
+
       - name: Build release binary
         working-directory: tui
-        run: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Upload release binary
+      - name: Stage binary with canonical name
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "tui/target/${{ matrix.target }}/release/aib${{ matrix.ext }}" "dist/aib-${{ matrix.target }}"
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aib-linux
-          path: tui/target/release/aib
+          name: aib-${{ matrix.target }}
+          path: dist/aib-${{ matrix.target }}
+          if-no-files-found: error
 
-      - name: Smoke-test the binary
-        working-directory: tui
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: bin
+          merge-multiple: true
+
+      - name: Show staged files
+        run: ls -la bin/
+
+      - name: Publish rolling "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          ./target/release/aib --help 2>&1 | head -5 || true
-          ./target/release/aib projects 2>&1 | head -3 || echo "(!) no session — expected without token"
+          gh release delete aib-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create aib-latest bin/aib-* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "aib — latest build" \
+            --notes "Auto-built from main ($GITHUB_SHA). Install with:
+
+            curl -fsSL https://wigmastrrrrrrrrjr.github.io/aibuilder/install.sh | sh"
