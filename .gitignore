@@ -11,3 +11,5 @@ dist/
 .DS_Store
 chat-test.out
 data/
+tui/target/
+tui/build.log
