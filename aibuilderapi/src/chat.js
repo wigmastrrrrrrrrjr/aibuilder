@@ -489,7 +489,7 @@ async function openUpstream(model, messages, key, signal, emit) {
       body: JSON.stringify({ model, messages, stream: true }),
     });
     if (!r.ok) throw new Error(`ollama ${r.status}`);
-    return { response: r, provider: 'ollama' };
+    return { upstream: r, provider: 'ollama' };
   };
 
   const tryMistral = async () => {
@@ -504,7 +504,7 @@ async function openUpstream(model, messages, key, signal, emit) {
       const t = await r.text().catch(() => '');
       throw new Error(`mistral ${r.status}: ${t.slice(0, 200)}`);
     }
-    return { response: r, provider: 'mistral' };
+    return { upstream: r, provider: 'mistral' };
   };
 
   const tryLocal = async () => {
@@ -516,7 +516,7 @@ async function openUpstream(model, messages, key, signal, emit) {
       body: JSON.stringify({ model: localModel, messages, stream: true }),
     });
     if (!r.ok) throw new Error(`local ollama ${r.status}`);
-    return { response: r, provider: 'local' };
+    return { upstream: r, provider: 'local' };
   };
 
   const tryOpenRouter = async () => {
@@ -536,7 +536,7 @@ async function openUpstream(model, messages, key, signal, emit) {
       const t = await r.text().catch(() => '');
       throw new Error(`openrouter ${r.status}: ${t.slice(0, 200)}`);
     }
-    return { response: r, provider: 'openrouter' };
+    return { upstream: r, provider: 'openrouter' };
   };
 
   const isORModel = typeof model === 'string' && (model.includes('/') || model === 'openrouter/free');
