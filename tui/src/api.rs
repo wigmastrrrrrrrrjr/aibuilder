@@ -45,7 +45,11 @@ pub struct ChatMeta {
 pub enum SseEvent {
     Meta(ChatMeta),
     Token(String),
-    FileCow(String),     // file/edit/asset/subagent handled the same: a written path
+    Write {
+        path: String,
+        content: Option<String>,
+        encoding: Option<String>,
+    },
     Delete(String),
     Rename(String, String),
     Name(String),
@@ -53,6 +57,18 @@ pub enum SseEvent {
     Error(String),
     Done(DoneInfo),
     Other(serde_json::Value),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WorkspaceFile {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HistoryMsg {
+    pub role: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -92,13 +108,29 @@ mod tests {
     }
 
     #[test]
-    fn file_edit_asset_subagent_are_writes() {
-        for t in ["file", "edit", "asset", "subagent"] {
-            let ev = crate::client::parse_event(&json!({ "type": t, "path": "src/x.js" }));
+    fn file_edit_asset_are_writes() {
+        for t in ["file", "edit", "asset"] {
+            let ev = crate::client::parse_event(&json!({ "type": t, "path": "src/x.js", "content": "abc" }));
             match ev {
-                Some(SseEvent::FileCow(p)) => assert_eq!(p, "src/x.js"),
-                other => panic!("{t}: expected FileCow, got {:?}", other.map(|_| "other")),
+                Some(SseEvent::Write { path, content, encoding }) => {
+                    assert_eq!(path, "src/x.js");
+                    assert_eq!(content.as_deref(), Some("abc"));
+                    assert!(encoding.is_none());
+                }
+                other => panic!("{t}: expected Write, got {:?}", other.map(|_| "other")),
             }
+        }
+    }
+
+    #[test]
+    fn subagent_is_a_bare_write() {
+        let ev = crate::client::parse_event(&json!({ "type": "subagent", "path": "src/y.js" }));
+        match ev {
+            Some(SseEvent::Write { path, content, .. }) => {
+                assert_eq!(path, "src/y.js");
+                assert!(content.is_none());
+            }
+            other => panic!("expected Write, got {:?}", other.map(|_| "other")),
         }
     }
 

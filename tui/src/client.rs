@@ -110,56 +110,87 @@ impl Client {
         pid: &str,
         message: &str,
         model: &str,
-        mut on_event: impl FnMut(SseEvent),
+        on_event: impl FnMut(SseEvent),
     ) -> Result<(), ApiError> {
         let body = serde_json::json!({
             "projectId": pid,
             "message": message,
             "model": model,
         });
-        let mut res = self.http.post(format!("{}/api/chat", self.base))
+        let res = self.http.post(format!("{}/api/chat", self.base))
             .headers(self.headers(true))
             .body(body.to_string())
             .send().await.map_err(|e| ApiError::Network(e.to_string()))?;
-        let status = res.status().as_u16();
-        if status >= 300 {
-            let text = res.text().await.unwrap_or_default();
-            let parsed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-            return Err(ApiError::Http {
-                status,
-                message: parsed.get("error").and_then(|v| v.as_str()).unwrap_or(&text).to_string(),
-            });
-        }
+        stream_sse(res, on_event).await
+    }
 
-        let mut stream = res.bytes_stream();
-        let mut buf: Vec<u8> = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| ApiError::Network(e.to_string()))?;
-            buf.extend_from_slice(&chunk);
-            // SSE events are separated by blank lines (\n\n). Hunt for complete events.
-            let mut consumed = 0usize;
-            loop {
-                let text = String::from_utf8_lossy(&buf[consumed..]);
-                if let Some(rel) = text.find("\n\n") {
-                    let line = text[..rel].trim();
-                    consumed += rel + 2;
-                    if let Some(data) = line.strip_prefix("data:") {
-                        if let Ok(v) = serde_json::from_str::<Value>(data.trim()) {
-                            if let Some(ev) = parse_event(&v) {
-                                on_event(ev);
-                            }
+    /// POST /api/chat in workspace mode: uploads the current files so the
+    /// model can edit them, then streams SEARCH/REPLACE edits back to disk.
+    pub async fn workspace_chat(
+        &self,
+        state: &[api::WorkspaceFile],
+        history: &[api::HistoryMsg],
+        message: &str,
+        model: &str,
+        on_event: impl FnMut(SseEvent),
+    ) -> Result<(), ApiError> {
+        let body = serde_json::json!({
+            "mode": "workspace",
+            "files": state,
+            "history": history,
+            "message": message,
+            "model": model,
+        });
+        let res = self.http.post(format!("{}/api/chat", self.base))
+            .headers(self.headers(true))
+            .body(body.to_string())
+            .send().await.map_err(|e| ApiError::Network(e.to_string()))?;
+        stream_sse(res, on_event).await
+    }
+}
+
+async fn stream_sse(
+    res: reqwest::Response,
+    mut on_event: impl FnMut(SseEvent),
+) -> Result<(), ApiError> {
+    let status = res.status().as_u16();
+    if status >= 300 {
+        let text = res.text().await.unwrap_or_default();
+        let parsed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        return Err(ApiError::Http {
+            status,
+            message: parsed.get("error").and_then(|v| v.as_str()).unwrap_or(&text).to_string(),
+        });
+    }
+
+    let mut stream = res.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| ApiError::Network(e.to_string()))?;
+        buf.extend_from_slice(&chunk);
+        // SSE events are separated by blank lines (\n\n). Hunt for complete events.
+        let mut consumed = 0usize;
+        loop {
+            let text = String::from_utf8_lossy(&buf[consumed..]);
+            if let Some(rel) = text.find("\n\n") {
+                let line = text[..rel].trim();
+                consumed += rel + 2;
+                if let Some(data) = line.strip_prefix("data:") {
+                    if let Ok(v) = serde_json::from_str::<Value>(data.trim()) {
+                        if let Some(ev) = parse_event(&v) {
+                            on_event(ev);
                         }
                     }
-                } else {
-                    break;
                 }
-            }
-            if consumed > 0 {
-                buf.drain(..consumed);
+            } else {
+                break;
             }
         }
-        Ok(())
+        if consumed > 0 {
+            buf.drain(..consumed);
+        }
     }
+    Ok(())
 }
 
 pub(crate) fn parse_event(v: &Value) -> Option<SseEvent> {
@@ -167,9 +198,21 @@ pub(crate) fn parse_event(v: &Value) -> Option<SseEvent> {
     match t {
         "meta" => Some(SseEvent::Meta(serde_json::from_value(v.clone()).ok()?)),
         "token" => Some(SseEvent::Token(v.get("v").and_then(|x| x.as_str()).unwrap_or("").to_string())),
-        "file" | "edit" | "asset" | "subagent" => Some(SseEvent::FileCow(
-            v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        )),
+        "file" | "edit" => Some(SseEvent::Write {
+            path: v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            content: v.get("content").and_then(|x| x.as_str()).map(|s| s.to_string()),
+            encoding: v.get("encoding").and_then(|x| x.as_str()).map(|s| s.to_string()),
+        }),
+        "asset" => Some(SseEvent::Write {
+            path: v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            content: v.get("data").and_then(|x| x.as_str()).map(|s| s.to_string()),
+            encoding: v.get("encoding").and_then(|x| x.as_str()).map(|s| s.to_string()),
+        }),
+        "subagent" => Some(SseEvent::Write {
+            path: v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            content: None,
+            encoding: None,
+        }),
         "delete" => Some(SseEvent::Delete(v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_string())),
         "rename" => Some(SseEvent::Rename(
             v.get("from").and_then(|x| x.as_str()).unwrap_or("").to_string(),

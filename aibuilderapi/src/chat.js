@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { store } from './store.js';
 import { FileStreamer } from './parser.js';
-import { systemPrompt } from './prompt.js';
+import { systemPrompt, workspaceSystemPrompt } from './prompt.js';
 import { extractKey, builtinKey, localOllamaUrl, openrouterKey } from './keys.js';
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
@@ -39,6 +39,10 @@ chat.post('/', async (c) => {
   const message = body?.message;
   if (!message || typeof message !== 'string') {
     return c.json({ error: 'message required' }, 400);
+  }
+
+  if (body?.mode === 'workspace') {
+    return workspaceChat(c, body, message, user);
   }
 
   // BYOK: a user-supplied key (x-api-key header or body.apiKey) takes priority
@@ -123,106 +127,17 @@ chat.post('/', async (c) => {
       send({ type: 'meta', projectId: pid, model });
 
       const mistralKey = getVar('MISTRAL_API_KEY') || '';
-
-      const tryOllama = async () => {
-        const r = await fetch(OLLAMA_URL, {
-          method: 'POST',
-          signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
-          headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, messages, stream: true }),
-        });
-        if (!r.ok) throw new Error(`ollama ${r.status}`);
-        return { response: r, provider: 'ollama' };
-      };
-
-      const tryMistral = async () => {
-        if (!mistralKey) throw new Error('no MISTRAL_API_KEY configured');
-        const r = await fetch(MISTRAL_URL, {
-          method: 'POST',
-          signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
-          headers: { Authorization: `Bearer ${mistralKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: MISTRAL_MODEL, messages, stream: true }),
-        });
-        if (!r.ok) {
-          const t = await r.text().catch(() => '');
-          throw new Error(`mistral ${r.status}: ${t.slice(0, 200)}`);
-        }
-        return { response: r, provider: 'mistral' };
-      };
-
       const localUrl = localOllamaUrl();
-      const isLocalModel = typeof model === 'string' && model.startsWith('local:');
-      const localModel = isLocalModel ? model.slice(6) : model;
-
-      const tryLocal = async () => {
-        if (!localUrl) throw new Error('no LOCAL_OLLAMA_URL configured');
-        const r = await fetch(`${localUrl}/api/chat`, {
-          method: 'POST',
-          signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: localModel, messages, stream: true }),
-        });
-        if (!r.ok) throw new Error(`local ollama ${r.status}`);
-        return { response: r, provider: 'local' };
-      };
-
-      const tryOpenRouter = async () => {
-        if (!orKey) throw new Error('no OPENROUTER_API_KEY configured');
-        const r = await fetch(OPENROUTER_URL, {
-          method: 'POST',
-          signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
-          headers: {
-            Authorization: `Bearer ${orKey}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://github.com/wigmastrrrrrrrrjr/aibuilder',
-            'X-Title': 'aibuilder',
-          },
-          body: JSON.stringify({ model, messages, stream: true }),
-        });
-        if (!r.ok) {
-          const t = await r.text().catch(() => '');
-          throw new Error(`openrouter ${r.status}: ${t.slice(0, 200)}`);
-        }
-        return { response: r, provider: 'openrouter' };
-      };
 
       let upstream;
       let provider = 'ollama';
-
-      if (isORModel) {
-        try {
-          ({ response: upstream, provider } = await tryOpenRouter());
-        } catch (e) {
-          send({ type: 'error', message: `openrouter failed: ${e.message}` });
-          try { controller.close(); } catch {}
-          return;
-        }
-      } else if (isLocalModel && localUrl) {
-        try {
-          ({ response: upstream, provider } = await tryLocal());
-        } catch (e) {
-          send({ type: 'error', message: `local ollama failed: ${e.message}` });
-          try { controller.close(); } catch {}
-          return;
-        }
-      } else {
-        try {
-          ({ response: upstream, provider } = await tryOllama());
-        } catch (e1) {
-          send({ type: 'warn', message: `ollama failed (${e1.message}), trying mistral...` });
-          try {
-            ({ response: upstream, provider } = await tryMistral());
-          } catch (e2) {
-            send({ type: 'warn', message: `mistral failed (${e2.message}), trying local...` });
-            try {
-              ({ response: upstream, provider } = await tryLocal());
-            } catch (e3) {
-              send({ type: 'error', message: `all providers down: ollama: ${e1.message}; mistral: ${e2.message}; local: ${e3.message}` });
-              try { controller.close(); } catch {}
-              return;
-            }
-          }
-        }
+      const emit = (ev) => send(ev);
+      try {
+        ({ upstream, provider } = await openUpstream(model, messages, key, ac.signal, emit));
+      } catch (e) {
+        send({ type: 'error', message: e.message });
+        try { controller.close(); } catch {}
+        return;
       }
       active[provider]++;
 
@@ -558,6 +473,281 @@ chat.post('/', async (c) => {
 });
 
 // ---- generator op helpers ---------------------------------------------------
+
+async function openUpstream(model, messages, key, signal, emit) {
+  const mistralKey = getVar('MISTRAL_API_KEY') || '';
+  const orKey = openrouterKey();
+  const localUrl = localOllamaUrl();
+  const isLocalModel = typeof model === 'string' && model.startsWith('local:');
+  const localModel = isLocalModel ? model.slice(6) : model;
+
+  const tryOllama = async () => {
+    const r = await fetch(OLLAMA_URL, {
+      method: 'POST',
+      signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, stream: true }),
+    });
+    if (!r.ok) throw new Error(`ollama ${r.status}`);
+    return { response: r, provider: 'ollama' };
+  };
+
+  const tryMistral = async () => {
+    if (!mistralKey) throw new Error('no MISTRAL_API_KEY configured');
+    const r = await fetch(MISTRAL_URL, {
+      method: 'POST',
+      signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
+      headers: { Authorization: `Bearer ${mistralKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: MISTRAL_MODEL, messages, stream: true }),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`mistral ${r.status}: ${t.slice(0, 200)}`);
+    }
+    return { response: r, provider: 'mistral' };
+  };
+
+  const tryLocal = async () => {
+    if (!localUrl) throw new Error('no LOCAL_OLLAMA_URL configured');
+    const r = await fetch(`${localUrl}/api/chat`, {
+      method: 'POST',
+      signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: localModel, messages, stream: true }),
+    });
+    if (!r.ok) throw new Error(`local ollama ${r.status}`);
+    return { response: r, provider: 'local' };
+  };
+
+  const tryOpenRouter = async () => {
+    if (!orKey) throw new Error('no OPENROUTER_API_KEY configured');
+    const r = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
+      headers: {
+        Authorization: `Bearer ${orKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://github.com/wigmastrrrrrrrrjr/aibuilder',
+        'X-Title': 'aibuilder',
+      },
+      body: JSON.stringify({ model, messages, stream: true }),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`openrouter ${r.status}: ${t.slice(0, 200)}`);
+    }
+    return { response: r, provider: 'openrouter' };
+  };
+
+  const isORModel = typeof model === 'string' && (model.includes('/') || model === 'openrouter/free');
+  if (isORModel) return tryOpenRouter();
+  if (isLocalModel && localUrl) return tryLocal();
+  try {
+    return await tryOllama();
+  } catch (e1) {
+    if (emit) emit({ type: 'warn', message: `ollama failed (${e1.message}), trying mistral...` });
+    try {
+      return await tryMistral();
+    } catch (e2) {
+      if (emit) emit({ type: 'warn', message: `mistral failed (${e2.message}), trying local...` });
+      try {
+        return await tryLocal();
+      } catch (e3) {
+        throw new Error(`all providers down: ollama: ${e1.message}; mistral: ${e2.message}; local: ${e3.message}`);
+      }
+    }
+  }
+}
+
+// Stateless "workspace" mode: the client uploads its current files, we send
+// them (plus optional history) to the model, and stream ops back with FULL
+// content so the client can apply edits to its own disk. No server-side
+// project, no storage, no presence — the TUI is the source of truth.
+const CTX_BUDGET_WS = 30000;
+
+function buildWorkspaceContext(files) {
+  if (!files.length) return '';
+  const names = files.map((f) => f.path).join(', ');
+  const prio = (p) => p === 'index.html' ? 0 : /\.(js|mjs|cjs|ts|tsx|jsx|py|rs|go|java|rb|sh|json|yml|yaml|toml|css|scss|html|vue|svelte)$/.test(p) ? 1 : 2;
+  const parts = [`\n\n## Current state of the workspace`, `Files present: ${names}`];
+  let budget = CTX_BUDGET_WS;
+  for (const f of [...files].sort((a, b) => prio(a.path) - prio(b.path))) {
+    if (budget <= 200) break;
+    let c = String(f.content ?? '');
+    if (c.length > budget) c = c.slice(0, budget) + '\n…(truncated)';
+    budget -= c.length;
+    parts.push(`--- ${f.path} ---\n${c}`);
+  }
+  return '\n' + parts.join('\n');
+}
+
+async function workspaceChat(c, body, message, user) {
+  const files = Array.isArray(body.files) ? body.files.slice(0, 200) : [];
+  if (!files.length) return c.json({ error: 'workspace files required' }, 400);
+  const cleaned = [];
+  const seen = new Set();
+  for (const f of files) {
+    const path = String(f?.path || '').replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/^\/+/, '').trim();
+    if (!path || path === '.' || path.includes('..') || seen.has(path)) continue;
+    const content = typeof f?.content === 'string' ? f.content : '';
+    if (content.length > 1024 * 1024) { continue; } // skip absurd files
+    seen.add(path);
+    cleaned.push({ path, content });
+  }
+  if (!cleaned.length) return c.json({ error: 'workspace files required' }, 400);
+
+  const isLocalModel = typeof body.model === 'string' && body.model.startsWith('local:');
+  const key = extractKey(
+    c.req.header('x-api-key'),
+    typeof body.apiKey === 'string' ? body.apiKey : '',
+  ) || builtinKey();
+  if (!key && !isLocalModel) {
+    return c.json({ error: 'no API key — add one in the UI (🔑) or set OLLAMA_API_KEY/MISTRAL_API_KEY in .env' }, 500);
+  }
+
+  const requested = typeof body.model === 'string' && MODEL_RE.test(body.model) ? body.model : '';
+  const model = requested || getVar('OLLAMA_MODEL') || 'gemma4:31b';
+
+  const history = Array.isArray(body.history) ? body.history.slice(-40) : [];
+  const messages = [
+    { role: 'system', content: workspaceSystemPrompt() + buildWorkspaceContext(cleaned) },
+    ...history,
+    { role: 'user', content: message },
+  ];
+
+  const ac = new AbortController();
+  c.req.raw.signal.addEventListener('abort', () => ac.abort());
+  const enc = new TextEncoder();
+
+  const streamBody = new ReadableStream({
+    async start(controller) {
+      let closed = false;
+      const send = (ev) => {
+        if (closed) return;
+        try {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
+        } catch { closed = true; }
+      };
+      send({ type: 'meta', workspace: true, model });
+
+      let upstream;
+      let provider = 'ollama';
+      const emit = (ev) => send(ev);
+      try {
+        ({ upstream, provider } = await openUpstream(model, messages, key, ac.signal, emit));
+      } catch (e) {
+        send({ type: 'error', message: e.message });
+        try { controller.close(); } catch {}
+        return;
+      }
+
+      // in-memory copy of the workspace for applying surgical edits
+      const ws = new Map(cleaned.map((f) => [f.path, f.content]));
+      const written = [];
+      const edited = [];
+      const deleted = [];
+      const renamed = [];
+      let ops = 0;
+
+      const handleGen = async (ev) => {
+        if (ev.type === 'file' && ev.path) {
+          ws.set(ev.path, ev.content);
+          written.push(ev.path);
+          ops++;
+          send({ type: 'file', path: ev.path, content: ev.content });
+        } else if (ev.type === 'edit' && ev.path) {
+          const existing = ws.get(ev.path);
+          if (existing === undefined) {
+            send({ type: 'warn', message: `edit failed on ${ev.path}: file not present in workspace` });
+            return;
+          }
+          let text = existing;
+          let ok = true;
+          for (const h of (ev.hunks || [])) {
+            const i = text.indexOf(h.search);
+            if (i === -1) {
+              send({ type: 'warn', message: `edit failed on ${ev.path}: search text not found: ${JSON.stringify(String(h.search).slice(0, 60))}` });
+              ok = false;
+              break;
+            }
+            text = text.slice(0, i) + h.replace + text.slice(i + h.search.length);
+          }
+          if (!ok) return;
+          ws.set(ev.path, text);
+          edited.push(ev.path);
+          ops++;
+          send({ type: 'edit', path: ev.path, content: text });
+        } else if (ev.type === 'delete' && ev.path) {
+          ws.delete(ev.path);
+          deleted.push(ev.path);
+          ops++;
+          send({ type: 'delete', path: ev.path });
+        } else if (ev.type === 'rename' && ev.from && ev.to) {
+          if (ws.has(ev.from)) {
+            ws.set(ev.to, ws.get(ev.from));
+            ws.delete(ev.from);
+          }
+          renamed.push(`${ev.from} -> ${ev.to}`);
+          ops++;
+          send({ type: 'rename', from: ev.from, to: ev.to });
+        } else if (ev.type === 'asset' && ev.path) {
+          ws.set(ev.path, ev.data || '');
+          ops++;
+          send({ type: 'asset', path: ev.path, encoding: ev.encoding || 'utf8', data: ev.data || '' });
+        } else if (ev.type === 'plan' && ev.items) {
+          send({ type: 'plan', items: ev.items });
+        } else if (ev.type === 'name' && ev.name) {
+          send({ type: 'name', name: ev.name });
+        }
+      };
+
+      const parser = new FileStreamer();
+      try {
+        const reader = upstream.body.getReader();
+        const dec = new TextDecoder();
+        let lineBuf = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          lineBuf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = lineBuf.indexOf('\n')) !== -1) {
+            const line = lineBuf.slice(0, nl).trim();
+            lineBuf = lineBuf.slice(nl + 1);
+            if (!line || line === 'data: [DONE]') continue;
+            let j;
+            try {
+              const payload = line.startsWith('data: ') ? line.slice(6) : line;
+              j = JSON.parse(payload);
+            } catch { continue; }
+            let tok = '';
+            if (provider === 'mistral' || provider === 'openrouter') {
+              tok = j?.choices?.[0]?.delta?.content ?? '';
+            } else {
+              const msg = j?.message ?? {};
+              if (msg.thinking) send({ type: 'think', v: msg.thinking });
+              tok = msg.content ?? '';
+            }
+            if (!tok) continue;
+            send({ type: 'token', v: tok });
+            for (const ev of parser.feed(tok)) await handleGen(ev);
+          }
+        }
+        for (const ev of parser.flush()) await handleGen(ev);
+        send({ type: 'done', files: written, edited, deleted, renamed, model, workspace: true });
+      } catch (e) {
+        if (!ac.signal.aborted) send({ type: 'error', message: String(e.message || e) });
+      }
+      try { controller.close(); } catch {}
+    },
+    cancel() { ac.abort(); },
+  });
+
+  return c.newResponse(streamBody, 200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache',
+  });
+}
 
 async function applyEdit(pid, fpath, hunks) {
   if (!hunks.length) return { error: 'no SEARCH/REPLACE hunks found' };

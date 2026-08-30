@@ -1,3 +1,4 @@
+use crate::api::{HistoryMsg, WorkspaceFile};
 use crate::client::Client;
 use crate::config::Config;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -12,12 +13,17 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Terminal;
 use std::io::stdout;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
+const MAX_FILE_BYTES: u64 = 512 * 1024; // per file cap for context
+const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024; // total context cap
+const MAX_FILES: usize = 200;
+
 pub enum UiEvent {
-    Meta(String, String),      // projectId, model
+    Meta(String, String),      // model, status
     Token(String),
-    File(String),
+    Write { path: String, content: Option<String>, encoding: Option<String> },
     Delete(String),
     Rename(String, String),
     Warn(String),
@@ -30,10 +36,13 @@ pub struct App {
     cfg: Config,
     log: Vec<String>,
     files: Vec<String>,
+    history: Vec<HistoryMsg>,
+    assistant_buf: String,
+    last_user_msg: String,
     input: String,
     scroll: u16,
     busy: bool,
-    out_dir: PathBuf,
+    in_dir: PathBuf,
     rx: mpsc::UnboundedReceiver<UiEvent>,
     tx: mpsc::UnboundedSender<UiEvent>,
     status: String,
@@ -42,24 +51,24 @@ pub struct App {
 impl App {
     fn new(cfg: Config) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let out_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let mut status = format!("logged in as {}", cfg.username);
-        if cfg.project_id.is_empty() {
-            status.push_str(" — no project yet (just chat! a new project is created for you)");
-        } else {
-            status.push_str(&format!(" — project {}", cfg.project_id));
-        }
+        let in_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let files = gather_workspace_files(&in_dir);
+        let mut status = format!("logged in as {} — workspace agent", cfg.username);
+        status.push_str(&format!(" ({} files in {})", files.len(), in_dir.display()));
         App {
             cfg,
             log: vec![
-                "aib — terminal app builder".to_string(),
-                "type a message to build, or /help for commands".to_string(),
+                "aib — terminal coding agent".to_string(),
+                "type a message to edit files, or /help for commands".to_string(),
             ],
-            files: Vec::new(),
+            files: files.iter().map(|f| f.path.clone()).collect(),
+            history: Vec::new(),
+            assistant_buf: String::new(),
+            last_user_msg: String::new(),
             input: String::new(),
             scroll: 0,
             busy: false,
-            out_dir,
+            in_dir,
             rx,
             tx,
             status,
@@ -96,27 +105,34 @@ impl App {
         self.input.clear();
         self.log(format!("> {}", msg));
         self.busy = true;
+        self.assistant_buf.clear();
+        self.last_user_msg = msg.clone();
         self.status = "working…".to_string();
 
         let base = self.cfg.base.clone();
         let token = self.cfg.token.clone();
-        let pid = self.cfg.project_id.clone();
         let model = self.cfg.model.clone();
+        let in_dir = self.in_dir.clone();
+        let history = self.history.clone();
         let tx = self.tx.clone();
 
         tokio::spawn(async move {
             let c = Client::new(&base, Some(token));
+            let files = gather_workspace_files(&in_dir);
             let res = c
-                .chat(&pid, &msg, &model, |ev| {
+                .workspace_chat(&files, &history, &msg, &model, |ev| {
                     let ui = match ev {
-                        crate::api::SseEvent::Meta(m) => {
-                            UiEvent::Meta(m.project_id.unwrap_or_default(), m.model.unwrap_or_default())
-                        }
+                        crate::api::SseEvent::Meta(m) => UiEvent::Meta(
+                            m.model.unwrap_or_default(),
+                            String::new(),
+                        ),
                         crate::api::SseEvent::Token(v) => {
                             if v.trim().is_empty() { return; }
                             UiEvent::Token(v)
                         }
-                        crate::api::SseEvent::FileCow(p) => UiEvent::File(p),
+                        crate::api::SseEvent::Write { path, content, encoding } => {
+                            UiEvent::Write { path, content, encoding }
+                        }
                         crate::api::SseEvent::Delete(p) => UiEvent::Delete(p),
                         crate::api::SseEvent::Rename(a, b) => UiEvent::Rename(a, b),
                         crate::api::SseEvent::Warn(m) => UiEvent::Warn(m),
@@ -127,7 +143,7 @@ impl App {
                             if !d.edited.is_empty() { bits.push(format!("{} edited", d.edited.len())); }
                             if !d.deleted.is_empty() { bits.push(format!("{} removed", d.deleted.len())); }
                             if !d.renamed.is_empty() { bits.push(format!("{} renamed", d.renamed.len())); }
-                            UiEvent::Done(bits.join(" · ").to_string())
+                            UiEvent::Done(bits.join(" · "))
                         }
                         _ => return,
                     };
@@ -147,12 +163,7 @@ impl App {
         let arg = parts.next().unwrap_or("").trim().to_string();
         match name.as_str() {
             "help" => {
-                self.log("commands: /help /new <name> /model <m> /out <dir> /ls /refresh /logout /quit");
-            }
-            "new" => {
-                let name = if arg.is_empty() { "New app".to_string() } else { arg };
-                self.cfg.project_id.clear();
-                self.log(format!("new project: {} (created on next message)", name));
+                self.log("commands: /help /model <m> /cd <dir> /ls /clear /refresh /history /logout /quit");
             }
             "model" => {
                 if arg.is_empty() {
@@ -163,21 +174,46 @@ impl App {
                     self.log(format!("model set: {}", arg));
                 }
             }
-            "out" => {
+            "cd" => {
                 if arg.is_empty() {
-                    self.log(format!("output dir: {}", self.out_dir.display()));
+                    self.log(format!("working dir: {}", self.in_dir.display()));
                 } else {
-                    self.out_dir = PathBuf::from(arg);
-                    self.log(format!("output dir: {}", self.out_dir.display()));
+                    let p = PathBuf::from(&arg);
+                    if p.is_dir() {
+                        self.in_dir = p;
+                        self.files = gather_workspace_files(&self.in_dir).iter().map(|f| f.path.clone()).collect();
+                        self.log(format!("working dir: {}", self.in_dir.display()));
+                    } else {
+                        self.log(format!("{}: not a directory", arg));
+                    }
                 }
             }
             "ls" => {
                 if self.files.is_empty() {
-                    self.log("no files yet");
+                    self.log("no text files in workspace (binary/huge files are skipped)");
                 } else {
-                    let lines: Vec<String> = self.files.iter().map(|f| f.clone()).collect();
-                    for f in lines {
+                    for f in self.files.clone() {
                         self.log(format!("  {}", f));
+                    }
+                }
+            }
+            "clear" => {
+                self.files.clear();
+                self.log("file list cleared — files are re-scanned on next message");
+            }
+            "history" => {
+                if self.history.is_empty() {
+                    self.log("no history yet");
+                } else {
+                    self.log(format!("{} history messages", self.history.len()));
+                    let start = self.history.len().saturating_sub(10);
+                    let recent: Vec<(String, String)> = self.history[start..]
+                        .iter()
+                        .map(|m| (m.role.clone(), m.content.chars().take(80).collect()))
+                        .collect();
+                    for (role, text) in recent {
+                        let label = if role == "user" { "you" } else { "aib" };
+                        self.log(format!("  [{label}] {}", text));
                     }
                 }
             }
@@ -189,7 +225,6 @@ impl App {
             "logout" => {
                 self.cfg.token.clear();
                 self.cfg.username.clear();
-                self.cfg.project_id.clear();
                 let _ = crate::config::save(&self.cfg);
                 self.log("logged out. run `aib login` to sign in again.");
             }
@@ -201,25 +236,31 @@ impl App {
     fn drain_events(&mut self) {
         while let Ok(ev) = self.rx.try_recv() {
             match ev {
-                UiEvent::Meta(pid, model) => {
-                    if !pid.is_empty() {
-                        self.cfg.project_id = pid.clone();
-                        let _ = crate::config::save(&self.cfg);
-                    }
+                UiEvent::Meta(model, _extra) => {
                     if !model.is_empty() {
                         self.config_model(&model);
                     }
-                    self.status = format!("project {} · {}", pid, model);
+                    self.status = format!("workspace agent · model {}", model);
                 }
-                UiEvent::Token(_v) => self.status.push_str("▊"),
-                UiEvent::File(p) => self.add_file(p),
+                UiEvent::Token(v) => {
+                    self.assistant_buf.push_str(&v);
+                    self.status.push('▊');
+                }
+                UiEvent::Write { path, content, encoding } => {
+                    self.apply_write(&path, content, encoding);
+                }
                 UiEvent::Delete(p) => {
                     self.files.retain(|f| f != &p);
+                    let _ = safe_join(&self.in_dir, &p).map(|target| { let _ = std::fs::remove_file(target); });
                     self.log(format!("[deleted] {}", p));
                 }
                 UiEvent::Rename(a, b) => {
                     for f in self.files.iter_mut() {
                         if f == &a { *f = b.clone(); }
+                    }
+                    if let (Ok(src), Ok(dst)) = (safe_join(&self.in_dir, &a), safe_join(&self.in_dir, &b)) {
+                        if let Some(parent) = dst.parent() { let _ = std::fs::create_dir_all(parent); }
+                        let _ = std::fs::rename(&src, &dst);
                     }
                     self.log(format!("[renamed] {} → {}", a, b));
                 }
@@ -231,13 +272,15 @@ impl App {
                 }
                 UiEvent::Done(sum) => {
                     self.log(format!("[done] {}", sum));
+                    self.push_history("user".into(), self.last_user_msg.clone());
+                    self.push_history("assistant".into(), self.assistant_buf.clone());
                     self.busy = false;
-                    self.status = "ready — files written below".to_string();
-                    self.materialize_after_turn();
+                    self.status = "ready — edits applied to disk".to_string();
+                    // re-scan so the file list matches disk
+                    self.files = gather_workspace_files(&self.in_dir).iter().map(|f| f.path.clone()).collect();
                 }
                 UiEvent::End(_) => {
                     if self.busy {
-                        // stream closed without a done event
                         self.status = "stream ended".to_string();
                         self.busy = false;
                     }
@@ -252,32 +295,40 @@ impl App {
         }
     }
 
-    fn materialize_after_turn(&mut self) {
-        let pid = self.cfg.project_id.clone();
-        let base = self.cfg.base.clone();
-        let token = self.cfg.token.clone();
-        let out_dir = self.out_dir.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let c = Client::new(&base, Some(token));
-            match c.export(&pid).await {
-                Ok(exp) => match materialize(&exp, &out_dir) {
-                    Ok(n) => {
-                        let _ = tx.send(UiEvent::Error(format!(
-                            "exported {} files into {}",
-                            n,
-                            out_dir.display()
-                        )));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(UiEvent::Error(format!("export failed: {}", e)));
-                    }
-                },
-                Err(e) => {
-                    let _ = tx.send(UiEvent::Error(format!("export failed: {}", e)));
-                }
+    fn push_history(&mut self, role: String, content: String) {
+        self.history.push(HistoryMsg { role, content });
+        if self.history.len() > 100 {
+            self.history.drain(..self.history.len() - 100);
+        }
+    }
+
+    fn apply_write(&mut self, path: &str, content: Option<String>, encoding: Option<String>) {
+        let Some(content) = content else {
+            self.add_file(path.to_string());
+            return;
+        };
+        let Ok(target) = safe_join(&self.in_dir, path) else { return; };
+        if let Some(parent) = target.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let bytes = if encoding.as_deref() == Some("base64") || encoding.as_deref() == Some("data") {
+            if let Some(idx) = content.find(";base64,") {
+                b64decode(&content[idx + 8..])
+            } else {
+                b64decode(&content)
             }
-        });
+        } else {
+            None
+        };
+        let written = match bytes {
+            Some(b) => std::fs::write(&target, b),
+            None => std::fs::write(&target, content.as_bytes()),
+        };
+        if written.is_ok() {
+            self.add_file(path.to_string());
+        } else {
+            self.log(format!("[error] failed to write {}: {}", path, written.unwrap_err()));
+        }
     }
 }
 
@@ -285,6 +336,63 @@ fn b64decode(s: &str) -> Option<Vec<u8>> {
     use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine as _;
     B64.decode(s).ok()
+}
+
+/// Join a workspace-relative path to `root`, refusing escapes.
+fn safe_join(root: &Path, rel: &str) -> std::io::Result<PathBuf> {
+    let p = Path::new(rel);
+    if p.is_absolute() || p.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "unsafe path"));
+    }
+    Ok(root.join(p))
+}
+
+const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "dist", "build", ".venv", "__pycache__", ".aib"];
+
+fn is_binary(buf: &[u8]) -> bool {
+    let n = buf.len().min(8000);
+    buf[..n].iter().any(|&b| b == 0)
+}
+
+/// Walk the workspace, returning text files (with content) suitable as chat
+/// context. Skips VCS dirs, generated dirs, binary files and oversized files.
+fn gather_workspace_files(root: &Path) -> Vec<WorkspaceFile> {
+    let mut out: Vec<WorkspaceFile> = Vec::new();
+    let mut total: u64 = 0;
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if out.len() >= MAX_FILES || total >= MAX_TOTAL_BYTES {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for ent in rd.flatten() {
+            if out.len() >= MAX_FILES || total >= MAX_TOTAL_BYTES {
+                break;
+            }
+            let p = ent.path();
+            let name = ent.file_name().to_string_lossy().into_owned();
+            let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().into_owned();
+            if rel.is_empty() { continue; }
+            let Ok(ft) = ent.file_type() else { continue };
+            if ft.is_dir() {
+                if name.starts_with('.') || SKIP_DIRS.contains(&name.as_str()) {
+                    continue;
+                }
+                stack.push(p);
+            } else if ft.is_file() {
+                if name.starts_with('.') || rel.contains("/.git/") { continue; }
+                let Ok(meta) = ent.metadata() else { continue };
+                if meta.len() == 0 || meta.len() > MAX_FILE_BYTES { continue; }
+                total += meta.len();
+                let Ok(bytes) = std::fs::read(&p) else { continue };
+                if is_binary(&bytes) { continue; }
+                let Ok(text) = String::from_utf8(bytes) else { continue };
+                out.push(WorkspaceFile { path: rel, content: text });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
 }
 
 /// Write an export to disk, guarding against path traversal.
@@ -389,7 +497,7 @@ pub async fn run(cfg: Config) {
 
     disable_raw_mode().expect("raw mode");
     execute!(terminal.backend_mut(), LeaveAlternateScreen).expect("leave alt");
-    if !app.cfg.project_id.is_empty() {
+    if !app.cfg.model.is_empty() {
         let _ = crate::config::save(&app.cfg);
     }
 }
@@ -489,8 +597,8 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let status = Line::from(vec![
         Span::raw(" "),
         Span::styled(&app.status, Style::default().fg(Color::Blue)),
-        Span::raw(" · out:"),
-        Span::styled(app.out_dir.display().to_string(), Style::default().fg(Color::Magenta)),
+        Span::raw(" · in:"),
+        Span::styled(app.in_dir.display().to_string(), Style::default().fg(Color::Magenta)),
         Span::raw(" · /quit to exit "),
     ]);
     f.render_widget(Paragraph::new(status), areas[2]);
