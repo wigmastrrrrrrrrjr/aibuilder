@@ -2,6 +2,7 @@ mod api;
 mod client;
 mod config;
 mod tui;
+mod update;
 
 use client::Client;
 
@@ -12,12 +13,13 @@ USAGE:
   aib login                    log in (stores session in ~/.config/aib/config.json)
   aib projects                 list your projects
   aib export <project-id>      write every project file into ./<name>
+  aib update                   check for and install a newer aib build
 
 OPTIONS:
   --base <url>   API base (default https://aibuilderapi.csomeone301.workers.dev)
 ";
 
-const VERSION: &str = "0.1.0";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tokio::main]
 async fn main() {
@@ -45,6 +47,18 @@ async fn main() {
     let sub = args.iter().map(|s| s.as_str())
         .find(|a| *a != "--base" && !a.starts_with("--"))
         .map(str::to_string);
+
+    // Full self-update / explicit update command: check immediately.
+    if sub.as_deref() == Some("update") {
+        update::set_to().await;
+        return;
+    }
+
+    // Background-friendly: silent, throttled one-per-day check on startup.
+    // Skipped entirely for the version/login/projects/export one-shot commands.
+    if sub.is_none() || sub.as_deref() == Some("login") {
+        update::maybe_check().await;
+    }
 
     match sub.as_deref() {
         Some("login") | None if cfg.token.is_empty() => {
