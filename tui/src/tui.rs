@@ -19,6 +19,17 @@ const MAX_FILE_BYTES: u64 = 512 * 1024; // per file cap for context
 const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024; // total context cap
 const MAX_FILES: usize = 200;
 
+/// A reversible filesystem mutation made by the model in the current turn.
+enum UndoEntry {
+    /// The model wrote this file (creates or overwrites). `prev` is the
+    /// original content if the file already existed, else None (new file).
+    Write { abs: PathBuf, prev: Option<Vec<u8>> },
+    /// The model deleted this file; `prev` is its original content.
+    Delete { abs: PathBuf, prev: Vec<u8> },
+    /// The model renamed src → dst within the workspace.
+    Rename { src_abs: PathBuf, dst_abs: PathBuf },
+}
+
 pub enum UiEvent {
     Meta(String, String),      // model, status
     Token(String),
@@ -55,6 +66,10 @@ pub struct App {
     accept_all: bool,
     cmd_running: bool,
     followup_round: u32,
+    /// Sealed undo batches (each = one completed turn), newest last.
+    undo_stack: Vec<Vec<UndoEntry>>,
+    /// Mutations still accumulating in the current (in-progress) turn.
+    turn_ops: Vec<UndoEntry>,
 }
 
 impl App {
@@ -89,6 +104,8 @@ impl App {
             accept_all: false,
             cmd_running: false,
             followup_round: 0,
+            undo_stack: Vec::new(),
+            turn_ops: Vec::new(),
         }
     }
 
@@ -307,6 +324,13 @@ impl App {
         self.reply_line = None;
         self.followup_round = 0;
         self.files = gather_workspace_files(&self.in_dir).iter().map(|f| f.path.clone()).collect();
+        if !self.turn_ops.is_empty() {
+            let batch = std::mem::take(&mut self.turn_ops);
+            self.undo_stack.push(batch);
+            if self.undo_stack.len() > 50 {
+                self.undo_stack.drain(..self.undo_stack.len() - 50);
+            }
+        }
     }
 
     fn handle_command(&mut self, cmd: &str) {
@@ -318,9 +342,12 @@ impl App {
                 self.log("commands:");
                 self.log("  /model <name>   set the model (default gemma4:31b)");
                 self.log("  /models         list available models");
+                self.log("  /channel        show or set update channel: stable|beta");
                 self.log("  /cd <dir>       change working directory");
                 self.log("  /ls             show files in the workspace");
                 self.log("  /history        show recent conversation");
+                self.log("  /undo           revert the last turn's file changes");
+                self.log("  /context        show how many files are sent to the model");
                 self.log("  /clear          forget the current reply");
                 self.log("  /refresh        reset after an error / interrupt");
                 self.log("  /logout         sign out");
@@ -336,6 +363,17 @@ impl App {
                     self.cfg.model = arg.clone();
                     let _ = crate::config::save(&self.cfg);
                     self.log(format!("model set: {}", arg));
+                }
+            }
+            "channel" => {
+                if arg.is_empty() {
+                    self.log(format!("update channel: {}", self.cfg.channel()));
+                } else if arg == "stable" || arg == "beta" {
+                    self.cfg.channel = arg.clone();
+                    let _ = crate::config::save(&self.cfg);
+                    self.log(format!("update channel set: {} (run `aib update` to switch)", arg));
+                } else {
+                    self.log("usage: /channel stable|beta (empty = show current)");
                 }
             }
             "models" => {
@@ -405,8 +443,29 @@ impl App {
                 self.cmd_outputs.clear();
                 self.confirm_idx = 0;
                 self.reply_line = None;
+                self.turn_ops.clear();
                 self.status = "ready".to_string();
                 self.log("reset completed");
+            }
+            "undo" => {
+                if self.busy || self.awaiting_confirm {
+                    self.log("(wait for the current turn to finish, or /refresh first)");
+                } else if let Some(batch) = self.undo_stack.pop() {
+                    self.revert_batch(&batch);
+                    self.files = gather_workspace_files(&self.in_dir).iter().map(|f| f.path.clone()).collect();
+                    self.log(format!("[undo] reverted {} file change(s) from the last turn", batch.len()));
+                } else {
+                    self.log("nothing to undo — the last turn changed no files");
+                }
+            }
+            "context" => {
+                let files = gather_workspace_files(&self.in_dir);
+                let bytes: u64 = files.iter().map(|f| f.content.len() as u64).sum();
+                self.log(format!("context: {} text file(s), {} bytes ({} KiB)", files.len(), bytes, bytes / 1024));
+                self.log(format!("  per-file cap: {} KiB · total cap: {} KiB", MAX_FILE_BYTES / 1024, MAX_TOTAL_BYTES / 1024));
+                if files.len() >= MAX_FILES || bytes >= MAX_TOTAL_BYTES {
+                    self.log("  ⚠ near the limit — some files in the folder may not be sent");
+                }
             }
             "logout" => {
                 self.cfg.token.clear();
@@ -452,16 +511,24 @@ impl App {
                 }
                 UiEvent::Delete(p) => {
                     self.files.retain(|f| f != &p);
-                    let _ = safe_join(&self.in_dir, &p).map(|target| { let _ = std::fs::remove_file(target); });
+                    if let Ok(abs) = safe_join(&self.in_dir, &p) {
+                        if let Ok(prev) = std::fs::read(&abs) {
+                            self.turn_ops.push(UndoEntry::Delete { abs: abs.clone(), prev });
+                            let _ = std::fs::remove_file(abs);
+                        }
+                    } else {
+                        let _ = safe_join(&self.in_dir, &p).map(|t| { let _ = std::fs::remove_file(t); });
+                    }
                     self.log(format!("[deleted] {}", p));
                 }
                 UiEvent::Rename(a, b) => {
                     for f in self.files.iter_mut() {
                         if f == &a { *f = b.clone(); }
                     }
-                    if let (Ok(src), Ok(dst)) = (safe_join(&self.in_dir, &a), safe_join(&self.in_dir, &b)) {
-                        if let Some(parent) = dst.parent() { let _ = std::fs::create_dir_all(parent); }
-                        let _ = std::fs::rename(&src, &dst);
+                    if let (Ok(src_abs), Ok(dst_abs)) = (safe_join(&self.in_dir, &a), safe_join(&self.in_dir, &b)) {
+                        if let Some(parent) = dst_abs.parent() { let _ = std::fs::create_dir_all(parent); }
+                        let _ = std::fs::rename(&src_abs, &dst_abs);
+                        self.turn_ops.push(UndoEntry::Rename { src_abs, dst_abs });
                     }
                     self.log(format!("[renamed] {} → {}", a, b));
                 }
@@ -527,6 +594,7 @@ impl App {
             return;
         };
         let Ok(target) = safe_join(&self.in_dir, path) else { return; };
+        let prev = std::fs::read(&target).ok();
         if let Some(parent) = target.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -544,9 +612,33 @@ impl App {
             None => std::fs::write(&target, content.as_bytes()),
         };
         if written.is_ok() {
+            self.turn_ops.push(UndoEntry::Write { abs: target, prev });
             self.add_file(path.to_string());
         } else {
             self.log(format!("[error] failed to write {}: {}", path, written.unwrap_err()));
+        }
+    }
+
+    /// Revert a sealed batch of mutations (from /undo), newest-first.
+    fn revert_batch(&mut self, batch: &[UndoEntry]) {
+        for op in batch.iter().rev() {
+            match op {
+                UndoEntry::Write { abs, prev } => {
+                    match prev {
+                        Some(bytes) => { let _ = std::fs::write(abs, bytes); }
+                        None => { let _ = std::fs::remove_file(abs); }
+                    }
+                }
+                UndoEntry::Delete { abs, prev } => {
+                    if let Some(parent) = abs.parent() { let _ = std::fs::create_dir_all(parent); }
+                    let _ = std::fs::write(abs, prev);
+                }
+                UndoEntry::Rename { src_abs, dst_abs } => {
+                    if dst_abs.exists() {
+                        let _ = std::fs::rename(dst_abs, src_abs);
+                    }
+                }
+            }
         }
     }
 }

@@ -12,6 +12,8 @@ use std::path::PathBuf;
 
 pub const REPO: &str = "wigmastrrrrrrrrjr/aibuilder";
 pub const ASSET_PREFIX: &str = "aib-";
+/// Rolling release tag for the beta channel, refreshed on every `main` push.
+pub const BETA_TAG: &str = "aib-beta";
 
 // Compile-time platform slug matching install.sh's asset names.
 #[cfg(target_os = "android")]
@@ -28,6 +30,42 @@ const TARGET: &str = "x86_64-apple-darwin";
 const TARGET: &str = "x86_64-pc-windows-msvc";
 
 const EXT: &str = if cfg!(target_os = "windows") { ".exe" } else { "" };
+
+/// Platform is locked to the beta channel only (no stable auto-update).
+#[cfg(any(
+    target_os = "android",
+    all(target_os = "windows", target_arch = "x86_64"),
+))]
+const BETA_ONLY: bool = true;
+#[cfg(not(any(
+    target_os = "android",
+    all(target_os = "windows", target_arch = "x86_64"),
+)))]
+const BETA_ONLY: bool = false;
+
+/// Platform is excluded from self-update entirely (never gets an update).
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const EXCLUDED: bool = true;
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+const EXCLUDED: bool = false;
+
+/// Which update channel the user opted into ("stable" or "beta").
+fn channel() -> String {
+    crate::config::load().channel().to_string()
+}
+
+/// The effective channel for this platform, honoring BETA_ONLY / EXCLUDED.
+fn effective_channel() -> Option<String> {
+    if EXCLUDED {
+        return None; // platform not supported for self-update
+    }
+    let ch = channel();
+    if BETA_ONLY && ch != "beta" {
+        // Not on beta: silently no-op rather than auto-switching.
+        return None;
+    }
+    Some(ch)
+}
 
 fn memo_path() -> PathBuf {
     dirs::config_dir()
@@ -209,6 +247,46 @@ fn http() -> reqwest::Client {
         .expect("http client")
 }
 
+/// Download and install the platform binary from a specific release tag.
+/// Returns the installed version string on success.
+async fn apply_release(client: &reqwest::Client, tag: &str, target: &PathBuf) -> Result<String, String> {
+    let url = format!("https://api.github.com/repos/{REPO}/releases/tags/{}", tag);
+    let r = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(format!("could not fetch release metadata for {tag} (HTTP {})", r.status()));
+    }
+    let v: serde_json::Value = r.json().await.map_err(|e| e.to_string())?;
+    let Some(asset) = pick_asset(v.get("assets").unwrap_or(&serde_json::Value::Null)) else {
+        return Err(format!(
+            "no asset for platform '{}{}' in release {tag}",
+            ASSET_PREFIX,
+            TARGET.to_string() + EXT
+        ));
+    };
+
+    let tmp = target.with_extension("aib-new");
+    eprintln!("downloading {} ...", asset);
+    download_asset(client, tag, &asset, &tmp).await?;
+    commit_new(&tmp, target)?;
+    Ok(tag.trim_start_matches('v').to_string())
+}
+
+/// The release we should install, given the current channel.
+/// `beta` → the rolling `aib-beta` tag (latest code on main).
+/// `stable` → the highest versioned release.
+async fn latest_install_release(client: &reqwest::Client) -> Option<(String, String, bool)> {
+    let ch = effective_channel()?;
+    if ch == "beta" {
+        // Beta always tracks the latest rolling tag; no version comparison.
+        return Some((BETA_TAG.to_string(), "beta".to_string(), true));
+    }
+    let (tag, html) = latest_release(client).await?;
+    if parse_ver(&tag).is_none() {
+        return None;
+    }
+    Some((tag, html, false))
+}
+
 /// Called on startup. Non-blocking and silent unless an update is available.
 pub async fn maybe_check() {
     if !throttle_ok() {
@@ -217,37 +295,45 @@ pub async fn maybe_check() {
     save_checked();
 
     let client = http();
-    match latest_release(&client).await {
-        Some((tag, _html)) => {
-            let latest = match parse_ver(&tag) {
-                Some(v) => v,
-                None => return, // rolling tags without versions: no-op
-            };
-            let current = parse_ver(crate::VERSION).unwrap_or((0, 0, 0));
-            if latest <= current {
-                return; // we're current or ahead
-            }
-            eprintln!(
-                "\n\u{1b}[1;36mAn update is available: aib {}\u{1b}[0m (you have {})",
-                tag.trim_start_matches('v'),
-                crate::VERSION
-            );
-            eprint!("Update now? [y/N] ");
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
-            let mut line = String::new();
-            if std::io::stdin().read_line(&mut line).is_err() {
-                eprintln!("\n(skipping update)");
-                return;
-            }
-            let trimmed = line.trim();
-            if trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes") {
-                set_to().await;
-            } else {
-                eprintln!("(skipping update)");
+    let Some((tag, _html, is_beta)) = latest_install_release(&client).await else {
+        return; // offline, or no versioned stable release yet
+    };
+
+    if !is_beta {
+        let latest = match parse_ver(&tag) {
+            Some(v) => v,
+            None => return, // rolling tags without versions: no-op
+        };
+        let current = parse_ver(crate::VERSION).unwrap_or((0, 0, 0));
+        if latest <= current {
+            return; // we're current or ahead
+        }
+    }
+
+    let label = if is_beta { format!("beta ({})", tag) } else { tag.trim_start_matches('v').to_string() };
+    eprintln!(
+        "\n\u{1b}[1;36mAn update is available: aib {}\u{1b}[0m (you have {})",
+        label,
+        crate::VERSION
+    );
+    eprint!("Update now? [y/N] ");
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        eprintln!("\n(skipping update)");
+        return;
+    }
+    let trimmed = line.trim();
+    if trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes") {
+        if let Some(target) = current_exe().ok() {
+            match apply_release(&client, &tag, &target).await {
+                Ok(v) => eprintln!("updated aib to {}. Restart to use it.", v),
+                Err(e) => eprintln!("error: {e}"),
             }
         }
-        None => { /* offline — stay silent */ }
+    } else {
+        eprintln!("(skipping update)");
     }
 }
 
@@ -262,14 +348,30 @@ pub async fn set_to() {
         }
     };
 
-    let Some((tag, _html)) = latest_release(&client).await else {
+    let Some(ch) = effective_channel() else {
+        eprintln!(
+            "self-update is not available on this platform. \
+             Install with: curl -fsSL https://wigmastrrrrrrrrjr.github.io/aibuilder/install.sh | sh"
+        );
+        return;
+    };
+
+    if ch == "beta" {
+        eprintln!("channel: beta (rolling — updating to latest code on main)");
+        match apply_release(&client, BETA_TAG, &target).await {
+            Ok(v) => eprintln!("updated aib to beta {}. Restart to use it.", v),
+            Err(e) => eprintln!("error: {e}"),
+        }
+        return;
+    }
+
+    let Some((tag, _html, _)) = latest_install_release(&client).await else {
         eprintln!(
             "no versioned aib release found on GitHub yet (only rolling 'aib-latest'; \
              publish a vX.Y.Z release to enable auto-update)"
         );
         return;
     };
-    // We just recheck the same release anyway; only act if there's a change.
     let latest = match parse_ver(&tag) {
         Some(v) => v,
         None => {
@@ -282,41 +384,8 @@ pub async fn set_to() {
         eprintln!("aib is already up to date ({}).", crate::VERSION);
         return;
     }
-
-    // Fetch the release assets to find the platform asset name.
-    let url = format!("https://api.github.com/repos/{REPO}/releases/tags/{}", tag);
-    let r = match client.get(&url).send().await {
-        Ok(r) if r.status().is_success() => r,
-        _ => {
-            eprintln!("error: could not fetch release asset list");
-            return;
-        }
-    };
-    let v: serde_json::Value = match r.json().await {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!("error: bad release metadata");
-            return;
-        }
-    };
-    let Some(asset) = pick_asset(v.get("assets").unwrap_or(&serde_json::Value::Null)) else {
-        eprintln!(
-            "error: no asset for platform '{}{}' in release {tag}",
-            ASSET_PREFIX,
-            TARGET.to_string() + EXT
-        );
-        return;
-    };
-
-    let tmp = target.with_extension("aib-new");
-    eprintln!("downloading {} ...", asset);
-    if let Err(e) = download_asset(&client, &tag, &asset, &tmp).await {
-        eprintln!("error: {e}");
-        return;
+    match apply_release(&client, &tag, &target).await {
+        Ok(v) => eprintln!("updated aib to {}. Restart to use it.", v),
+        Err(e) => eprintln!("error: {e}"),
     }
-    if let Err(e) = commit_new(&tmp, &target) {
-        eprintln!("error: {e}");
-        return;
-    }
-    eprintln!("updated aib to {}. Restart to use it.", tag.trim_start_matches('v'));
 }

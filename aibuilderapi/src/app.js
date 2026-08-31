@@ -11,6 +11,7 @@ import { toBase64 } from './base64.js';
 import { live } from './live.js';
 import { auth, requireUser, canWrite } from './auth.js';
 import { teams } from './teams.js';
+import { features } from './features.js';
 import { teamPool, personalBalance } from './credits.js';
 import { fn } from './fn.js';
 import { rateLimit } from './rate-limit.js';
@@ -388,6 +389,7 @@ app.route('/', live);
 app.route('/', fn);
 app.route('/api/baas', baas);
 app.route('/', teams);
+app.route('/', features);
 app.route('/preview', preview);
 
 // 404s: API callers get JSON, browsers get bounced to the site with a notice

@@ -55,6 +55,15 @@ async function ensureColumns(d1) {
   await d1.prepare(`CREATE TABLE IF NOT EXISTS presence (
     pid TEXT NOT NULL, sid TEXT NOT NULL, user TEXT NOT NULL DEFAULT '',
     seen_at INTEGER NOT NULL, PRIMARY KEY (pid, sid))`).run();
+  // Community feature voting tables.
+  await d1.prepare(`CREATE TABLE IF NOT EXISTS features (
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'proposed', created_by TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL)`).run();
+  await d1.prepare(`CREATE TABLE IF NOT EXISTS feature_votes (
+    feature_id TEXT NOT NULL, user TEXT NOT NULL, vote INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL, PRIMARY KEY (feature_id, user))`).run();
+  await d1.prepare('CREATE INDEX IF NOT EXISTS idx_feature_votes ON feature_votes (feature_id)').run();
 }
 
 export default {

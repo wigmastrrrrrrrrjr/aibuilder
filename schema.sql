@@ -150,3 +150,23 @@ CREATE TABLE IF NOT EXISTS presence (
   seen_at INTEGER NOT NULL,
   PRIMARY KEY (pid, sid)
 );
+
+-- Community feature voting: proposed experimental aib features + votes.
+-- One row per proposed feature; tally computed from feature_votes.
+CREATE TABLE IF NOT EXISTS features (
+  id          TEXT PRIMARY KEY,
+  title       TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'proposed',  -- proposed | planned | accepted | shipped | rejected
+  created_by  TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS feature_votes (
+  feature_id TEXT NOT NULL,
+  user       TEXT NOT NULL,
+  vote       INTEGER NOT NULL,   -- 1 = up, -1 = down, 0 = cleared
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (feature_id, user)
+);
+CREATE INDEX IF NOT EXISTS idx_feature_votes ON feature_votes (feature_id);

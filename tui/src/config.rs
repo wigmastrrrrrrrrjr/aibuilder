@@ -8,6 +8,19 @@ pub struct Config {
     pub username: String,
     pub project_id: String,
     pub model: String,
+    /// Update channel: "stable" (default) or "beta" (rolling + occasional broken builds).
+    #[serde(default)]
+    pub channel: String,
+}
+
+impl Config {
+    pub fn channel(&self) -> &str {
+        if self.channel.is_empty() {
+            "stable"
+        } else {
+            &self.channel
+        }
+    }
 }
 
 pub fn config_path() -> PathBuf {
