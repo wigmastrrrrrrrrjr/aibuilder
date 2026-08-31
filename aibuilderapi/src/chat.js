@@ -127,7 +127,7 @@ chat.post('/', async (c) => {
       send({ type: 'meta', projectId: pid, model });
 
       const mistralKey = getVar('MISTRAL_API_KEY') || '';
-      const localUrl = localOllamaUrl();
+      const localUrl = await localOllamaUrl();
 
       let upstream;
       let provider = 'ollama';
@@ -477,7 +477,7 @@ chat.post('/', async (c) => {
 async function openUpstream(model, messages, key, signal, emit) {
   const mistralKey = getVar('MISTRAL_API_KEY') || '';
   const orKey = openrouterKey();
-  const localUrl = localOllamaUrl();
+  const localUrl = await localOllamaUrl();
   const isLocalModel = typeof model === 'string' && model.startsWith('local:');
   const localModel = isLocalModel ? model.slice(6) : model;
 

@@ -110,6 +110,16 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version from Cargo.toml
+        id: ver
+        shell: bash
+        run: |
+          v="$(grep -m1 '^version' tui/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+
       - name: Download all binaries
         uses: actions/download-artifact@v4
         with:
@@ -135,3 +145,30 @@ jobs:
           update_only: false
           allow_updates: true
           update_release_body: true
+
+      - name: Publish versioned release (for auto-updater)
+        if: steps.ver.outputs.version != '0.0.0'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: aib v${{ steps.ver.outputs.version }}
+          body: |
+            Versioned build for the `aib update` auto-updater. Install with:
+
+            curl -fsSL https://wigmastrrrrrrrrjr.github.io/aibuilder/install.sh | sh
+          files: bin/*
+
+      - name: Publish beta rolling release (for early testers)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: aib-beta
+          name: aib — beta build
+          body: |
+            Early-access build straight from main (${{ github.sha }}). Expect bugs.
+            Users on the beta channel get this via `aib update`. Switch with `/channel beta`.
+          files: bin/*
+          fail_on_unmatched_files: true
+          update_only: false
+          allow_updates: true
+          update_release_body: true
+          prerelease: true

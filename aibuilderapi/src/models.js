@@ -179,7 +179,7 @@ models.get('/', async (c) => {
     names.push('mistral-small-latest');
   }
   // Append local Ollama models if tunnel is configured
-  const localUrl = localOllamaUrl();
+  const localUrl = await localOllamaUrl();
   if (localUrl) {
     const LOCAL_MODELS = ['local:qwen2.5:0.5b-instruct', 'local:qwen2.5:1.5b', 'local:tinyllama:1.1b'];
     for (const m of LOCAL_MODELS) {
