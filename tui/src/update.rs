@@ -183,12 +183,13 @@ fn commit_new(tmp: &PathBuf, target: &PathBuf) -> Result<(), String> {
         // waits briefly, replaces it, and finishes the swap.
         use std::process::Command;
         let script = target.with_extension("bat");
+        let t = target.display().to_string();
+        let tmpstr = tmp.display().to_string();
         let script_body = format!(
-            "timeout /t 1 /nobreak >nul\r\n"
-            "del /f \"{target}\"\r\n"
-            "move /y \"{tmp}\" \"{target}\"\r\n"
-            "del /f \"%~f0\"\r\n"
-        );
+            "timeout /t 1 /nobreak >nul\n",
+        ) + &format!("del /f \"{t}\"\n")
+            + &format!("move /y \"{tmpstr}\" \"{t}\"\n")
+            + "del /f \"%~f0\"\n";
         std::fs::write(&script, script_body)
             .map_err(|e| format!("cannot write swap script: {e}"))?;
         Command::new("cmd")
