@@ -13,3 +13,4 @@ chat-test.out
 data/
 tui/target/
 tui/build.log
+puter/.built-worker.js

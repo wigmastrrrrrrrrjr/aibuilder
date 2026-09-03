@@ -18,6 +18,8 @@ import { rateLimit } from './rate-limit.js';
 import { blockDatacenterIps } from './vpn-block.js';
 
 const FRONTEND_URL = 'https://wigmastrrrrrrrrjr.github.io/aibuilder/';
+const NEW_API_URL = 'https://aib-api.puter.work';
+const GITHUB_URL = 'https://github.com/wigmastrrrrrrrrjr/aibuilder';
 
 export const app = new Hono();
 
@@ -28,6 +30,18 @@ export const app = new Hono();
     allowHeaders: ['Content-Type', 'Authorization', 'x-ab-sess', 'x-recaptcha-token', 'x-api-key'],
     exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'Retry-After'],
   }));
+
+// ---- deprecation banner ---------------------------------------------------
+// This Cloudflare deployment is deprecated. Chat still works here; everything
+// else has moved to https://aib-api.puter.work
+app.use('*', async (c, next) => {
+  await next();
+  // Add deprecation headers to every response (chat stays active)
+  c.header('X-Deprecated', 'true');
+  c.header('Sunset', 'Sat, 01 Jan 2027 00:00:00 GMT');
+  c.header('Deprecation', 'true');
+  c.header('Link', `<${NEW_API_URL}>; rel="successor-version"`);
+});
 
 // ---- VPN / datacenter IP block -----------------------------------------------
 // Auth endpoints stay reachable from VPN/mobile/datacenter IPs so users can
@@ -52,6 +66,34 @@ app.get('/api/meta', (c) =>
   c.json({
     model: getVar('OLLAMA_MODEL') || 'gemma4:31b',
     hasKey: Boolean(builtinKey()),
+    deprecated: true,
+    message: 'This API is deprecated. Chat still works here. All other features have moved.',
+    newApi: NEW_API_URL,
+    github: GITHUB_URL,
+  })
+);
+
+// ---- migration info --------------------------------------------------------
+app.get('/api/migration', (c) =>
+  c.json({
+    status: 'migrating',
+    notice: 'This Cloudflare API is being phased out. Chat still works here. All other features have moved to the Puter-based API.',
+    newApi: NEW_API_URL,
+    newApiHealth: `${NEW_API_URL}/api/meta`,
+    github: GITHUB_URL,
+    whatStillWorks: ['chat (POST /api/chat)'],
+    whatMoved: [
+      'auth (signup, login, logout, me)',
+      'projects (CRUD, publish, remix, upload)',
+      'file versions & snapshots',
+      'teams & team members',
+      'credits & gifting',
+      'feature voting',
+      'BaaS (backend-as-a-service)',
+      'presence / multiplayer',
+      'discovery feed',
+    ],
+    shutdownDate: '2027-01-01 (estimated)',
   })
 );
 
@@ -392,19 +434,42 @@ app.route('/', teams);
 app.route('/', features);
 app.route('/preview', preview);
 
-// 404s: API callers get JSON, browsers get bounced to the site with a notice
+// 404s: API callers get JSON with migration info, browsers get a banner page
 app.notFound((c) => {
   const accept = c.req.header('accept') || '';
   if (accept.includes('text/html')) {
-    const to = `${FRONTEND_URL}?nf=${encodeURIComponent(c.req.path)}`;
     return c.html(
-      `<!doctype html><meta charset="utf-8"><title>404 not found</title>` +
-      `<meta http-equiv="refresh" content="0;url=${to}">` +
-      `<body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:grid;place-items:center;height:100vh;margin:0">` +
-      `<p>404 not found — taking you home…</p><script>location.replace(${JSON.stringify(to)})</script>`,
+      `<!doctype html><meta charset="utf-8"><title>aibuilder — migrated</title>` +
+      `<style>` +
+      `*{margin:0;padding:0;box-sizing:border-box}` +
+      `body{font-family:system-ui;background:#0d1117;color:#e6edf3;display:grid;place-items:center;min-height:100vh;padding:2rem}` +
+      `.card{max-width:540px;text-align:center}` +
+      `h1{font-size:1.6rem;margin-bottom:.6rem}` +
+      `.banner{background:#f59e0b;color:#000;padding:.8rem 1.2rem;border-radius:8px;font-weight:600;margin-bottom:1.4rem;font-size:.95rem}` +
+      `p{color:#8b949e;margin-bottom:1rem;line-height:1.5}` +
+      `.btn{display:inline-block;padding:.65rem 1.4rem;border-radius:6px;text-decoration:none;font-weight:600;margin:.4rem}` +
+      `.primary{background:#238636;color:#fff}` +
+      `.secondary{background:#21262d;color:#c9d1d9;border:1px solid #30363d}` +
+      `.chat-note{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:1rem;margin-top:1.2rem;font-size:.85rem;color:#8b949e}` +
+      `</style>` +
+      `<div class="card">` +
+      `<div class="banner">aibuilder has moved to a new server</div>` +
+      `<h1>This Cloudflare API is no longer being updated</h1>` +
+      `<p>All features (projects, auth, teams, etc.) have migrated to the new Puter-based API. The chat endpoint still works here for now.</p>` +
+      `<a class="btn primary" href="${NEW_API_URL}/api/meta">Test New API</a>` +
+      `<a class="btn secondary" href="${GITHUB_URL}">GitHub</a>` +
+      `<div class="chat-note">Chat / AI generation still runs on this server.<br>All other endpoints will be shut down soon.</div>` +
+      `</div>`,
+      404,
     );
   }
-  return c.json({ error: '404 not found' }, 404);
+  return c.json({
+    error: '404 not found',
+    deprecated: true,
+    message: 'This API is deprecated. Chat still works here. All other features have moved to the new server.',
+    newApi: NEW_API_URL,
+    github: GITHUB_URL,
+  }, 404);
 });
 
 app.onError((err, c) => {
