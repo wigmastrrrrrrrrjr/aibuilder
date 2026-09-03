@@ -1198,3 +1198,139 @@ async function teamPool(teamId, day) {
   const earnedUnits = await store.earningsUnitsForNames(teamNames);
   return { memberCount, totalUnits, usedUnits, leftUnits: Math.max(0, totalUnits - usedUnits) + earnedUnits };
 }
+
+// =========================================================================
+// Preview (live HTML preview of projects)
+// =========================================================================
+const MIME = {
+  html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8',
+  css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8', json: 'application/json; charset=utf-8',
+  svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+  gif: 'image/gif', webp: 'image/webp', ico: 'image/x-icon',
+  txt: 'text/plain; charset=utf-8', md: 'text/plain; charset=utf-8',
+  woff: 'font/woff', woff2: 'font/woff2',
+};
+
+function safePath(raw) {
+  let p;
+  try { p = decodeURIComponent(raw); } catch { return null; }
+  if (p.includes('\0')) return null;
+  const segs = p.split('/').filter(s => s !== '');
+  if (segs.some(seg => seg === '..')) return null;
+  return segs.join('/');
+}
+
+function fromBase64(b64) {
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+
+// BaaS SDK — injected into previewed HTML pages
+const BAAS_SDK = `(function () {
+  var base = '/api/baas/' + window.__CREAT_PROJECT__;
+  var pid = window.__CREAT_PROJECT__;
+  var TOK_KEY = 'ab_app_tok';
+  function tok() { try { return localStorage.getItem(TOK_KEY) || ''; } catch (e) { return ''; } }
+  function authHeaders(extra) { var h = extra || {}; if (tok()) h['x-ab-sess'] = tok(); return h; }
+  function friendlyError(s) {
+    if (s===429)return'Whoopsie! The server hit its head — too much traffic. Come back later!';
+    if (s===404)return"Whoopsie! The server hit its head — project might not exist or has been deleted!";
+    if(s===403)return"You don't have permission for this.";
+    if(s===500)return'Whoopsie! The server hit its head — something went wrong.';
+    return'Whoopsie! Something went wrong.';
+  }
+  function req(method,parts,body){
+    return fetch([base].concat(parts.filter(Boolean)).join('/'),{
+      method:method,headers:body?authHeaders({'content-type':'application/json'}):undefined,
+      body:body?JSON.stringify(body):undefined
+    }).then(function(r){return r.text().then(function(t){
+      var d=t?JSON.parse(t):null;
+      if(!r.ok){var m=friendlyError(r.status);if(r.status===404)m+=' <a href="/" style="color:#7c5cff;text-decoration:underline">Create one here</a>';throw new Error(m);}return d;});});
+  }
+  var SB_URL='https://trwxpgmkpaddnyktbleg.supabase.co';
+  var SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
+  var _sb=null;function getSB(){if(_sb)return _sb;if(typeof window.supabase==='undefined')throw new Error('Supabase client not loaded');_sb=window.supabase.createClient(SB_URL,SB_KEY);return _sb;}
+  var _mc=null;function getIdentity(){return new Promise(function(r){if(_mc)return r(_mc);fetch('/api/auth/me',authHeaders()).then(function(res){if(res.status===401)return r('anon #'+Math.random().toString(36).slice(2,8));return res.json().then(function(j){_mc=j.name||('anon #'+Math.random().toString(36).slice(2,8));r(_mc);});}).catch(function(){r('anon #'+Math.random().toString(36).slice(2,8));});});}
+  window.creat={
+    db:{list:function(c){return req('GET',[c]);},insert:function(c,o){return req('POST',[c],o);},get:function(c,id){return req('GET',[c,id]);},update:function(c,id,p){return req('PUT',[c,id],p);},remove:function(c,id){return req('DELETE',[c,id]);}},
+    live:function(coll,cb){var ch='live:'+pid+':'+coll;var sb=getSB();var subs=[cb];var my=null;var channel=sb.channel(ch);channel.on('broadcast',{event:'evt'},function(p){for(var i=0;i<subs.length;i++)try{subs[i](p.payload);}catch{}}).subscribe(function(s){if(s==='SUBSCRIBED')getIdentity().then(function(n){my=n;});});return{myName:function(){return my;},subscribe:function(fn){subs.push(fn);return function(){subs=subs.filter(function(f){return f!==fn;});};},close:function(){sb.removeChannel(channel);subs=[];},history:function(o){o=o||{};return fetch('/api/projects/'+pid+'/live/baas-'+coll+'?limit='+(Number(o.limit)||50),authHeaders()).then(function(r){return r.json().then(function(j){return j.messages||[];});});},since:function(s){return fetch('/api/projects/'+pid+'/live/baas-'+coll+'?since='+(Number(s)||0),authHeaders()).then(function(r){return r.json().then(function(j){return j.messages||[];});});},seq:function(){return fetch('/api/projects/'+pid+'/live/baas-'+coll+'?since=0&limit=1',authHeaders()).then(function(r){return r.json().then(function(j){return j.seq||0;});});}};},
+    push:function(coll,evt){var ch='live:'+pid+':'+coll;var sb=getSB();return getIdentity().then(function(name){var c=sb.channel(ch);var p={type:'message',user:name,data:evt||{},ts:Date.now()};c.send({type:'broadcast',event:'evt',payload:p});return fetch('/api/projects/'+pid+'/live/baas-'+coll+'/push',{method:'POST',headers:authHeaders({'content-type':'application/json'}),body:JSON.stringify({data:evt||{},_user:name})}).then(function(r){return r.ok?r.json().then(function(j){return j.seq||0;}):0;}).catch(function(){return 0;});});},
+    server:function(name){if(!/^[a-z0-9_-]{1,32}$/.test(name))throw new Error('server name: a-z0-9-_ max 32');var ch='srv:'+pid+':'+name;var sb=getSB();var subs=[];var my=null;var c=sb.channel(ch);c.on('broadcast',{event:'evt'},function(p){for(var i=0;i<subs.length;i++)try{subs[i](p.payload);}catch{}}).subscribe(function(s){if(s==='SUBSCRIBED')getIdentity().then(function(n){my=n;});});return{myName:function(){return my;},push:function(evt){return getIdentity().then(function(name){c.send({type:'broadcast',event:'evt',payload:{type:'message',user:name,data:evt||{},ts:Date.now()}});});},subscribe:function(cb){subs.push(cb);return function(){subs=subs.filter(function(f){return f!==cb;});};},close:function(){try{sb.removeChannel(c);}catch{}subs=[];},history:function(o){o=o||{};return fetch('/api/projects/'+pid+'/live/srv:'+name+'?limit='+(Number(o.limit)||50),authHeaders()).then(function(r){return r.json().then(function(j){return j.messages||[];});});},since:function(s){return fetch('/api/projects/'+pid+'/live/srv:'+name+'?since='+(Number(s)||0),authHeaders()).then(function(r){return r.json().then(function(j){return j.messages||[];});});},seq:function(){return fetch('/api/projects/'+pid+'/live/srv:'+name+'?since=0&limit=1',authHeaders()).then(function(r){return r.json().then(function(j){return j.seq||0;});});}};},
+    chat:{room:function(rn){rn=/^[a-z0-9_-]{1,32}$/.test(rn||'')?rn:'main';var ch='live:'+pid+':chat:'+rn;var subs=[];var channel=null;function connect(){if(channel)return channel;var sb=getSB();channel=sb.channel(ch);channel.on('broadcast',{event:'evt'},function(p){for(var i=0;i<subs.length;i++)try{subs[i](p.payload);}catch{}}).subscribe();return channel;}return{name:rn,send:function(t){return fetch('/api/projects/'+pid+'/chat/send',{method:'POST',headers:authHeaders({'content-type':'application/json'}),body:JSON.stringify({room:rn,text:String(t==null?'':t)})}).then(function(r){return r.text().then(function(t){var j=t?JSON.parse(t):{};if(!r.ok)throw new Error(j.error||friendlyError(r.status));return j.message;});});},list:function(o){o=o||{};var q='room='+encodeURIComponent(rn)+'&since='+(Number(o.since)||0)+'&limit='+Math.max(1,Math.min(200,Number(o.limit)||50));return fetch('/api/projects/'+pid+'/chat/list?'+q,authHeaders()).then(function(r){return r.text().then(function(t){var j=t?JSON.parse(t):{};if(!r.ok)throw new Error(j.error||friendlyError(r.status));return j.messages||[];});});},history:function(o){return this.list(o);},latest:function(){return fetch('/api/projects/'+pid+'/chat/list?room='+encodeURIComponent(rn)+'&since=0&limit=1',authHeaders()).then(function(r){return r.json().then(function(j){return j.seq||0;});});},on:function(cb){subs.push(cb);connect();return function(){subs=subs.filter(function(f){return f!==cb;});};},close:function(){if(channel){try{getSB().removeChannel(channel);}catch{}channel=null;}subs=[];}};}},
+    call:function(n,input){return fetch('/api/projects/'+pid+'/fn/'+n,{method:'POST',headers:authHeaders({'content-type':'application/json'}),body:JSON.stringify({input:input===undefined?null:input})}).then(function(r){return r.text().then(function(t){var j=t?JSON.parse(t):{};if(!r.ok){var m=friendlyError(r.status);if(r.status===404)m+=' <a href="/" style="color:#7c5cff;text-decoration:underline">Create one here</a>';throw new Error(m);}return j.result;});});},
+    credits:{balance:function(){return fetch('/api/credits',authHeaders()).then(function(r){return r.text().then(function(t){var j=t?JSON.parse(t):{};if(!r.ok)throw new Error(j.error||friendlyError(r.status));return j.credits||j;});});},gift:function(to,a){a=Number(a);if(!/^[a-zA-Z0-9_-]{3,24}$/.test(String(to||'').trim()))return Promise.reject(new Error('gift: username 3-24 chars'));if(!Number.isFinite(a)||a<=0)return Promise.reject(new Error('gift: positive amount'));var tgt=String(to).trim();return fetch('/api/credits/gift',{method:'POST',headers:authHeaders({'content-type':'application/json'}),body:JSON.stringify({to:tgt,amount:a})}).then(function(r){return r.text().then(function(t){var j=t?JSON.parse(t):{};if(!r.ok)throw new Error(j.error||friendlyError(r.status));return j;});});}},
+    me:function(){return fetch('/api/auth/me',authHeaders()).then(function(r){if(r.status===401)return null;return r.json().then(function(j){return{name:j.name};});}).catch(function(){return null;});}
+  };
+})();`;
+
+function injectPreview(html, pid) {
+  const errHook = `<script>(function(){function r(m){try{parent.postMessage({__ab:'error',message:String(m).slice(0,300)},'*')}catch(e){}}` +
+    `window.addEventListener('error',function(e){r(e.message||'script error')});` +
+    `window.addEventListener('unhandledrejection',function(e){var x=e.reason;r('Unhandled promise rejection: '+(x&&x.message||x))});})();</script>`;
+  const sdk = `<script>window.__CREAT_PROJECT__='${pid}';</script>` +
+    `<script type="text/javascript">${BAAS_SDK}</script>` +
+    `<script src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js'></script>` +
+    errHook;
+  const headMatch = html.match(/<head([^>]*)>/i);
+  if (headMatch) return html.replace(/<head([^>]*)>/i, (m, attrs) => `<head${attrs}>${sdk}`);
+  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${sdk}</head>`);
+  return sdk + html;
+}
+
+async function visitorKeyPreview(request) {
+  const user = await getUser(request);
+  if (user && user.name) return `user:${user.name}`;
+  const ip = request.headers.get('x-forwarded-for') || request.headers.get('cf-connecting-ip') || '';
+  return ip ? `ip:${ip}` : '';
+}
+
+async function servePreviewFile(request, pid, rawPath) {
+  const p = safePath(rawPath);
+  if (p === null) return new Response('bad path', { status: 400 });
+  let target = p === '' ? 'index.html' : p;
+  if (target === 'functions' || target.startsWith('functions/'))
+    return new Response('not found', { status: 404 });
+
+  let row = await store.getFile(pid, target);
+  if (!row && target !== 'index.html') row = await store.getFile(pid, target + '/index.html');
+  if (!row) {
+    if (!(await store.getProject(pid))) return new Response('unknown project', { status: 404 });
+    if (target === 'index.html') {
+      try { await store.recordInteraction(pid, await visitorKeyPreview(request)); } catch {}
+      return new Response(
+        `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;background:#0f1115;color:#9aa4b2;display:grid;place-items:center;height:100vh;margin:0">` +
+        `<div style="text-align:center"><h2 style="color:#e6edf3">Whoopsie! The server hit its head</h2>` +
+        `<p>Project <code>${pid}</code> might not exist or has been deleted!</p>` +
+        `<a href="/" style="display:inline-block;margin-top:16px;padding:10px 20px;background:#7c5cff;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Create one here</a></div>`,
+        { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
+      );
+    }
+    return new Response('not found', { status: 404 });
+  }
+
+  const ext = (target.split('.').pop() || '').toLowerCase();
+  const type = MIME[ext] || 'application/octet-stream';
+  const content = row.encoding === 'base64' ? new TextDecoder().decode(fromBase64(row.content)) : row.content;
+  const body = type.startsWith('text/html') && row.encoding !== 'base64'
+    ? injectPreview(row.content, pid) : content;
+  if (type.startsWith('text/html')) {
+    try { await store.recordInteraction(pid, await visitorKeyPreview(request)); } catch {}
+  }
+  return new Response(body, {
+    status: 200,
+    headers: { 'content-type': type, 'cache-control': 'no-store' },
+  });
+}
+
+// Preview routes
+router.get('/preview/:pid', async ({ request, params }) => {
+  return servePreviewFile(request, params.pid, '');
+});
+
+router.get('/preview/:pid/*path', async ({ request, params }) => {
+  const subpath = params.path || '';
+  return servePreviewFile(request, params.pid, subpath);
+});
