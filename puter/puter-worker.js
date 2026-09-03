@@ -1008,8 +1008,8 @@ router.post('/api/chat', async ({ request }) => {
   const user = await getUser(request);
   if (!user) return json({ error: 'not signed in' }, 401);
   const body = await request.json().catch(() => ({}));
-  const pid = String(body.project_id || '').trim();
-  const prompt = String(body.prompt || '').trim();
+  const pid = String(body.project_id || body.projectId || '').trim();
+  const prompt = String(body.prompt || body.message || '').trim();
   if (!pid || !prompt) return json({ error: 'project_id and prompt required' }, 400);
   const project = await store.getProject(pid);
   if (!project) return json({ error: 'project not found' }, 404);
