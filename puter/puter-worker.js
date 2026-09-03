@@ -852,7 +852,7 @@ router.get('/api/projects/:pid/presence', async ({ params }) => {
 // ---- Auth ----
 router.post('/api/auth/signup', async ({ request }) => {
   const body = await request.json().catch(() => ({}));
-  const name = String(body.name || '').trim();
+  const name = String(body.username || body.name || '').trim();
   const pw = String(body.password || '');
   const email = String(body.email || '').trim();
   if (!name || name.length < 2 || name.length > 20) return json({ error: 'username 2-20 chars' }, 400);
@@ -868,7 +868,7 @@ router.post('/api/auth/signup', async ({ request }) => {
 
 router.post('/api/auth/login', async ({ request }) => {
   const body = await request.json().catch(() => ({}));
-  const name = String(body.name || '').trim();
+  const name = String(body.username || body.name || '').trim();
   const pw = String(body.password || '');
   if (!name || !pw) return json({ error: 'name and password required' }, 400);
   const u = await store.findUserByName(name);
@@ -892,7 +892,7 @@ router.get('/api/auth/me', async ({ request }) => {
 
 router.post('/api/auth/forgot', async ({ request }) => {
   const body = await request.json().catch(() => ({}));
-  const name = String(body.name || '').trim();
+  const name = String(body.username || body.name || '').trim();
   if (!name) return json({ error: 'name required' }, 400);
   const u = await store.findUserByName(name);
   if (!u) return json({ error: 'user not found' }, 404);
