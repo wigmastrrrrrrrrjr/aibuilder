@@ -9,7 +9,7 @@
 
 import { Hono } from 'hono';
 import { store } from './store.js';
-import { getUser } from './auth.js';
+import { getUser, requireUser, canWrite } from './auth.js';
 import { getVar } from './env.js';
 import { createClient } from '@supabase/supabase-js';
 
@@ -40,6 +40,7 @@ async function broadcast(roomKey, payload) {
 }
 
 async function identity(c, evt) {
+  // backward-compatible: used for unauthenticated pushes in places that allow it.
   const u = await getUser(c);
   if (u) return u.name;
   const who = (evt && (evt._user || evt.user)) || '';
@@ -49,14 +50,24 @@ async function identity(c, evt) {
 
 // ---- Multiplayer rooms ------------------------------------------------------
 // POST push: persist to the room's event log AND broadcast to live listeners.
-live.post('/api/projects/:pid/live/:room/push', async (c) => {
+// Writes require authentication. For unpublished projects a user must have canWrite.
+live.post('/api/projects/:pid/live/:room/push', requireUser, async (c) => {
   const { pid, room } = c.req.param();
   if (!ROOM_RE.test(room)) return c.json({ error: 'bad room' }, 400);
+
+  const project = await store.getProject(pid);
+  if (!project) return c.json({ error: 'unknown project' }, 404);
+
+  const user = c.get('user');
+  if (!project.published && !(await canWrite(project, user))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+
   const evt = await c.req.json().catch(() => ({}));
-  const who = await identity(c, evt);
+  const who = user.name; // authoritative server-side identity
   const data = {
     type: 'message',
-    user: evt._user || evt.user || who,
+    user: who,
     data: evt.data !== undefined ? evt.data : evt,
     ts: Date.now(),
   };
@@ -67,11 +78,21 @@ live.post('/api/projects/:pid/live/:room/push', async (c) => {
 });
 
 // GET replay: durable catch-up for listeners that joined late or missed events.
-// ?since=SEQ&limit=N returns events strictly after SEQ (missing-seqn safe: caller
-// can detect gaps on [0..currentSeq] and reset state from a snapshot if needed).
+// ?since=SEQ&limit=N returns events strictly after SEQ.
+// Reads are allowed anonymously only for published projects; private projects require auth + canWrite.
 live.get('/api/projects/:pid/live/:room', async (c) => {
   const { pid, room } = c.req.param();
   if (!ROOM_RE.test(room)) return c.json({ error: 'bad room' }, 400);
+
+  const project = await store.getProject(pid);
+  if (!project) return c.json({ error: 'unknown project' }, 404);
+
+  if (!project.published) {
+    const user = await getUser(c);
+    if (!user) return c.json({ error: 'sign in required' }, 401);
+    if (!(await canWrite(project, user))) return c.json({ error: 'forbidden' }, 403);
+  }
+
   const since = Math.max(0, Number(c.req.query('since')) || 0);
   const limit = Math.min(200, Math.max(1, Number(c.req.query('limit')) || 60));
   const cur = await store.currentSeq(pid, room);
@@ -81,14 +102,25 @@ live.get('/api/projects/:pid/live/:room', async (c) => {
 
 // ---- Chat engine (durable, incremental — same engine the OS chat used) ------
 // Room validation lives on the project; default room is the project lobby.
-live.post('/api/projects/:pid/chat/send', async (c) => {
+
+// Send chat message: writing requires authentication. For unpublished projects the user must have canWrite.
+live.post('/api/projects/:pid/chat/send', requireUser, async (c) => {
   const { pid } = c.req.param();
-  if (!(await store.getProject(pid))) return c.json({ error: 'unknown project' }, 404);
+  const project = await store.getProject(pid);
+  if (!project) return c.json({ error: 'unknown project' }, 404);
+
+  const user = c.get('user');
+  if (!project.published && !(await canWrite(project, user))) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+
   const body = await c.req.json().catch(() => ({}));
   const text = String(body.text || '').trim().slice(0, 500);
   if (!text) return c.json({ error: 'empty message' }, 400);
   const room = CHAT_ROOM_RE.test(body.room || '') ? String(body.room) : 'main';
-  const who = await identity(c, body);
+
+  // Authoritative identity from authenticated session:
+  const who = user.name;
   const data = { type: 'chat', user: who, text, ts: Date.now() };
   const seq = await store.appendEvent(pid, `chat:${room}`, data);
   data.id = seq;
@@ -97,9 +129,18 @@ live.post('/api/projects/:pid/chat/send', async (c) => {
 });
 
 // GET list: fetch chat history. ?since=ID returns only newer messages (monotonic id).
+// Reads allowed anonymously only for published projects; otherwise require auth + canWrite.
 live.get('/api/projects/:pid/chat/list', async (c) => {
   const { pid } = c.req.param();
-  if (!(await store.getProject(pid))) return c.json({ error: 'unknown project' }, 404);
+  const project = await store.getProject(pid);
+  if (!project) return c.json({ error: 'unknown project' }, 404);
+
+  if (!project.published) {
+    const user = await getUser(c);
+    if (!user) return c.json({ error: 'sign in required' }, 401);
+    if (!(await canWrite(project, user))) return c.json({ error: 'forbidden' }, 403);
+  }
+
   const room = CHAT_ROOM_RE.test(c.req.query('room') || '') ? String(c.req.query('room')) : 'main';
   const since = Math.max(0, Number(c.req.query('since')) || 0);
   const limit = Math.min(200, Math.max(1, Number(c.req.query('limit')) || 50));
