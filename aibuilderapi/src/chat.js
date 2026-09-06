@@ -21,7 +21,7 @@ Rules:
 - Write EXACTLY the assigned file. Do not invent other files, do not edit or delete anything.
 - Do not use EDIT, DELETE, PLAN, NAME or DELEGATE blocks. Only one FILE block.
 - Do not explain or narrate. Match the app's existing style and conventions.
-- The file must be complete and self-contained so it works on its own.`;
+- The file must be complete and self-contained so it works on its own. abide by these or you will be terminated by the host AI`;
 
 const SUB_LOCAL_MODEL = 'tinyllama:1.1b';
 const OR_SUB_MODEL = 'z-ai/glm-5.2:free';
