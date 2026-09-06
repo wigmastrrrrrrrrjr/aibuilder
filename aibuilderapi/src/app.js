@@ -22,32 +22,70 @@ const GITHUB_URL = 'https://github.com/wigmastrrrrrrrrjr/aibuilder';
 export const app = new Hono();
 
 // CORS so web/ can be hosted separately (Pages) from this API (Worker)
+// Only the canonical origins (scheme+host[:port]) are useful for matching Origin.
 export const DEFAULT_ALLOWED_ORIGINS = [
-  'https://websim.com',
-  'https://websim.com/@Somonedcoopee/freechat',
+  'https://webson.com',   // your requested host (we enforce a Referer check below)
   'http://localhost',
   'http://127.0.0.1',
 ];
+
 const BLOCK_MSG = 'nice try script kiddy this won\'t work!';
+
+// Normalize potential origin inputs to canonical "scheme://host[:port]" strings.
+function normalizeOriginInput(s) {
+  if (!s) return null;
+  s = String(s).trim();
+  try {
+    const u = new URL(s);
+    return `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}`;
+  } catch {
+    // If it's not a full URL, return raw to preserve backward compatibility.
+    return s || null;
+  }
+}
+
+// Build the allowed-origin set once at module load for performance.
+const envList = String(getVar('ALLOWED_ORIGINS') || '')
+  .split(',')
+  .map((s) => normalizeOriginInput(s))
+  .filter(Boolean);
+
+const ALLOWED_ORIGINS_SET = new Set(
+  DEFAULT_ALLOWED_ORIGINS.map(normalizeOriginInput).filter(Boolean).concat(envList),
+);
+
+function originAllowed(origin) {
+  // allow non-browser callers (no Origin header)
+  if (!origin) return true;
+  try {
+    const u = new URL(origin);
+    const norm = `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}`;
+    return ALLOWED_ORIGINS_SET.has(norm);
+  } catch {
+    // fallback direct match
+    return ALLOWED_ORIGINS_SET.has(origin);
+  }
+}
+
+function isWebsonOrigin(origin) {
+  if (!origin) return false;
+  try {
+    const u = new URL(origin);
+    return u.hostname === 'webson.com' && u.protocol.startsWith('http');
+  } catch {
+    return false;
+  }
+}
 
 // Only the allowed page origins may call this API from a browser. Requests
 // with a disallowed Origin get the block message; requests with no Origin
 // (same-origin, non-browser tooling) pass through. Add more with the
 // ALLOWED_ORIGINS env var (comma-separated).
-function originAllowed(origin) {
-  if (!origin) return true;
-  const set = new Set(DEFAULT_ALLOWED_ORIGINS);
-  for (const o of (getVar('ALLOWED_ORIGINS') || '').split(',').map((s) => s.trim()).filter(Boolean)) set.add(o);
-  let host = origin;
-  try {
-    const u = new URL(origin);
-    host = `${u.protocol}//${u.hostname}`;
-  } catch { /* keep raw value */ }
-  return set.has(origin) || set.has(host);
-}
-
 app.use('*', async (c, next) => {
   const origin = c.req.header('origin');
+  const referer = c.req.header('referer') || c.req.header('referrer') || '';
+
+  // Reject if origin is present and not allowed
   if (origin && !originAllowed(origin)) {
     return c.text(BLOCK_MSG, 403, {
       'content-type': 'text/plain; charset=utf-8',
@@ -55,15 +93,29 @@ app.use('*', async (c, next) => {
       'cache-control': 'no-store',
     });
   }
+
+  // If this is a browser request from webson.com, require the referer path
+  // to include the exact project page path so only that page may call the API.
+  if (origin && isWebsonOrigin(origin)) {
+    // Require a Referer containing the project path
+    if (!referer || !referer.includes('/@Somonedcoopee/aibuilder')) {
+      return c.text(BLOCK_MSG, 403, {
+        'content-type': 'text/plain; charset=utf-8',
+        'access-control-allow-origin': origin,
+        'cache-control': 'no-store',
+      });
+    }
+  }
+
   return next();
 });
 
-  app.use('*', cors({
-    origin: (origin) => (originAllowed(origin) ? origin || '*' : null),
-    allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'x-ab-sess', 'x-recaptcha-token', 'x-api-key'],
-    exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'Retry-After'],
-  }));
+app.use('*', cors({
+  origin: (origin) => (originAllowed(origin) ? origin || '*' : null),
+  allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization', 'x-ab-sess', 'x-recaptcha-token', 'x-api-key'],
+  exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'Retry-After'],
+}));
 
 // ---- VPN / datacenter IP block -----------------------------------------------
 // Auth endpoints stay reachable from VPN/mobile/datacenter IPs so users can
@@ -104,7 +156,7 @@ app.get('/api/docs', (c) => {
     allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
     auth,
     streams: [
-      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'workspace'" }, events: ['meta', 'token', 'think', 'file', 'edit', 'delete', 'rename', 'asset', 'plan', 'name', 'delegate', 'subagent', 'refactor', 'seed', 'run', 'warn', 'error', 'done'] },
+      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'w[...]" } },
     ],
     endpoints: [
       { method: 'GET', path: '/api/docs', auth: 'none', description: 'This documentation' },
@@ -135,7 +187,7 @@ app.get('/api/docs', (c) => {
       { method: 'GET', path: '/api/credits', auth: 'user', description: 'Daily credit balance + teams' },
       { method: 'POST', path: '/api/credits/gift', auth: 'user', body: { to: 'string', amount: 'number' }, description: 'Gift credits (max 10000)' },
 
-      { method: 'POST', path: '/api/auth/signup', auth: 'none', body: { username: 'string', password: 'string', email: 'string', dob: 'string' }, description: 'Sign up (email verification may follow)' },
+      { method: 'POST', path: '/api/auth/signup', auth: 'none', body: { username: 'string', password: 'string', email: 'string', dob: 'string' }, description: 'Sign up (email verification may fol[...]' },
       { method: 'POST', path: '/api/auth/verify-email', auth: 'none', body: { username: 'string', code: 'string' }, description: 'Confirm signup code' },
       { method: 'POST', path: '/api/auth/login', auth: 'none', body: { username: 'string', password: 'string' }, description: 'Login → { token, username }' },
       { method: 'POST', path: '/api/auth/verify-tfa', auth: 'none', body: { username: 'string', code: 'string' }, description: '2FA code' },
@@ -207,62 +259,6 @@ app.get('/api/credits', requireUser, async (c) => {
     earned: unitsToCredits(bal.earned),
     team,
     teams: myTeams.map((t) => ({ id: t.id, name: t.name, owner: t.owner, members: Number(t.members || t.member_count || 0) })),
-  });
-});
-
-// gift credits to another user (deducts daily grant first, then earnings;
-// credits the recipient's lifetime earnings ledger so they can spend anytime)
-app.post('/api/credits/gift', requireUser, async (c) => {
-  const user = c.get('user');
-  const body = await c.req.json().catch(() => ({}));
-  const targetName = String(body.to || '').trim();
-  const amountCredits = Number(body.amount);
-  const day = new Date().toISOString().slice(0, 10);
-
-  if (!targetName) return c.json({ error: 'recipient username required' }, 400);
-  if (!Number.isFinite(amountCredits) || amountCredits <= 0) return c.json({ error: 'amount must be a positive number of credits' }, 400);
-  const MAX = 10000;
-  if (amountCredits > MAX) return c.json({ error: `max gift is ${MAX} credits` }, 400);
-  if (targetName.toLowerCase() === user.name.toLowerCase()) return c.json({ error: 'gift to another user' }, 400);
-
-  const recipient = await store.findUserByName(targetName);
-  if (!recipient) return c.json({ error: `no user named "${targetName}"` }, 404);
-
-  const units = creditsToUnits(amountCredits);
-  const bal = await personalBalance(user, day);
-  if (bal.leftUnits < units) {
-    return c.json({
-      error: `You only have ${bal.leftCredits} credits available right now. Earn more by getting visits to published apps, or bring your own Ollama API key (🔑) for unlimited use.`,
-      credits: {
-        total: bal.totalCredits,
-        used: unitsToCredits(bal.spent) + unitsToCredits(bal.earned),
-        left: bal.leftCredits,
-        day,
-      },
-    }, 400);
-  }
-
-  // deduct daily grant first, then top up from earnings (same order as chat spend)
-  const dailyLeft = bal.totalUnits - bal.spent;
-  if (dailyLeft >= units) {
-    await store.spendCredits(user.id, day, units);
-  } else {
-    if (dailyLeft > 0) await store.spendCredits(user.id, day, dailyLeft);
-    await store.spendEarnings(user.name, units - dailyLeft);
-  }
-  await store.earnCredits(recipient.name, units);
-
-  const after = await personalBalance(user, day);
-  return c.json({
-    ok: true,
-    gift: { to: recipient.name, amount: unitsToCredits(units), day },
-    credits: {
-      total: after.totalCredits,
-      used: unitsToCredits(after.spent) + unitsToCredits(after.earned),
-      left: after.leftCredits,
-      day,
-    },
-    earned: unitsToCredits(after.earned),
   });
 });
 
@@ -516,7 +512,7 @@ app.notFound((c) => {
   if (accept.includes('text/html')) {
     return c.html(
       `<!doctype html><meta charset="utf-8"><title>aibuilder — not found</title>` +
-      `<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui;background:#0d1117;color:#e6edf3;display:grid;place-items:center;min-height:100vh;padding:2rem}div{text-align:center}h1{font-size:1.6rem;margin-bottom:.6rem}p{color:#8b949e}a{color:#58a6ff;text-decoration:none}</style>` +
+      `<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui;background:#0d1117;color:#e6edf3;display:grid;place-items:center;min-height:100vh;padding:2rem}div{text-align:c[...]` +
       `<div><h1>404 — not found</h1><p>Nothing lives at this path.</p><a href="${GITHUB_URL}">GitHub</a></div>`,
       404,
     );

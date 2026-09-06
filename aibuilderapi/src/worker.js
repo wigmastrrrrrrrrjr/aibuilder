@@ -72,7 +72,11 @@ export default {
 
     const url = new URL(req.url);
 
-    if (MAINTENANCE_MODE) return maintenanceResponse(url.pathname);
+    // capture the incoming Origin header so maintenance and error responses can
+    // echo it back instead of returning a literal '*'
+    const incomingOrigin = req.headers.get('origin') || undefined;
+
+    if (MAINTENANCE_MODE) return maintenanceResponse(url.pathname, incomingOrigin);
 
     const needsApi =
       url.pathname.startsWith('/api/') ||
@@ -89,7 +93,7 @@ export default {
         '  database_id = "<your-d1-id>"\n\n' +
         'then run:  npx wrangler d1 list   (verify id)\n' +
         '           npm run deploy',
-        { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' } },
+        { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': incomingOrigin || '*' } },
       );
     }
 
@@ -153,7 +157,7 @@ export default {
       console.error('worker error:', (e && e.stack) || e);
       return new Response(JSON.stringify({ error: 'Internal Server Error', detail: String((e && e.message) || e).slice(0, 300) }), {
         status: 500,
-        headers: { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' },
+        headers: { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': incomingOrigin || '*' },
       });
     }
   },

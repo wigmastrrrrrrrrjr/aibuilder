@@ -31,7 +31,7 @@ const MAINTENANCE_HTML = `<!doctype html>
   p{color:var(--muted);font-size:15px;line-height:1.6}
   .lead{color:var(--text);font-weight:600;font-size:16px}
   .eta{display:block;margin-top:8px;font-size:13px;font-weight:600;color:var(--primary);font-variant-numeric:tabular-nums}
-  .pill{display:inline-block;margin-top:22px;font-size:11px;font-weight:600;color:var(--primary);background:var(--primary-soft);border:1px solid #e3e2fb;padding:4px 12px;border-radius:999px;letter-spacing:.02em}
+  .pill{display:inline-block;margin-top:22px;font-size:11px;font-weight:600;color:var(--primary);background:var(--primary-soft);border:1px solid #e3e2fb;padding:4px 12px;border-radius:999px;letter-spacing:-.01em}
 </style>
 </head>
 <body>
@@ -73,7 +73,10 @@ const MAINTENANCE_HTML = `<!doctype html>
 </body>
 </html>`;
 
-export function maintenanceResponse(pathname) {
+// Accept an optional origin to echo back in Access-Control-Allow-Origin.
+// If origin is not provided, we fall back to '*' (non-browser callers).
+export function maintenanceResponse(pathname, origin) {
+  const acao = origin || '*';
   if (pathname.startsWith('/api/') || pathname === '/__baas.js') {
     return new Response(
       JSON.stringify({ error: 'maintenance', message: MAINTENANCE_MESSAGE }),
@@ -81,7 +84,7 @@ export function maintenanceResponse(pathname) {
         status: 503,
         headers: {
           'content-type': 'application/json; charset=utf-8',
-          'access-control-allow-origin': '*',
+          'access-control-allow-origin': acao,
           'cache-control': 'no-store',
         },
       },
@@ -91,7 +94,7 @@ export function maintenanceResponse(pathname) {
     status: 503,
     headers: {
       'content-type': 'text/html; charset=utf-8',
-      'access-control-allow-origin': '*',
+      'access-control-allow-origin': acao,
       'cache-control': 'no-store',
     },
   });
