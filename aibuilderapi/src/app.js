@@ -22,8 +22,44 @@ const GITHUB_URL = 'https://github.com/wigmastrrrrrrrrjr/aibuilder';
 export const app = new Hono();
 
 // CORS so web/ can be hosted separately (Pages) from this API (Worker)
+export const DEFAULT_ALLOWED_ORIGINS = [
+  'https://websim.com',
+  'https://websim.com/@Somonedcoopee/freechat',
+  'http://localhost',
+  'http://127.0.0.1',
+];
+const BLOCK_MSG = 'nice try script kiddy this won\'t work!';
+
+// Only the allowed page origins may call this API from a browser. Requests
+// with a disallowed Origin get the block message; requests with no Origin
+// (same-origin, non-browser tooling) pass through. Add more with the
+// ALLOWED_ORIGINS env var (comma-separated).
+function originAllowed(origin) {
+  if (!origin) return true;
+  const set = new Set(DEFAULT_ALLOWED_ORIGINS);
+  for (const o of (getVar('ALLOWED_ORIGINS') || '').split(',').map((s) => s.trim()).filter(Boolean)) set.add(o);
+  let host = origin;
+  try {
+    const u = new URL(origin);
+    host = `${u.protocol}//${u.hostname}`;
+  } catch { /* keep raw value */ }
+  return set.has(origin) || set.has(host);
+}
+
+app.use('*', async (c, next) => {
+  const origin = c.req.header('origin');
+  if (origin && !originAllowed(origin)) {
+    return c.text(BLOCK_MSG, 403, {
+      'content-type': 'text/plain; charset=utf-8',
+      'access-control-allow-origin': origin,
+      'cache-control': 'no-store',
+    });
+  }
+  return next();
+});
+
   app.use('*', cors({
-    origin: '*',
+    origin: (origin) => (originAllowed(origin) ? origin || '*' : null),
     allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'x-ab-sess', 'x-recaptcha-token', 'x-api-key'],
     exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'Retry-After'],
@@ -55,6 +91,91 @@ app.get('/api/meta', (c) =>
     github: GITHUB_URL,
   })
 );
+
+// ---- API documentation ----------------------------------------------------
+app.get('/api/docs', (c) => {
+  const base = new URL(c.req.url).origin;
+  const auth = { header: 'x-ab-sess: <token>', sources: ['POST /api/auth/signup', 'POST /api/auth/login'] };
+  return c.json({
+    name: 'aibuilder API',
+    version: '0.2.0',
+    description: 'AI app builder backend. Only the WebSim page origin may call this API from a browser; any other Origin receives the block message.',
+    baseUrl: base,
+    allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
+    auth,
+    streams: [
+      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'workspace'" }, events: ['meta', 'token', 'think', 'file', 'edit', 'delete', 'rename', 'asset', 'plan', 'name', 'delegate', 'subagent', 'refactor', 'seed', 'run', 'warn', 'error', 'done'] },
+    ],
+    endpoints: [
+      { method: 'GET', path: '/api/docs', auth: 'none', description: 'This documentation' },
+      { method: 'GET', path: '/api/meta', auth: 'none', description: 'Model + key status' },
+      { method: 'GET', path: '/api/models', auth: 'none', description: 'Model catalogue' },
+
+      { method: 'GET', path: '/api/projects', auth: 'none', description: 'List projects' },
+      { method: 'POST', path: '/api/projects', auth: 'user', body: { name: 'string' }, description: 'Create a project' },
+      { method: 'GET', path: '/api/projects/:pid', auth: 'none', description: 'Project + files + recent messages' },
+      { method: 'GET', path: '/api/projects/:pid/export', auth: 'none', description: 'Raw files (for terminal client / tooling)' },
+      { method: 'DELETE', path: '/api/projects/:pid', auth: 'owner', description: 'Delete a project' },
+      { method: 'POST', path: '/api/projects/:pid/rename', auth: 'owner', body: { name: 'string' }, description: 'Rename' },
+      { method: 'POST', path: '/api/projects/:pid/publish', auth: 'owner', body: { publish: 'boolean', description: 'string' }, description: 'Publish / unpublish to discovery feed' },
+      { method: 'POST', path: '/api/projects/:pid/remix', auth: 'user', description: 'Copy a published app into your own project' },
+      { method: 'GET', path: '/api/projects/:pid/versions?path=<file>&seq=<n>', auth: 'none', description: 'File revision list, or one revision with seq' },
+      { method: 'POST', path: '/api/projects/:pid/restore-version', auth: 'owner', body: { path: 'string', seq: 'number' }, description: 'Undo/redo a single file' },
+      { method: 'GET', path: '/api/projects/:pid/snapshots', auth: 'none', description: 'List project snapshots' },
+      { method: 'POST', path: '/api/projects/:pid/snapshots', auth: 'owner', body: { label: 'string' }, description: 'Take a snapshot' },
+      { method: 'GET', path: '/api/projects/:pid/snapshots/:sid', auth: 'none', description: 'Snapshot + its files' },
+      { method: 'POST', path: '/api/projects/:pid/snapshots/:sid/restore', auth: 'owner', description: 'Roll the whole project back' },
+      { method: 'POST', path: '/api/projects/:pid/upload', auth: 'owner', body: 'multipart "files" (repeatable)', description: 'Upload existing files (max 300, 2MB each)' },
+      { method: 'POST', path: '/api/projects/:pid/presence', auth: 'user', body: { sid: 'string' }, description: 'Join presence (10-person cap)' },
+      { method: 'POST', path: '/api/projects/:pid/presence/leave', auth: 'user', body: { sid: 'string' }, description: 'Leave presence' },
+      { method: 'GET', path: '/api/projects/:pid/presence', auth: 'none', description: 'Who is currently building' },
+
+      { method: 'GET', path: '/api/discover', auth: 'none', description: 'Published-app discovery feed' },
+
+      { method: 'GET', path: '/api/credits', auth: 'user', description: 'Daily credit balance + teams' },
+      { method: 'POST', path: '/api/credits/gift', auth: 'user', body: { to: 'string', amount: 'number' }, description: 'Gift credits (max 10000)' },
+
+      { method: 'POST', path: '/api/auth/signup', auth: 'none', body: { username: 'string', password: 'string', email: 'string', dob: 'string' }, description: 'Sign up (email verification may follow)' },
+      { method: 'POST', path: '/api/auth/verify-email', auth: 'none', body: { username: 'string', code: 'string' }, description: 'Confirm signup code' },
+      { method: 'POST', path: '/api/auth/login', auth: 'none', body: { username: 'string', password: 'string' }, description: 'Login → { token, username }' },
+      { method: 'POST', path: '/api/auth/verify-tfa', auth: 'none', body: { username: 'string', code: 'string' }, description: '2FA code' },
+      { method: 'POST', path: '/api/auth/resend-code', auth: 'none', body: { username: 'string', type: 'signup|login' }, description: 'Resend verification code' },
+      { method: 'POST', path: '/api/auth/reset', auth: 'none', body: { username: 'string', password: 'string' }, description: 'Reset password' },
+      { method: 'GET', path: '/api/auth/me', auth: 'user', description: 'Current user' },
+      { method: 'POST', path: '/api/auth/logout', auth: 'user', description: 'End session' },
+
+      { method: 'POST', path: '/api/teams', auth: 'user', body: { name: 'string' }, description: 'Create team' },
+      { method: 'GET', path: '/api/teams', auth: 'user', description: 'My teams' },
+      { method: 'GET', path: '/api/teams/by-invite/:code', auth: 'user', description: 'Resolve invite code' },
+      { method: 'GET', path: '/api/teams/:tid', auth: 'user', description: 'Team info + members' },
+      { method: 'POST', path: '/api/teams/:tid/join', auth: 'user', body: { code: 'string' }, description: 'Join via invite code' },
+      { method: 'POST', path: '/api/teams/:tid/leave', auth: 'user', description: 'Leave team' },
+      { method: 'DELETE', path: '/api/teams/:tid', auth: 'owner', description: 'Delete team' },
+      { method: 'POST', path: '/api/projects/:pid/team', auth: 'owner', body: { teamId: 'string' }, description: 'Assign project to a team' },
+
+      { method: 'GET', path: '/api/features', auth: 'none', description: 'Feature list + votes' },
+      { method: 'POST', path: '/api/features', auth: 'user', body: { title: 'string', description: 'string' }, description: 'Propose a feature' },
+      { method: 'POST', path: '/api/features/:id/vote', auth: 'user', body: { vote: 'number' }, description: 'Up/down vote' },
+      { method: 'POST', path: '/api/features/:id/status', auth: 'owner', body: { status: 'string' }, description: 'Update feature status' },
+
+      { method: 'POST', path: '/api/projects/:pid/live/:room/push', auth: 'none', body: { data: 'any' }, description: 'Append realtime event' },
+      { method: 'GET', path: '/api/projects/:pid/live/:room?since=<seq>&limit=<n>', auth: 'none', description: 'Poll realtime events (browsers normally use SSE — see live.js)' },
+      { method: 'POST', path: '/api/projects/:pid/chat/send', auth: 'none', body: { room: 'string', text: 'string' }, description: 'Room chat message' },
+      { method: 'GET', path: '/api/projects/:pid/chat/list?room=<r>&since=<seq>&limit=<n>', auth: 'none', description: 'Room chat history' },
+
+      { method: 'POST', path: '/api/projects/:pid/fn/:name', auth: 'none', body: { input: 'any' }, description: 'Run functions/<name>.js (pure computation, 1.5s cap)' },
+
+      { method: 'GET', path: '/api/baas/:pid/:coll', auth: 'none', description: 'BaaS list rows' },
+      { method: 'POST', path: '/api/baas/:pid/:coll', auth: 'none', body: 'row fields', description: 'BaaS insert' },
+      { method: 'GET', path: '/api/baas/:pid/:coll/:id', auth: 'none', description: 'BaaS get row' },
+      { method: 'PUT', path: '/api/baas/:pid/:coll/:id', auth: 'none', body: 'patch fields', description: 'BaaS merge-patch row' },
+      { method: 'DELETE', path: '/api/baas/:pid/:coll/:id', auth: 'none', description: 'BaaS delete row' },
+
+      { method: 'GET', path: '/preview/:projectId/*', auth: 'none', description: 'Serve a generated app with the BaaS SDK injected' },
+      { method: 'GET', path: '/__baas.js', auth: 'none', description: 'Client SDK for generated apps (window.creat.db)' },
+    ],
+  });
+});
 
 // daily credit balance for the signed-in user
 app.get('/api/credits', requireUser, async (c) => {
