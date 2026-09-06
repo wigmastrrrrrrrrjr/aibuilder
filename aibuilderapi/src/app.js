@@ -22,9 +22,8 @@ const GITHUB_URL = 'https://github.com/wigmastrrrrrrrrjr/aibuilder';
 export const app = new Hono();
 
 // CORS so web/ can be hosted separately (Pages) from this API (Worker)
-const allowedOrigins = [
+const DEFAULT_ALLOWED_ORIGINS = [
   'https://websim.com',
-  'https://websim.com/@Somonedcoopee/freechat',
   'http://localhost',
   'http://127.0.0.1',
   'https://aibuilderapi.csomeone301.workers.dev'
