@@ -90,12 +90,15 @@ app.use('*', cors({
 // Compress JSON/HTML responses on every route except /api/chat, which streams
 // SSE and must flush each token immediately (never buffered). Tail wildcards
 // match the base path AND any sub-path (Hono's `/*` => `(?:|/.*)`).
+// Note: Hono's app.use() treats a string arg as the path — an array would be
+// swallowed as a non-function handler (`handler is not a function`), so each
+// path is registered individually.
 const COMPRESS_PATHS = [
   '/api/models/*', '/api/discover/*', '/api/meta/*', '/api/docs/*',
   '/api/projects/*', '/api/features/*', '/api/teams/*',
   '/api/credits/*', '/api/auth/*', '/api/baas/*', '/preview/*', '/__baas.js',
 ];
-app.use(COMPRESS_PATHS, compress());
+for (const p of COMPRESS_PATHS) app.use(p, compress());
 
 // Cheap edge/browser caching for stable public GETs (mirrors internal TTLs).
 function cacheControl(v) {
