@@ -86,89 +86,16 @@ app.use('*', cors({
   exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'Retry-After'],
 }));
 
-// Safe gzip: compress JSON/HTML responses on every route except /api/chat,
-// which streams SSE and must flush each token immediately (never buffered).
-// Registered per-path (Hono's use() swallows a path ARRAY as a "handler").
-//
-// The stock hono/compress compressed even when the request had NO
-// Accept-Encoding header — a gzip BODY with no content-encoding header, which
-// clients cannot decode (garbage output). This one only gzips when gzip is
-// explicitly acceptable, so every other client gets identity bytes.
-const COMPRESS_PATHS = [
-  '/api/models/*', '/api/discover/*', '/api/meta/*', '/api/docs/*',
-  '/api/projects/*', '/api/features/*', '/api/teams/*',
-  '/api/credits/*', '/api/auth/*', '/api/baas/*', '/preview/*', '/__baas.js',
-];
-const GZIP_THRESHOLD = 1024;
-
-function acceptsGzip(ae) {
-  let wildcard, explicit;
-  for (const part of ae.split(',')) {
-    const bit = part.trim();
-    if (!bit) continue;
-    const [tok, ...params] = bit.split(';');
-    const q = params.find((p) => /^\s*q\s*=/.test(p));
-    const qv = q ? Number.parseFloat(q.split('=')[1]) : 1;
-    const name = tok.trim().toLowerCase();
-    if (name === 'gzip') explicit = qv;
-    else if (name === '*') wildcard = qv;
-  }
-  if (explicit !== undefined) return Number.isFinite(explicit) && explicit > 0;
-  if (wildcard !== undefined) return Number.isFinite(wildcard) && wildcard > 0;
-  return false;
-}
-
-function safeCompress() {
-  return async (c, next) => {
-    await next();
-    const res = c.res;
-    if (!res || !res.body || res.status === 206 ||
-        res.headers.has('content-encoding') || res.headers.has('transfer-encoding')) return;
-    if (!acceptsGzip(c.req.header('accept-encoding') || '')) return;
-    const type = res.headers.get('content-type') || '';
-    if (!/^(?:text\/|application\/(?:json|javascript|xml|x-ndjson)\b|image\/svg\+xml)/i.test(type)) return;
-    const len = res.headers.get('content-length');
-    if (len && Number(len) < GZIP_THRESHOLD) return;
-    const stream = new CompressionStream('gzip');
-    c.res = new Response(res.body.pipeThrough(stream), res);
-    c.res.headers.delete('content-length');
-    c.res.headers.set('content-encoding', 'gzip');
-    const vary = res.headers.get('vary') || '';
-    if (!/accept-encoding/i.test(vary)) {
-      c.res.headers.set('vary', vary ? `${vary}, Accept-Encoding` : 'Accept-Encoding');
-    }
-  };
-}
-for (const p of COMPRESS_PATHS) app.use(p, safeCompress());
-
-// Cheap edge/browser caching for stable public GETs (mirrors internal TTLs).
-function cacheControl(v) {
-  return async (c, next) => {
-    await next();
-    if (c.res && c.res.status < 400 && !c.res.headers.get('cache-control')) {
-      c.res.headers.set('cache-control', v);
-    }
-  };
-}
-app.use('/api/meta', cacheControl('public, max-age=300'));
-app.use('/api/docs', cacheControl('public, max-age=300'));
-app.use('/api/models', cacheControl('public, max-age=120'));
-app.use('/api/discover', cacheControl('public, max-age=30'));
-
-// Cloudflare's edge re-encodes Worker responses even for clients that send
-// `Accept-Encoding: identity` (or nothing, or gzip;q=0): they get a gzip BODY
-// with no content-encoding header, which clients can't decode (garbage).
-// `Cache-Control: no-transform` disables that edge rewriting. The API then
-// compresses itself, and only when gzip is explicitly acceptable (safeCompress).
+// NO compression, NO caching. The client that consumes this API cannot decode
+// gzip, and Cloudflare's edge re-encodes responses (even identity/q=0 requests
+// got a gzip BODY with no content-encoding header — undecodable garbage).
+// Every response is plain identity; declaring `content-encoding: identity`
+// stops the edge from re-encoding it. /api/chat SSE is left untouched.
 app.use('*', async (c, next) => {
   await next();
-  if (!c.res) return;
-  const cc = c.res.headers.get('cache-control') || '';
-  if (cc) {
-    if (!/\bno-transform\b/i.test(cc)) c.res.headers.set('cache-control', `${cc}, no-transform`);
-  } else {
-    c.res.headers.set('cache-control', 'no-transform');
-  }
+  if (!c.res || c.res.headers.has('content-encoding')) return;
+  c.res.headers.set('content-encoding', 'identity');
+  c.res.headers.set('cache-control', 'no-store');
 });
 
 // ---- VPN / datacenter IP block -----------------------------------------------
