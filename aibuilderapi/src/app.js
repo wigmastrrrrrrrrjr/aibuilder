@@ -155,6 +155,22 @@ app.use('/api/docs', cacheControl('public, max-age=300'));
 app.use('/api/models', cacheControl('public, max-age=120'));
 app.use('/api/discover', cacheControl('public, max-age=30'));
 
+// Cloudflare's edge re-encodes Worker responses even for clients that send
+// `Accept-Encoding: identity` (or nothing, or gzip;q=0): they get a gzip BODY
+// with no content-encoding header, which clients can't decode (garbage).
+// `Cache-Control: no-transform` disables that edge rewriting. The API then
+// compresses itself, and only when gzip is explicitly acceptable (safeCompress).
+app.use('*', async (c, next) => {
+  await next();
+  if (!c.res) return;
+  const cc = c.res.headers.get('cache-control') || '';
+  if (cc) {
+    if (!/\bno-transform\b/i.test(cc)) c.res.headers.set('cache-control', `${cc}, no-transform`);
+  } else {
+    c.res.headers.set('cache-control', 'no-transform');
+  }
+});
+
 // ---- VPN / datacenter IP block -----------------------------------------------
 // Auth endpoints stay reachable from VPN/mobile/datacenter IPs so users can
 // always log in / sign up; the block protects the remaining API surface.
