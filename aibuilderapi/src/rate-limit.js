@@ -1,10 +1,19 @@
 // IP-based rate limiter — fixed-window with auto-cleanup.
 
-import { getUser } from './auth.js';
+import { resolveSession } from './session-cache.js';
 
 const BYPASS_USER = 'ai_dev';
 
 const EXCLUDE_PATHS = ['/live/'];
+
+// The ai_dev bypass only matters when a session token is present, so skip the
+// DB lookup entirely for the common (anonymous) request path.
+async function isBypassUser(c) {
+  const tok = c.req.header('x-ab-sess') || c.req.query('tok') || '';
+  if (!tok) return false;
+  const u = await resolveSession(tok);
+  return Boolean(u && u.name && u.name.toLowerCase() === BYPASS_USER);
+}
 
 export function rateLimit({ windowMs = 60000, max = 120, keyFn, excludePaths } = {}) {
   const exclude = excludePaths || EXCLUDE_PATHS;
@@ -23,8 +32,7 @@ export function rateLimit({ windowMs = 60000, max = 120, keyFn, excludePaths } =
 
   return async (c, next) => {
     // Ai_Dev bypasses all rate limits
-    const u = await getUser(c);
-    if (u && u.name.toLowerCase() === BYPASS_USER) return next();
+    if (await isBypassUser(c)) return next();
 
     // Multiplayer / live endpoints are never rate-limited
     const url = c.req.url || '';

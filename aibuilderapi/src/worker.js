@@ -14,7 +14,10 @@ import { hashEmail } from './hash-email.js';
 // getVar() from src/env.js; setVars(env) makes Worker bindings visible there.
 // D1 lacks db.js's ensureColumn; add missing columns to live tables so
 // newer INSERTs (owner, encoding, ip, …) don't fail with "no such column".
+let _columnsEnsured = false;
 async function ensureColumns(d1) {
+  if (_columnsEnsured) return;
+  _columnsEnsured = true;
   const adds = [
     ['projects', 'published', 'INTEGER NOT NULL DEFAULT 0'],
     ['projects', 'slug', 'TEXT'],
@@ -66,38 +69,12 @@ async function ensureColumns(d1) {
   await d1.prepare('CREATE INDEX IF NOT EXISTS idx_feature_votes ON feature_votes (feature_id)').run();
 }
 
-export default {
-  async fetch(req, env, ctx) {
-    setVars(env);
-
-    const url = new URL(req.url);
-
-    if (MAINTENANCE_MODE) return maintenanceResponse(url.pathname);
-
-    const needsApi =
-      url.pathname.startsWith('/api/') ||
-      url.pathname.startsWith('/preview') ||
-      url.pathname === '/__baas.js';
-
-    if (needsApi && !env.DB) {
-      return new Response(
-        'D1 database not bound.\n' +
-        'Fix: confirm aibuilderapi/wrangler.toml has\n\n' +
-        '  [[d1_databases]]\n' +
-        '  binding = "DB"\n' +
-        '  database_name = "aibuilder"\n' +
-        '  database_id = "<your-d1-id>"\n\n' +
-        'then run:  npx wrangler d1 list   (verify id)\n' +
-        '           npm run deploy',
-        { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' } },
-      );
-    }
-
-    useStore(createD1Store(env.DB));
-
-    // Backfill columns the live D1 tables may predate (CREATE TABLE IF NOT EXISTS
-    // won't add columns to an existing table; mirrors db.js ensureColumn).
-    await ensureColumns(env.DB);
+// One-time boot migrations — gate with a per-isolate flag so they stop
+// issuing D1 reads on every single request (cold-start only).
+let _bootTasksDone = false;
+async function runBootTasks(env) {
+  if (_bootTasksDone) return;
+  _bootTasksDone = true;
 
     // Auto-create ai_dev account on first boot (runs once per cold start)
     try {
@@ -143,8 +120,41 @@ export default {
         await store.metaSet('clean:email_hash_v1', '1');
       }
     } catch (e) { console.error('[boot] email hash migration:', e.message); }
+}
 
+export default {
+  async fetch(req, env, ctx) {
+    setVars(env);
 
+    const url = new URL(req.url);
+
+    if (MAINTENANCE_MODE) return maintenanceResponse(url.pathname);
+
+    const needsApi =
+      url.pathname.startsWith('/api/') ||
+      url.pathname.startsWith('/preview') ||
+      url.pathname === '/__baas.js';
+
+    if (needsApi && !env.DB) {
+      return new Response(
+        'D1 database not bound.\n' +
+        'Fix: confirm aibuilderapi/wrangler.toml has\n\n' +
+        '  [[d1_databases]]\n' +
+        '  binding = "DB"\n' +
+        '  database_name = "aibuilder"\n' +
+        '  database_id = "<your-d1-id>"\n\n' +
+        'then run:  npx wrangler d1 list   (verify id)\n' +
+        '           npm run deploy',
+        { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' } },
+      );
+    }
+
+    useStore(createD1Store(env.DB));
+
+    // Backfill columns the live D1 tables may predate (CREATE TABLE IF NOT EXISTS
+    // won't add columns to an existing table; mirrors db.js ensureColumn).
+    await ensureColumns(env.DB);
+    await runBootTasks(env);
 
 
     try {

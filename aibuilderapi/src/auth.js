@@ -19,6 +19,7 @@ import { Hono } from 'hono';
 import { store } from './store.js';
 import { getVar } from './env.js';
 import { sendEmail } from './email.js';
+import { resolveSession, clearSession } from './session-cache.js';
 
 const enc = new TextEncoder();
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -77,8 +78,7 @@ async function verifyPassword(pw, stored) {
 
 export async function getUser(c) {
   const tok = c.req.header('x-ab-sess') || c.req.query('tok') || '';
-  if (!tok) return null;
-  return store.getSession(tok);
+  return resolveSession(tok);
 }
 
 export async function requireUser(c, next) {
@@ -379,6 +379,9 @@ auth.get('/api/auth/me', async (c) => {
 
 auth.post('/api/auth/logout', async (c) => {
   const tok = c.req.header('x-ab-sess') || c.req.query('tok') || '';
-  if (tok) await store.deleteSession(tok);
+  if (tok) {
+    await store.deleteSession(tok);
+    clearSession(tok);
+  }
   return c.json({ ok: true });
 });

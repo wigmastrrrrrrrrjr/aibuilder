@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { compress } from 'hono/compress';
 import { store } from './store.js';
 import { chat } from './chat.js';
 import { baas } from './baas.js';
@@ -21,8 +22,12 @@ const GITHUB_URL = 'https://github.com/wigmastrrrrrrrrjr/aibuilder';
 
 export const app = new Hono();
 
-// CORS so web/ can be hosted separately (Pages) from this API (Worker)
-const DEFAULT_ALLOWED_ORIGINS = [
+// CORS: only the WebSim page origin may call this API from a browser. WebSim
+// apps run on websim.com (and its *.websim.com subdomains); loopback origins
+// are kept for local `npm start` development. Anything else gets the block
+// message. Requests with no Origin (same-origin, curl, non-browser tooling)
+// pass through. Add more with the ALLOWED_ORIGINS env var (comma-separated).
+export const DEFAULT_ALLOWED_ORIGINS = [
   'https://websim.com',
   'http://localhost',
   'http://127.0.0.1',
@@ -30,20 +35,37 @@ const DEFAULT_ALLOWED_ORIGINS = [
 ];
 const BLOCK_MSG = 'nice try script kiddy this won\'t work!';
 
-// Only the allowed page origins may call this API from a browser. Requests
-// with a disallowed Origin get the block message; requests with no Origin
-// (same-origin, non-browser tooling) pass through. Add more with the
-// ALLOWED_ORIGINS env var (comma-separated).
+const WEBSIM_RE = /^https:\/\/(?:[a-z0-9-]+\.)*websim\.com$/i;
+
+// The origin set only changes when the env value changes — build it once and
+// reuse across requests instead of allocating a Set + splitting env every time.
+let _originKey = null;
+let _origins = null;
+function allowedOrigins() {
+  const extra = getVar('ALLOWED_ORIGINS') || '';
+  if (_originKey === extra) return _origins;
+  const set = new Set(DEFAULT_ALLOWED_ORIGINS);
+  for (const o of extra.split(',')) {
+    const t = o.trim();
+    if (t) set.add(t);
+  }
+  _origins = set;
+  _originKey = extra;
+  return set;
+}
+
 function originAllowed(origin) {
   if (!origin) return true;
-  const set = new Set(DEFAULT_ALLOWED_ORIGINS);
-  for (const o of (getVar('ALLOWED_ORIGINS') || '').split(',').map((s) => s.trim()).filter(Boolean)) set.add(o);
+  if (WEBSIM_RE.test(origin)) return true;
+  const set = allowedOrigins();
+  if (set.has(origin)) return true;
   let host = origin;
   try {
     const u = new URL(origin);
     host = `${u.protocol}//${u.hostname}`;
+    if (WEBSIM_RE.test(host)) return true;
   } catch { /* keep raw value */ }
-  return set.has(origin) || set.has(host);
+  return set.has(host);
 }
 
 app.use('*', async (c, next) => {
@@ -58,12 +80,36 @@ app.use('*', async (c, next) => {
   return next();
 });
 
-  app.use('*', cors({
-    origin: (origin) => (originAllowed(origin) ? origin || '*' : null),
-    allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'x-ab-sess', 'x-recaptcha-token', 'x-api-key'],
-    exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'Retry-After'],
-  }));
+app.use('*', cors({
+  origin: (origin) => (originAllowed(origin) ? origin || '*' : null),
+  allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization', 'x-ab-sess', 'x-recaptcha-token', 'x-api-key'],
+  exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'Retry-After'],
+}));
+
+// Compress JSON/HTML responses on every route except /api/chat, which streams
+// SSE and must flush each token immediately (never buffered). Tail wildcards
+// match the base path AND any sub-path (Hono's `/*` => `(?:|/.*)`).
+const COMPRESS_PATHS = [
+  '/api/models/*', '/api/discover/*', '/api/meta/*', '/api/docs/*',
+  '/api/projects/*', '/api/features/*', '/api/teams/*',
+  '/api/credits/*', '/api/auth/*', '/api/baas/*', '/preview/*', '/__baas.js',
+];
+app.use(COMPRESS_PATHS, compress());
+
+// Cheap edge/browser caching for stable public GETs (mirrors internal TTLs).
+function cacheControl(v) {
+  return async (c, next) => {
+    await next();
+    if (c.res && c.res.status < 400 && !c.res.headers.get('cache-control')) {
+      c.res.headers.set('cache-control', v);
+    }
+  };
+}
+app.use('/api/meta', cacheControl('public, max-age=300'));
+app.use('/api/docs', cacheControl('public, max-age=300'));
+app.use('/api/models', cacheControl('public, max-age=120'));
+app.use('/api/discover', cacheControl('public, max-age=30'));
 
 // ---- VPN / datacenter IP block -----------------------------------------------
 // Auth endpoints stay reachable from VPN/mobile/datacenter IPs so users can
@@ -134,6 +180,7 @@ app.get('/api/docs', (c) => {
 
       { method: 'GET', path: '/api/credits', auth: 'user', description: 'Daily credit balance + teams' },
       { method: 'POST', path: '/api/credits/gift', auth: 'user', body: { to: 'string', amount: 'number' }, description: 'Gift credits (max 10000)' },
+      { method: 'POST', path: '/api/credits/grant', auth: 'user', body: { credits: 'number' }, description: 'Top up the signed-in user\'s balance (WebSim port grant; max 10000)' },
 
       { method: 'POST', path: '/api/auth/signup', auth: 'none', body: { username: 'string', password: 'string', email: 'string', dob: 'string' }, description: 'Sign up (email verification may follow)' },
       { method: 'POST', path: '/api/auth/verify-email', auth: 'none', body: { username: 'string', code: 'string' }, description: 'Confirm signup code' },
@@ -263,6 +310,41 @@ app.post('/api/credits/gift', requireUser, async (c) => {
       day,
     },
     earned: unitsToCredits(after.earned),
+  });
+});
+
+// grant credits to the currently signed-in user (top-up for the WebSim port:
+// the WebSim side collects payment / issues the grant, then calls this with
+// the user's own aibuilder session token so only a valid session gets them).
+app.post('/api/credits/grant', requireUser, async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => ({}));
+  let units;
+  if (body.units !== undefined && body.units !== null) {
+    units = Math.floor(Number(body.units));
+  } else {
+    units = creditsToUnits(Math.floor(Number(body.credits ?? body.amount)));
+  }
+  const MAX_GRANT = 10000;
+  if (!Number.isFinite(units) || units <= 0)
+    return c.json({ error: 'grant a positive number of credits' }, 400);
+  if (units > creditsToUnits(MAX_GRANT))
+    return c.json({ error: `max grant is ${MAX_GRANT} credits per request` }, 400);
+
+  await store.earnCredits(user.name, units);
+
+  const day = new Date().toISOString().slice(0, 10);
+  const bal = await personalBalance(user, day);
+  return c.json({
+    ok: true,
+    granted: unitsToCredits(units),
+    credits: {
+      total: bal.totalCredits,
+      used: unitsToCredits(bal.spent) + unitsToCredits(bal.earned),
+      left: bal.leftCredits,
+      day,
+    },
+    earned: unitsToCredits(bal.earned),
   });
 });
 
@@ -501,6 +583,7 @@ app.use('/api/chat', chatLimit);
 app.use('/api/projects/*/fn/*', fnLimit);
 app.use('/api/projects/*/upload', uploadLimit);
 app.use('/api/credits/gift', giftLimit);
+app.use('/api/credits/grant', giftLimit);
 app.route('/', auth);
 app.route('/api/chat', chat);
 app.route('/', live);

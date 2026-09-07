@@ -101,8 +101,10 @@ chat.post('/', async (c) => {
   // credit cost. Credit balances are still tracked for the gift feature.
   await store.setModel(pid, model);
 
-  const history = (await store.history(pid)).map(m => ({ role: m.role, content: m.content }));
-  const fileCtx = await buildFileContext(pid);
+  const [history, fileCtx] = await Promise.all([
+    store.history(pid).then(ms => ms.map(m => ({ role: m.role, content: m.content }))),
+    buildFileContext(pid),
+  ]);
   const messages = [
     { role: 'system', content: systemPrompt() + fileCtx },
     ...history,
@@ -856,8 +858,9 @@ async function seedCollection(pid, coll, items, clear) {
 const CTX_BUDGET = 20000;
 
 async function buildFileContext(pid) {
+  // One query instead of listFiles + one getFile per file (N+1).
   let files = [];
-  try { files = await store.listFiles(pid); } catch { return ''; }
+  try { files = await store.listFilesWithContent(pid); } catch { return ''; }
   if (!files || !files.length) return '';
   const names = files.map((f) => f.path).join(', ');
   const parts = [
@@ -868,14 +871,12 @@ async function buildFileContext(pid) {
   let budget = CTX_BUDGET;
   for (const f of [...files].sort((a, b) => prio(a.path) - prio(b.path))) {
     if (budget <= 200) break;
-    try {
-      const row = await store.getFile(pid, f.path);
-      if (!row || (row.encoding && row.encoding !== 'utf8')) continue;
-      let c = String(row.content ?? '');
-      if (c.length > budget) c = c.slice(0, budget) + '\n…(truncated)';
-      budget -= c.length;
-      parts.push(`--- ${f.path} ---\n${c}`);
-    } catch { /* skip unreadable */ }
+    if (f.encoding && f.encoding !== 'utf8') continue;
+    let c = String(f.content ?? '');
+    if (!c) continue;
+    if (c.length > budget) c = c.slice(0, budget) + '\n…(truncated)';
+    budget -= c.length;
+    parts.push(`--- ${f.path} ---\n${c}`);
   }
   return '\n' + parts.join('\n');
 }

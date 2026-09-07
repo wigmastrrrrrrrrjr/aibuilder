@@ -2,7 +2,7 @@
 // Uses compact CIDR ranges for major cloud providers.
 // Not 100% accurate (residential VPNs slip through) but catches the vast majority.
 
-import { getUser } from './auth.js';
+import { resolveSession } from './session-cache.js';
 
 const CACHE_TTL = 3600000; // 1 hour
 const cache = new Map();
@@ -83,11 +83,17 @@ function setCache(ip, blocked) {
   }
 }
 
+async function isBypassUser(c) {
+  const tok = c.req.header('x-ab-sess') || c.req.query('tok') || '';
+  if (!tok) return false;
+  const u = await resolveSession(tok);
+  return Boolean(u && u.name && u.name.toLowerCase() === BYPASS_USER);
+}
+
 export function blockDatacenterIps() {
   return async (c, next) => {
     // Ai_Dev bypasses VPN block
-    const u = await getUser(c);
-    if (u && u.name.toLowerCase() === BYPASS_USER) return next();
+    if (await isBypassUser(c)) return next();
 
     const ip = (
       c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ||
