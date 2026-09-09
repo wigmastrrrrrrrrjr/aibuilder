@@ -670,6 +670,208 @@ $('installBtn').addEventListener('click', () => { installModal.hidden = false; }
 $('authInstallLink').addEventListener('click', (e) => { e.preventDefault(); installModal.hidden = false; });
 $('installClose').addEventListener('click', () => { installModal.hidden = true; });
 installModal.addEventListener('click', (e) => { if (e.target === installModal) installModal.hidden = true; });
+
+/* ---------- AI team brainstorm ---------- */
+const BRAIN_ROSTER = [
+  { id: 'pm',     name: 'Mira', role: 'Product Lead',        emoji: '🌱', color: '#6366f1', desc: 'Scope, MVP, user flows and success metrics.' },
+  { id: 'design', name: 'Kazu', role: 'Experience Designer', emoji: '🎨', color: '#db2777', desc: 'Visual direction, layout, tone and accessibility.' },
+  { id: 'arch',   name: 'Odin', role: 'Backend Architect',   emoji: '🗂️', color: '#0d9488', desc: 'Data model, API surface, auth and storage.' },
+  { id: 'sec',    name: 'Rae',  role: 'Security Reviewer',   emoji: '🛡️', color: '#dc2626', desc: 'Threats, input validation, authz and data safety.' },
+  { id: 'perf',   name: 'Piko', role: 'Performance Engineer',emoji: '⚡', color: '#d97706', desc: 'Fast loads, small footprint, caching and edge cases.' },
+  { id: 'growth', name: 'Sage', role: 'Growth Strategist',   emoji: '🚀', color: '#16a34a', desc: 'Audience, positioning, naming and launch.' },
+];
+
+const brainModal = $('brainModal'), brainRoster = $('brainRoster'), brainIdea = $('brainIdea'),
+      brainStart = $('brainStart'), brainPick = $('brainPick'), brainRoom = $('brainRoom'),
+      brainLog = $('brainLog'), brainRoundEl = $('brainRound'), brainAgain = $('brainAgain'),
+      brainBuild = $('brainBuild'), brainCopy = $('brainCopy');
+let brainSel = [];      // ordered persona ids
+let brainRunning = false;
+let brainReveal = false;
+let brainTranscript = ''; // "ROUND n — Mira: …\n…" fed back to the model
+let brainRounds = 0;
+let brainPlanMd = '';
+
+function renderRoster() {
+  brainRoster.innerHTML = '';
+  for (const p of BRAIN_ROSTER) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'persona' + (brainSel.includes(p.id) ? ' picked' : '') +
+      (brainSel.length >= 3 && !brainSel.includes(p.id) ? ' locked' : '');
+    card.innerHTML = `
+      <div class="pPick">✓</div>
+      <div class="pTop"><span class="pAva" style="background:${p.color}">${p.emoji}</span>
+        <span><span class="pName">${p.name}</span><br><span class="pTag">${p.role}</span></span></div>
+      <span class="pDesc">${p.desc}</span>`;
+    card.addEventListener('click', () => {
+      if (brainRunning || brainRoom.hidden === false) return;
+      const i = brainSel.indexOf(p.id);
+      if (i >= 0) brainSel.splice(i, 1);
+      else if (brainSel.length >= 3) { notify('AI team', `Max 3 specialists per brainstorm — drop one to swap.`); return; }
+      else brainSel.push(p.id);
+      renderRoster();
+      brainPick.textContent = `${brainSel.length} / 3 chosen`;
+      brainStart.disabled = !(brainSel.length && brainIdea.value.trim());
+    });
+    brainRoster.appendChild(card);
+  }
+}
+
+function openBrain() {
+  brainModal.hidden = false;
+  document.querySelector('#brainSetup').style.display = '';
+  brainRoom.hidden = true;
+  brainLog.innerHTML = '';
+  brainRoundEl.textContent = '';
+  brainAgain.hidden = true; brainBuild.hidden = true; brainCopy.hidden = true;
+  renderRoster();
+}
+$('brainBtn').addEventListener('click', openBrain);
+$('brainClose').addEventListener('click', () => { brainModal.hidden = true; });
+brainModal.addEventListener('click', (e) => { if (e.target === brainModal) brainModal.hidden = true; });
+brainIdea.addEventListener('input', () => {
+  brainStart.disabled = !(brainSel.length && brainIdea.value.trim());
+});
+
+function brainMk(name, role, emoji, color, pending) {
+  const turn = document.createElement('div');
+  turn.className = 'brainTurn' + (pending ? ' pending' : '');
+  turn.innerHTML = `
+    <div class="tHead"><span class="tAva" style="background:${color}">${emoji}</span>
+      <span style="min-width:0"><span class="tName">${name}</span><br><span class="tRole">${role}</span></span></div>
+    <div class="tText"></div>`;
+  return turn;
+}
+
+function brainRevealText(el, text) {
+  brainReveal = true;
+  let i = 0;
+  const step = 4;
+  const id = setInterval(() => {
+    if (!brainReveal) { clearInterval(id); el.textContent = text; return; }
+    i += step;
+    if (i >= text.length) { clearInterval(id); el.textContent = text; }
+    else el.textContent = text.slice(0, i);
+  }, 12);
+}
+
+async function runBrainRound(members) {
+  brainRunning = true;
+  brainAgain.hidden = true; brainBuild.hidden = true; brainCopy.hidden = true;
+  brainRounds += 1;
+  brainRoundEl.textContent = `round ${brainRounds}`;
+  const idea = brainIdea.value.trim();
+  let res;
+  try {
+    res = await fetch(`${API}/api/ai-team/turn`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ idea, members, transcript: brainTranscript, model: modelSel.value }),
+    });
+  } catch (err) {
+    notify('AI team', `Request failed — ${err.message}`);
+    brainRunning = false;
+    openBrain();
+    return;
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.team) {
+    notify('AI team', (data.error || `HTTP ${res.status}`).slice(0, 120));
+    brainRunning = false;
+    openBrain();
+    return;
+  }
+  const rosterMap = {};
+  for (const p of BRAIN_ROSTER) rosterMap[p.id] = p;
+  for (const t of data.team) {
+    const p = rosterMap[t.member.id] || t.member;
+    const m = brainMk(p.name, p.role, p.emoji || '🤖', p.color || '#6366f1', true);
+    brainLog.appendChild(m);
+    brainLog.scrollTop = brainLog.scrollHeight;
+    await new Promise((r) => setTimeout(r, 500));
+    const body = m.querySelector('.tText');
+    m.classList.remove('pending');
+    brainRevealText(body, t.text);
+    const text = `${p.name} (${p.role}): ${t.text}`;
+    brainTranscript += (brainTranscript ? '\n\n' : '') + text;
+    await new Promise((r) => setTimeout(r, 350));
+  }
+  brainRunning = false;
+  brainReveal = false;
+  brainAgain.hidden = true; brainBuild.hidden = true; brainCopy.hidden = true;
+  await new Promise((r) => setTimeout(r, 150));
+  brainAgain.hidden = false; brainBuild.hidden = false; brainCopy.hidden = false;
+  brainPlanMd = brainPlanMarkdown(brainSel, brainIdea.value.trim());
+}
+
+function brainPlanMarkdown(members, idea) {
+  const names = members.map((id) => {
+    const p = BRAIN_ROSTER.find((x) => x.id === id);
+    return p ? `${p.name} (${p.role})` : id;
+  }).join(', ');
+  return `# ${idea.slice(0, 60).replace(/[<>]/g, '')}
+
+**Idea:** ${idea}
+
+**Team:** ${names}
+
+${brainTranscript}
+
+_Generated by aibuilder AI team brainstorm._`;
+}
+
+async function buildFromBrain() {
+  if (!sessTok()) { notify('AI team', 'Sign in to save a project from this plan.'); $('whoBtn').click(); return; }
+  brainBuild.disabled = true;
+  try {
+    const name = (brainIdea.value.trim().replace(/[^a-zA-Z0-9 -]/g, '').trim().slice(0, 42) || 'Brainstorm').replace(/\s+/g, ' ');
+    const r = await fetch(`${API}/api/projects`, {
+      method: 'POST',
+      headers: authHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ name }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    const proj = await r.json();
+    const fd = new FormData();
+    fd.append('files', new Blob([brainPlanMd], { type: 'text/markdown' }), 'PLAN.md');
+    const u = await fetch(`${API}/api/projects/${proj.id}/upload`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    });
+    if (!u.ok) throw new Error(`plan upload failed: HTTP ${u.status}`);
+    brainModal.hidden = true;
+    resetToNew();
+    await selectProject(proj.id);
+    notify('AI team', 'Project created with PLAN.md — start chatting to build it.');
+  } catch (err) {
+    notify('AI team', err.message);
+  } finally {
+    brainBuild.disabled = false;
+  }
+}
+
+brainStart.addEventListener('click', () => {
+  if (!brainSel.length || !brainIdea.value.trim()) return;
+  brainRoom.hidden = false;
+  document.querySelector('#brainSetup').style.display = 'none';
+  brainLog.innerHTML = '';
+  brainTranscript = '';
+  brainRounds = 0;
+  brainBuild.disabled = false;
+  runBrainRound(brainSel);
+});
+brainAgain.addEventListener('click', () => runBrainRound(brainSel));
+brainBuild.addEventListener('click', buildFromBrain);
+brainCopy.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(brainPlanMd || brainTranscript);
+    notify('AI team', 'Plan copied to clipboard.');
+  } catch (e) {
+    notify('AI team', 'Clipboard blocked — select and copy manually.');
+  }
+});
 document.querySelectorAll('.copyBtn').forEach((btn) => {
   btn.addEventListener('click', async () => {
     const code = $(btn.dataset.copy);

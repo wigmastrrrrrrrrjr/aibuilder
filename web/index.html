@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
-<link rel="stylesheet" href="style.css?v=23">
+<link rel="stylesheet" href="style.css?v=24">
 </head>
 <body>
 
@@ -38,6 +38,7 @@
     <label id="uploadBtn" class="navItem" for="uploadInput" title="Upload an existing HTML/JS app"><span class="ms">upload_file</span> Upload app</label>
     <input type="file" id="uploadInput" multiple hidden>
     <a id="discoverLink" class="navItem" href="discover.html"><span class="ms">explore</span> Discover apps</a>
+    <button id="brainBtn" class="navItem" title="Brainstorm an app with an AI team"><span class="ms">psychology</span> AI team brainstorm</button>
 
     <div class="navDivider"></div>
     <div class="navSection">Your projects</div>
@@ -161,6 +162,31 @@
 
 <!-- drag-and-drop target overlay (Phase 2) -->
 <div id="dropOverlay" hidden><span>Drop files to add them to this project</span></div>
+
+<!-- AI team brainstorm -->
+<div id="brainModal" hidden>
+  <div class="teamCard brainCard">
+    <header><span class="ms">psychology</span> Brainstorm &middot; AI team
+      <button id="brainClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+    </header>
+    <div id="brainSetup">
+      <p class="brainHint">Pick up to <b>3</b> specialists. They take turns — one at a time — and every one builds on what the last one said.</p>
+      <div id="brainRoster" class="brainRoster"></div>
+      <div class="brainPick" id="brainPick">0 / 3 chosen</div>
+      <textarea id="brainIdea" rows="3" maxlength="400" placeholder="Pitch the app… e.g. “a habit tracker for night-shift nurses with offline mode”"></textarea>
+      <button id="brainStart" class="brainPrimary" disabled>Run the brainstorm</button>
+    </div>
+    <div id="brainRoom" hidden>
+      <div class="brainRound" id="brainRound"></div>
+      <div id="brainLog"></div>
+      <div class="brainCtl">
+        <button id="brainCopy" class="chipBtn" hidden title="Copy the whole plan">Copy plan</button>
+        <button id="brainAgain" class="chipBtn" hidden>Another round</button>
+        <button id="brainBuild" class="brainPrimary" hidden>Build app from this plan &rarr;</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- teams (teambuild) -->
 <div id="teamModal" hidden>
@@ -286,6 +312,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=21"></script>
+    <script src="app.js?v=22"></script>
 </body>
 </html>

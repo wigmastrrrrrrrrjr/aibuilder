@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { store } from './store.js';
 import { chat } from './chat.js';
 import { baas } from './baas.js';
+import { aiteam } from './aiteam.js';
 import { preview, BAAS_SDK_JS } from './preview.js';
 import { models, FREE_DAILY_CREDITS, creditsToUnits, unitsToCredits } from './models.js';
 import { getVar } from './env.js';
@@ -207,6 +208,7 @@ app.get('/api/docs', (c) => {
       { method: 'POST', path: '/api/projects/:pid/fn/:name', auth: 'none', body: { input: 'any' }, description: 'Run functions/<name>.js (pure computation, 1.5s cap)' },
 
       { method: 'GET', path: '/api/baas/:pid/:coll', auth: 'none', description: 'BaaS list rows' },
+      { method: 'POST', path: '/api/ai-team/turn', auth: 'none', body: { idea: 'string', members: 'string[] (1-3 persona ids)', transcript: 'string', model: 'string' }, description: 'AI team brainstorm — each picked specialist speaks in turn, building on the transcript' },
       { method: 'POST', path: '/api/baas/:pid/:coll', auth: 'none', body: 'row fields', description: 'BaaS insert' },
       { method: 'GET', path: '/api/baas/:pid/:coll/:id', auth: 'none', description: 'BaaS get row' },
       { method: 'PUT', path: '/api/baas/:pid/:coll/:id', auth: 'none', body: 'patch fields', description: 'BaaS merge-patch row' },
@@ -584,6 +586,7 @@ app.route('/', live);
 app.route('/', fn);
 app.route('/api/baas', baas);
 app.route('/api/v2', v2);
+app.route('/api/ai-team', aiteam);
 app.route('/', teams);
 app.route('/', features);
 app.route('/preview', preview);
