@@ -73,7 +73,7 @@ async function ask(model, messages, key) {
     const r = await fetch(OLLAMA_URL, {
       method: 'POST', signal,
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: getVar('OLLAMA_MODEL') || 'gpt-oss:120b', messages }),
+      body: JSON.stringify({ model: getVar('OLLAMA_MODEL') || 'gpt-oss:120b', messages, stream: false }),
     });
     const j = await r.json().catch(() => ({}));
     return String(j.message?.content || '');
