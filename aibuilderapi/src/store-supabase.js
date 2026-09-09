@@ -181,8 +181,8 @@ export const v2Messages = {
 };
 
 export const v2Events = {
-  async add(room, type, user, data) {
-    const row = { room, type: type || 'message', user: user || 'anon', data: data || {}, ts: now() };
+  async add(room, type, user, payload) {
+    const row = { room, type: type || 'message', user: user || 'anon', data: payload || {}, ts: now() };
     const { data, error } = await client().from('v2_events').insert(row).select('*').single();
     if (error) throw error;
     return data;
