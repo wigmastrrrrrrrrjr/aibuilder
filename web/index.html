@@ -9,15 +9,24 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
-<link rel="stylesheet" href="style.css?v=19">
+<link rel="stylesheet" href="style.css?v=20">
 </head>
 <body>
 
 <!-- Enterprise top navigation -->
 <header class="topbar">
   <a class="brand" href="index.html"><div class="logo">a<span>ibuilder</span></div></a>
-  <div class="topbarRight">
-    <button id="whoBtn" title="Account — click to log out" hidden></button>
+  <div class="topbarRight" id="topbarRightWrap">
+    <button id="themeBtn" title="Toggle dark / light mode"><span class="ms">dark_mode</span></button>
+    <div id="acctMenu" hidden>
+      <div class="acctMenuHead">
+        <div class="name" id="acctName"></div>
+        <div class="sub">Signed in</div>
+      </div>
+      <button class="acctMenuRow" id="menuTheme" type="button"><span class="ms">contrast</span> Appearance<span class="state" id="themeState"></span></button>
+      <button class="acctMenuRow danger" id="menuSignout" type="button"><span class="ms">logout</span> Sign out</button>
+    </div>
+    <button id="whoBtn" title="Account — menu" hidden></button>
   </div>
 </header>
 
@@ -271,6 +280,6 @@
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
     <script src="devtools.js?v=19"></script>
-    <script src="app.js?v=19"></script>
+    <script src="app.js?v=20"></script>
 </body>
 </html>

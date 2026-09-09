@@ -6,6 +6,19 @@ const $ = (id) => document.getElementById(id);
 // same-origin (local Node or Workers assets hosting) needs no prefix.
 const WORKER_ORIGIN = 'https://aibuilderapi.csomeone301.workers.dev';
 const API = location.hostname.endsWith('github.io') ? WORKER_ORIGIN : '';
+
+/* ---- theme (dark / light) ---- */
+const THEME_KEY = 'ab.theme';
+function applyTheme(theme) {
+  if (!theme) theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem(THEME_KEY, theme); } catch (e) { /* ignore */ }
+  const tic = $('themeBtn') && $('themeBtn').querySelector('.ms');
+  if (tic) tic.textContent = theme === 'dark' ? 'light_mode' : 'dark_mode';
+  const ts = $('themeState');
+  if (ts) ts.textContent = theme === 'dark' ? 'Dark' : 'Light';
+}
+applyTheme(localStorage.getItem(THEME_KEY) || '');
 const messagesEl = $('messages'), promptBox = $('promptBox'), sendBtn = $('sendBtn');
 const activityEl = $('activity'), activityText = $('activityText'), rawStream = $('rawStream');
 const fileChips = $('fileChips'), frame = $('previewFrame'), projName = $('projName');
@@ -363,8 +376,33 @@ whoBtn.append(ic, document.createTextNode(sessName()));
       } catch (e) { notify('Team invite', e.message); }
     })();
   })();
-whoBtn.addEventListener('click', async () => {
-  if (!confirm(`Log out of ${sessName()}?`)) return;
+const acctMenu = $('acctMenu');
+function toggleAcctMenu(force) {
+  if (!acctMenu) return;
+  const open = typeof force === 'boolean' ? force : acctMenu.hidden;
+  if (open) {
+    const nameEl = $('acctName');
+    if (nameEl) nameEl.textContent = sessName() || 'Account';
+    acctMenu.hidden = false;
+  } else {
+    acctMenu.hidden = true;
+  }
+}
+whoBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleAcctMenu();
+});
+document.addEventListener('click', (e) => {
+  if (acctMenu && !acctMenu.hidden && !(e.target.closest && e.target.closest('#topbarRightWrap'))) toggleAcctMenu(false);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleAcctMenu(false); });
+const themeBtn = $('themeBtn');
+if (themeBtn) themeBtn.addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+const menuTheme = $('menuTheme');
+if (menuTheme) menuTheme.addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+const menuSignout = $('menuSignout');
+if (menuSignout) menuSignout.addEventListener('click', async () => {
+  toggleAcctMenu(false);
   try {
     await fetch(`${API}/api/auth/logout`, { method: 'POST', headers: authHeaders() });
   } catch { /* ignore */ }
