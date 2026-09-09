@@ -70,7 +70,7 @@ async function verifyCode(code, stored) {
   return mismatch === 0;
 }
 
-async function verifyPassword(pw, stored) {
+export async function verifyPassword(pw, stored) {
   const salt = String(stored || '').split('$')[0];
   if (!salt) return false;
   return (await hashPassword(pw, salt)) === stored;
