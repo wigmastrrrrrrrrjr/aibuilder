@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { getVar } from './env.js';
 import { hashPassword, verifyPassword, clientIp, ipTag } from './auth.js';
-import { hashEmail } from './hash-email.js';
 import { systemPrompt } from './prompt.js';
 import { localOllamaUrl, builtinKey, mistralKey, openrouterKey } from './keys.js';
 import { FREE_DAILY_CREDITS, CREDIT_PRECISION, creditsToUnits, unitsToCredits, modelCost } from './models.js';
@@ -98,7 +97,7 @@ async function ownerOf(c, next) {
 const OK_NAME = /^[a-zA-Z0-9_]{2,32}$/;
 const ROUTES = [
   'POST /api/v2/auth/signup', 'POST /api/v2/auth/login', 'POST /api/v2/auth/logout',
-  'GET /api/v2/auth/me', 'POST /api/v2/auth/reset',
+  'GET /api/v2/auth/me', 'POST /api/v2/auth/reset', 'POST /api/v2/auth/delete',
   'GET /api/v2/projects', 'POST /api/v2/projects', 'GET /api/v2/projects/:id',
   'PATCH /api/v2/projects/:id', 'DELETE /api/v2/projects/:id',
   'GET /api/v2/projects/:id/files', 'PUT /api/v2/projects/:id/files/*',
@@ -121,10 +120,8 @@ v2.post('/auth/signup', async (c) => {
   if (!OK_NAME.test(name)) return fail(c, 400, 'name: 2-32 chars, a-z A-Z 0-9 _');
   if (pw.length < 6) return fail(c, 400, 'password must be at least 6 chars');
   const phash = await hashPassword(pw);
-  const email = String(b.email || '').trim().toLowerCase();
-  const emailSha = email && email.includes('@') ? await hashEmail(email) : '';
   const tag = await ipTag(c);
-  const row = await v2Users.create(name, phash, emailSha, tag);
+  const row = await v2Users.create(name, phash, '', tag);
   if (!row) return fail(c, 409, 'name taken');
   const token = await v2Sessions.create(row.id);
   return ok(c, { user: sanitizeUser(row), token });
@@ -157,6 +154,13 @@ v2.post('/auth/logout', requireUser, async (c) => {
 });
 
 v2.get('/auth/me', requireUser, (c) => ok(c, { user: sanitizeUser(c.get('v2user')) }));
+
+v2.post('/auth/delete', requireUser, async (c) => {
+  const u = c.get('v2user');
+  await v2Users.removeByName(u.name);
+  sesCache.clear();
+  return ok(c, { deleted: u.name });
+});
 
 v2.post('/auth/reset', requireUser, async (c) => {
   const u = c.get('v2user');

@@ -192,21 +192,19 @@ export const auth = new Hono();
 
 // ---- SIGNUP (email verification temporarily disabled — account created immediately) ----
 auth.post('/api/auth/signup', async (c) => {
-  const { username, password, email, dob } = await c.req.json().catch(() => ({}));
+  const { username, password, dob } = await c.req.json().catch(() => ({}));
   const name = String(username || '').trim();
-  const mail = String(email || '').trim().toLowerCase();
 
   if (!NAME_RE.test(name))
     return c.json({ error: 'username must be 3-24 letters, digits, - or _' }, 400);
   if (typeof password !== 'string' || password.length < 6)
     return c.json({ error: 'password must be at least 6 characters' }, 400);
-  if (!EMAIL_RE.test(mail))
-    return c.json({ error: 'valid email required' }, 400);
 
-  // COPPA: require DOB and enforce 13+
-  if (!dob || !/^\d{4}-\d{2}-\d{2}$/.test(dob))
-    return c.json({ error: 'date of birth required (you must be 13 or older)' }, 400);
-  if (!okToSignUp(dob))
+  // COPPA: we collect date of birth only to enforce the 13+ gate; it is
+  // validated here and never stored. Unknown (SDK signups) are adults-declared.
+  if (dob && !/^\d{4}-\d{2}-\d{2}$/.test(dob))
+    return c.json({ error: 'date of birth invalid' }, 400);
+  if (dob && !okToSignUp(dob))
     return c.json({ error: 'you must be 13 or older to use aibuilder (COPPA)' }, 403);
 
   // Block reserved names
@@ -230,7 +228,7 @@ auth.post('/api/auth/signup', async (c) => {
   const phash = await hashPassword(password);
   let user;
   try {
-    user = await store.createUser({ name, phash, ip: tag, email: mail });
+    user = await store.createUser({ name, phash, ip: tag, email: '' });
   } catch {
     return c.json({ error: 'username already taken' }, 409);
   }
@@ -238,6 +236,15 @@ auth.post('/api/auth/signup', async (c) => {
 
   const token = await store.createSession(user.id);
   return c.json({ token, username: user.name }, 201);
+});
+
+// Permanently delete the signed-in account and all of its data.
+auth.post('/api/auth/delete', async (c) => {
+  const u = await getUser(c);
+  if (!u) return c.json({ error: 'not signed in' }, 401);
+  await store.deleteUser(u);
+  await store.deleteSession(c.req.header('x-ab-sess') || c.req.query('tok') || '');
+  return c.json({ ok: true });
 });
 
 // Shared age check (server + client)

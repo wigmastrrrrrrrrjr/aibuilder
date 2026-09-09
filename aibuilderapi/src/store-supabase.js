@@ -50,6 +50,23 @@ export const v2Users = {
     const { error } = await client().from('v2_users').update({ phash }).eq('name', name);
     if (error) throw error;
   },
+  // Permanently delete a v2 account: its projects (files/messages/events
+  // cascade via FK), its credit ledger, and every session (sessions cascade
+  // from the user row via FK).
+  async removeByName(name) {
+    const { data: u } = await client().from('v2_users').select('id').eq('name', name).maybeSingle();
+    const { data: projects } = await client().from('v2_projects').select('id').eq('owner', name);
+    const ids = (projects || []).map((p) => p.id);
+    if (ids.length) {
+      const { error } = await client().from('v2_projects').delete().in('id', ids);
+      if (error) throw error;
+    }
+    if (!u) return;
+    const { error: lerr } = await client().from('v2_credit_ledger').delete().eq('name', name);
+    if (lerr) throw lerr;
+    const { error: uerr } = await client().from('v2_users').delete().eq('id', u.id);
+    if (uerr) throw uerr;
+  },
 };
 
 export const v2Sessions = {

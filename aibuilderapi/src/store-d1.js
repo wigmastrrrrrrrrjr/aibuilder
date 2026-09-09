@@ -426,6 +426,28 @@ export function createD1Store(d1) {
         throw new Error('username already taken');
       }
     },
+    // Delete an account and everything it owns. Projects are removed through
+    // deleteProject (files, versions, messages, events, snapshots) and their
+    // per-project BaaS tables are dropped too.
+    async deleteUser(user) {
+      const id = user.id, name = user.name;
+      const { results: owned } = await d1.prepare('SELECT id FROM projects WHERE owner = ?').bind(name).all();
+      for (const p of owned) {
+        await this.deleteProject(p.id);
+        await d1.prepare('DELETE FROM presence WHERE pid = ?').bind(p.id).run();
+        const prefix = `baas_${String(p.id).replace(/[^a-zA-Z0-9]/g, '')}_`;
+        const { results: tables } = await d1.prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?"
+        ).bind(`${prefix}%`).all();
+        for (const t of tables) await d1.prepare(`DROP TABLE ${t.name}`).run();
+      }
+      await d1.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id).run();
+      await d1.prepare('DELETE FROM team_members WHERE name = ?').bind(name).run();
+      await d1.prepare('DELETE FROM teams WHERE owner = ?').bind(name).run();
+      await d1.prepare('DELETE FROM usage WHERE name LIKE ?').bind(`credit:${id}%`).run();
+      await d1.prepare('DELETE FROM earnings WHERE name = ?').bind(name).run();
+      await d1.prepare('DELETE FROM users WHERE id = ?').bind(id).run();
+    },
     async ipUsed(ip) {
       if (!ip) return null;
       const r = await d1.prepare('SELECT name FROM users WHERE ip = ?').bind(ip).all();

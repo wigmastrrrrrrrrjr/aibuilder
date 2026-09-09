@@ -174,7 +174,6 @@ async function doAuth(e) {
   e.preventDefault();
   const username = $('authUser').value.trim();
   const password = $('authPass').value;
-  const email = $('authEmail').value.trim();
   $('authErr').textContent = '';
   $('authGo').disabled = true;
   const finish = () => { $('authGo').disabled = false; };
@@ -183,7 +182,6 @@ async function doAuth(e) {
     if (!username || !password) throw new Error('enter a username and password');
 
     if (authMode === 'signup') {
-      if (!email) throw new Error('email required');
       const agree = $('agreeCheck')?.checked;
       if (!agree) throw new Error('you must accept the Terms of Service and Terms of Use to sign up');
       const dob = $('authDob')?.value || '';
@@ -192,7 +190,7 @@ async function doAuth(e) {
       const r = await fetch(`${API}/api/auth/signup`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ username, password, email, dob }),
+        body: JSON.stringify({ username, password, dob }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
@@ -325,7 +323,6 @@ function paintAuth() {
   $('authGo').textContent = t[2];
   $('authSwitch').textContent = t[3];
   $('authPass').placeholder = authMode === 'reset' ? 'new password (min 6 chars)' : 'password (min 6 chars)';
-  $('authEmail').hidden = authMode !== 'signup';
   $('dobRow').hidden = authMode !== 'signup';
   $('agreeRow').hidden = authMode !== 'signup';
   $('agreeCheck').required = authMode === 'signup';
@@ -411,6 +408,24 @@ if (menuSignout) menuSignout.addEventListener('click', async () => {
     localStorage.removeItem('ab.user');
   } catch { /* ignore */ }
   location.href = 'index.html';
+});
+const menuDelete = $('menuDelete');
+if (menuDelete) menuDelete.addEventListener('click', async () => {
+  const name = sessName();
+  if (!confirm(`Delete your account "${name}" permanently?\n\nThis removes your account, projects, files, and all data. This cannot be undone.`)) return;
+  try {
+    const r = await fetch(`${API}/api/auth/delete`, { method: 'POST', headers: authHeaders() });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'delete failed');
+    notify('Account', `Account "${name}" deleted.`);
+  } catch (e) {
+    notify('Account', `Delete failed: ${e.message}`);
+    return;
+  }
+  try {
+    localStorage.removeItem('ab.tok');
+    localStorage.removeItem('ab.user');
+  } catch { /* ignore */ }
+  setTimeout(() => { location.href = 'index.html'; }, 600);
 });
 
 function refreshKeyBtn() {
