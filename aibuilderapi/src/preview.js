@@ -167,6 +167,68 @@ let BAAS_SDK_RAW = `(function () {
       update:  function (c, id, p) { return req('PUT', [c, id], p); },
       remove:  function (c, id)    { return req('DELETE', [c, id]); }
     },
+    rt: {
+      // Realtime (Postgres) rooms — durable, replayable, reactive.
+      // Subscribed clients get pushed every INSERT matching the table + filter.
+      //   var room = creat.rt.room('v2_events', { room: 'lobby' });
+      //   room.on(function (event) { ... });   // realtime push (payload.event + payload.new)
+      //   var got = await room.list({limit: 50, since: 0});   // durable replay
+      //   var e = await room.push({ type:'message', user:'lobby', data:{ text:'hi' } });
+      name: 'realtime-v2',
+      room: function (table, filter) {
+        table = /^v2_[a-z_]+$/.test(table || '') ? table : 'v2_events';
+        filter = filter || {};
+        var roomKey = table + ':' + Object.keys(filter).sort().map(function (k) {
+          return k + '=' + String(filter[k]);
+        }).join(',');
+        var chName = 'rt:' + roomKey;
+        var subs = [];
+        var channel = null;
+        function connect() {
+          if (channel) return channel;
+          var sb = getSB();
+          channel = sb.channel(chName);
+          channel
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: table, filter: filter }, function (payload) {
+              for (var i = 0; i < subs.length; i++) {
+                try { subs[i](payload.new); } catch {}
+              }
+            })
+            .subscribe();
+          return channel;
+        }
+        return {
+          table: table,
+          filter: filter,
+          connect: connect,
+          on: function (cb) {
+            connect();
+            subs.push(cb);
+            return function () { subs = subs.filter(function (f) { return f !== cb; }); };
+          },
+          close: function () { if (channel) getSB().removeChannel(channel); subs = []; channel = null; },
+          list: function (opts) {
+            opts = opts || {};
+            var q = '?limit=' + (Number(opts.limit) || 100) + '&since=' + (Number(opts.since) || 0);
+            return fetch('/api/v2/live/' + encodeURIComponent(roomKey) + '/events' + q, authHeaders())
+              .then(function (r) { return r.json().then(function (j) { return j.events || []; }); });
+          },
+          push: function (evt) {
+            return fetch('/api/v2/live/' + encodeURIComponent(roomKey) + '/events', {
+              method: 'POST',
+              headers: authHeaders({ 'content-type': 'application/json' }),
+              body: JSON.stringify({ type: (evt && evt.type) || 'message', user: evt && evt.user, data: (evt && evt.data) || {} })
+            }).then(function (r) {
+              return r.text().then(function (t) {
+                var j = t ? JSON.parse(t) : {};
+                if (!r.ok) throw new Error(j.error || friendlyError(r.status));
+                return j.data;
+              });
+            });
+          }
+        };
+      }
+    },
     live: function (coll, cb) {
       var chName = 'live:' + pid + ':' + coll;
       var sb = getSB();

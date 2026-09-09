@@ -14,6 +14,7 @@ import { teams } from './teams.js';
 import { features } from './features.js';
 import { teamPool, personalBalance } from './credits.js';
 import { fn } from './fn.js';
+import { v2 } from './v2.js';
 import { rateLimit } from './rate-limit.js';
 import { blockDatacenterIps } from './vpn-block.js';
 
@@ -136,6 +137,12 @@ app.get('/api/docs', (c) => {
     baseUrl: base,
     allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
     auth,
+    v2: {
+      base: '/api/v2',
+      version: 2,
+      docs: '/api/v2/docs',
+      storage: 'Supabase (schema: supabase-v2.sql) — the v1 API persists in Cloudflare D1; v2 lives in Postgres with Realtime.',
+    },
     streams: [
       { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'workspace'" }, events: ['meta', 'token', 'think', 'file', 'edit', 'delete', 'rename', 'asset', 'plan', 'name', 'delegate', 'subagent', 'refactor', 'seed', 'run', 'warn', 'error', 'done'] },
     ],
@@ -576,6 +583,7 @@ app.route('/api/chat', chat);
 app.route('/', live);
 app.route('/', fn);
 app.route('/api/baas', baas);
+app.route('/api/v2', v2);
 app.route('/', teams);
 app.route('/', features);
 app.route('/preview', preview);
