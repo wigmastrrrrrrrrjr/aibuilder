@@ -31,27 +31,17 @@ export const aiteam = new Hono();
 
 aiteam.use('/turn', rateLimit({ windowMs: 60_000, max: 15 }));
 
-async function ask(model, messages, key) {
+async function upstream(model, messages, key) {
   const orKey = openrouterKey();
   const mk = mistralKey();
-  const lok = localOllamaUrl();
+  const base = await localOllamaUrl();
   const wantOR = typeof model === 'string' && (model.includes('/') || model === 'openrouter/free');
   const wantLocal = typeof model === 'string' && model.startsWith('local:');
   const orModel = wantOR ? model : 'openrouter/free';
   const localModel = wantLocal ? model.slice(6) : 'gemma3:4b';
   const signal = AbortSignal.timeout(90_000);
 
-  if (wantOR && orKey) {
-    const r = await fetch(OPENROUTER_URL, {
-      method: 'POST', signal,
-      headers: { authorization: `Bearer ${orKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: orModel, messages, stream: false }),
-    });
-    const j = await r.json().catch(() => ({}));
-    return String(j.choices?.[0]?.message?.content || '');
-  }
-  if (wantLocal && (await lok)) {
-    const base = await lok;
+  if (wantLocal && base) {
     const r = await fetch(`${base}/api/chat`, {
       method: 'POST', signal,
       headers: { 'content-type': 'application/json' },
@@ -59,6 +49,15 @@ async function ask(model, messages, key) {
     });
     const j = await r.json().catch(() => ({}));
     return String(j.message?.content || '');
+  }
+  if (orKey) {
+    const r = await fetch(OPENROUTER_URL, {
+      method: 'POST', signal,
+      headers: { authorization: `Bearer ${orKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: orModel, messages, stream: false }),
+    });
+    const j = await r.json().catch(() => ({}));
+    return String(j.choices?.[0]?.message?.content || '');
   }
   if (mk) {
     const r = await fetch(MISTRAL_URL, {
@@ -125,7 +124,7 @@ aiteam.post('/turn', async (c) => {
         content: `PROJECT IDEA: ${idea}\n\nWHAT THE TEAM HAS SAID SO FAR:\n${prior || '(You are opening the brainstorm — first take on it.)'}\n\nNow it is your turn, ${p.name} — ${p.role}. Cover: ${p.discipline}.`,
       },
     ];
-    const text = clean(await ask(model, messages, key));
+    const text = clean(await upstream(model, messages, key));
     if (!text) throw new Error(`${p.name} returned nothing — model unavailable?`);
     texts.push({ member: p, text });
   }
