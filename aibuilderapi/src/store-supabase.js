@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { getVar } from './env.js';
+import { encryptText, decryptText } from './encrypt.js';
 
 export const V2_SUPABASE_URL = getVar('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co';
 
@@ -153,13 +154,14 @@ export const v2Files = {
     const { data, error } = await client()
       .from('v2_files').select('*').eq('project_id', projectId).eq('path', path).maybeSingle();
     if (error) throw error;
+    if (data) data.content = await decryptText(data.content);
     return data;
   },
   async put(projectId, path, fields) {
     const row = {
       project_id: projectId,
       path,
-      content: fields.content != null ? fields.content : '',
+      content: await encryptText(fields.content != null ? fields.content : ''),
       encoding: fields.encoding || 'utf-8',
       updated_at: new Date().toISOString(),
     };
@@ -182,7 +184,7 @@ export const v2Messages = {
     return ((data && data[0] && data[0].seq) || 0) + 1;
   },
   async add(projectId, seq, role, content) {
-    const row = { project_id: projectId, seq, role, content: String(content || ''), t: now() };
+    const row = { project_id: projectId, seq, role, content: await encryptText(String(content || '')), t: now() };
     const { data, error } = await client().from('v2_messages').insert(row).select('*').single();
     if (error) throw error;
     return data;
@@ -193,6 +195,7 @@ export const v2Messages = {
     q = q.order('seq', { ascending: true }).limit(Number(limit) || 200);
     const { data, error } = await q;
     if (error) throw error;
+    for (const r of data || []) r.content = await decryptText(r.content);
     return data || [];
   },
 };

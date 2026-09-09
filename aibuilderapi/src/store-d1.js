@@ -3,6 +3,7 @@
 
 import { creditsToUnits } from './models.js';
 import { hashEmail } from './hash-email.js';
+import { encryptText, decryptText } from './encrypt.js';
 
 // Anti-abuse: allow a small number of signups per network before locking.
 const MAX_ACCOUNTS_PER_IP = 3;
@@ -81,11 +82,12 @@ export function createD1Store(d1) {
     },
 
     async saveFile(pid, fpath, content, encoding = 'utf8') {
+      const stored = await encryptText(content);
       await d1.prepare(`INSERT INTO files (project_id, path, content, encoding, updated_at)
                         VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT (project_id, path) DO UPDATE SET content = excluded.content,
                           encoding = excluded.encoding, updated_at = excluded.updated_at`)
-        .bind(pid, fpath, content, encoding, Date.now()).run();
+        .bind(pid, fpath, stored, encoding, Date.now()).run();
       await this.recordVersion(pid, fpath, content, encoding);
     },
     async recordVersion(pid, fpath, content, encoding) {
@@ -94,7 +96,7 @@ export function createD1Store(d1) {
       ).bind(pid, fpath).first();
       const s = cur?.s || 1;
       await d1.prepare('INSERT INTO file_versions (project_id, path, seq, content, encoding, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(pid, fpath, s, content, encoding || 'utf8', Date.now()).run();
+        .bind(pid, fpath, s, await encryptText(content), encoding || 'utf8', Date.now()).run();
       const min = await d1.prepare(
         `SELECT COALESCE(MIN(seq), 0) AS m FROM (
            SELECT seq FROM file_versions WHERE project_id = ? AND path = ?
@@ -104,8 +106,10 @@ export function createD1Store(d1) {
         .bind(pid, fpath, min?.m || 0).run();
     },
     async getFile(pid, fpath) {
-      return await d1.prepare('SELECT * FROM files WHERE project_id = ? AND path = ?')
+      const row = await d1.prepare('SELECT * FROM files WHERE project_id = ? AND path = ?')
         .bind(pid, fpath).first();
+      if (row) row.content = await decryptText(row.content);
+      return row;
     },
     async listFiles(pid) {
       const { results } = await d1.prepare(
@@ -117,6 +121,7 @@ export function createD1Store(d1) {
       const { results } = await d1.prepare(
         'SELECT path, content, encoding, updated_at FROM files WHERE project_id = ? ORDER BY path'
       ).bind(pid).all();
+      for (const r of results) r.content = await decryptText(r.content);
       return results;
     },
     async deleteFile(pid, fpath) {
@@ -135,9 +140,11 @@ export function createD1Store(d1) {
       return results;
     },
     async getFileVersion(pid, fpath, seq) {
-      return await d1.prepare(
+      const v = await d1.prepare(
         'SELECT seq, content, encoding, updated_at FROM file_versions WHERE project_id = ? AND path = ? AND seq = ?'
       ).bind(pid, fpath, seq).first();
+      if (v && v.content != null) v.content = await decryptText(v.content);
+      return v;
     },
     async restoreFileVersion(pid, fpath, seq) {
       const v = await d1.prepare(
@@ -148,7 +155,7 @@ export function createD1Store(d1) {
         await this.deleteFile(pid, fpath);
         return { ok: true, deleted: true, seq };
       }
-      await this.saveFile(pid, fpath, v.content, v.encoding || 'utf8');
+      await this.saveFile(pid, fpath, await decryptText(v.content), v.encoding || 'utf8');
       return { ok: true, deleted: false, seq };
     },
     async listSnapshots(pid) {
@@ -179,6 +186,7 @@ export function createD1Store(d1) {
         'SELECT path, content, encoding FROM snapshot_files WHERE snapshot_id = ? ORDER BY path'
       ).bind(sid).all();
       s.files = results;
+      for (const f of s.files) f.content = await decryptText(f.content);
       return s;
     },
     async restoreSnapshot(pid, sid) {
@@ -193,7 +201,7 @@ export function createD1Store(d1) {
     async addMessage(pid, role, content, user = '') {
       await d1.prepare(
         'INSERT INTO messages (project_id, role, content, user, created_at) VALUES (?, ?, ?, ?, ?)'
-      ).bind(pid, role, content, user, Date.now()).run();
+      ).bind(pid, role, await encryptText(content), user, Date.now()).run();
     },
     async history(pid, limit = 12) {
       const { results } = await d1.prepare(
@@ -201,6 +209,7 @@ export function createD1Store(d1) {
          WHERE project_id = ? ORDER BY created_at DESC LIMIT ?)
          ORDER BY created_at ASC`
       ).bind(pid, limit).all();
+      for (const r of results) r.content = await decryptText(r.content);
       return results;
     },
 
