@@ -29,6 +29,14 @@ function sanitizeProject(p) {
   };
 }
 
+function filePathOf(c) {
+  const p = c.req.path;
+  const i = p.indexOf('/files/');
+  const raw = i >= 0 ? p.slice(i + 7) : '';
+  if (!raw) return '';
+  try { return decodeURIComponent(raw); } catch { return raw; }
+}
+
 // ---- rate limiting (per IP + endpoint, in-memory window) -------------------
 const RL_WINDOW = 60_000;
 const rl = new Map();
@@ -244,7 +252,7 @@ async function withProject(c, next) {
 }
 
 v2.put('/projects/:id/files/*', requireUser, withProjectOwner, async (c) => {
-  const path = c.req.param('*') || '';
+  const path = filePathOf(c);
   if (!path || path.includes('..')) return fail(c, 400, 'bad path');
   const b = await readBody(c);
   const f = await v2Files.put(c.get('v2project').id, path, {
@@ -254,14 +262,14 @@ v2.put('/projects/:id/files/*', requireUser, withProjectOwner, async (c) => {
 });
 
 v2.get('/projects/:id/files/*', withProject, async (c) => {
-  const path = c.req.param('*') || '';
+  const path = filePathOf(c);
   const f = await v2Files.get(c.get('v2project').id, path);
   if (!f) return fail(c, 404, 'file not found');
   return ok(c, { path: f.path, encoding: f.encoding, content: f.content, updated_at: f.updated_at });
 });
 
 v2.delete('/projects/:id/files/*', requireUser, withProjectOwner, async (c) => {
-  const path = c.req.param('*') || '';
+  const path = filePathOf(c);
   await v2Files.remove(c.get('v2project').id, path);
   return ok(c, { deleted: true });
 });

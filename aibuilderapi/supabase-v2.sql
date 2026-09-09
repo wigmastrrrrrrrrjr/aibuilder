@@ -71,7 +71,7 @@ create table if not exists public.v2_events (
   id bigint generated always as identity primary key,
   room text not null,
   type text not null default 'message',
-  user text not null default 'anon',
+  sender text not null default 'anon',
   data jsonb not null default '{}'::jsonb,
   ts bigint not null default 0
 );
