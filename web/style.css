@@ -1119,9 +1119,5 @@ button { font-family: inherit; }
 .brainTurn .tName { font-weight: 700; font-size: 14px; }
 .brainTurn .tRole { font-size: 11px; color: var(--primary); font-weight: 600; }
 .brainTurn .tText { font-size: 14px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-word; }
-.brainTurn .tText.hiddenReveal { display: none; }
-.brainTurn.pending { opacity: .85; }
-.brainTurn.pending .tText::after { content: "…"; animation: brainPulse .8s ease-in-out infinite; }
-@keyframes brainPulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 .brainCtl { display: flex; gap: 10px; justify-content: flex-end; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 .brainCtl .brainPrimary { margin-left: auto; }

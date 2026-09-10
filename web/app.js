@@ -687,7 +687,6 @@ const brainModal = $('brainModal'), brainRoster = $('brainRoster'), brainIdea = 
       brainBuild = $('brainBuild'), brainCopy = $('brainCopy');
 let brainSel = [];      // ordered persona ids
 let brainRunning = false;
-let brainReveal = false;
 let brainTranscript = ''; // "ROUND n — Mira: …\n…" fed back to the model
 let brainRounds = 0;
 let brainPlanMd = '';
@@ -734,26 +733,14 @@ brainIdea.addEventListener('input', () => {
   brainStart.disabled = !(brainSel.length && brainIdea.value.trim());
 });
 
-function brainMk(name, role, emoji, color, pending) {
+function brainMk(name, role, emoji, color) {
   const turn = document.createElement('div');
-  turn.className = 'brainTurn' + (pending ? ' pending' : '');
+  turn.className = 'brainTurn';
   turn.innerHTML = `
     <div class="tHead"><span class="tAva" style="background:${color}">${emoji}</span>
       <span style="min-width:0"><span class="tName">${name}</span><br><span class="tRole">${role}</span></span></div>
     <div class="tText"></div>`;
   return turn;
-}
-
-function brainRevealText(el, text) {
-  brainReveal = true;
-  let i = 0;
-  const step = 4;
-  const id = setInterval(() => {
-    if (!brainReveal) { clearInterval(id); el.textContent = text; return; }
-    i += step;
-    if (i >= text.length) { clearInterval(id); el.textContent = text; }
-    else el.textContent = text.slice(0, i);
-  }, 12);
 }
 
 async function runBrainRound(members) {
@@ -786,19 +773,15 @@ async function runBrainRound(members) {
   for (const p of BRAIN_ROSTER) rosterMap[p.id] = p;
   for (const t of data.team) {
     const p = rosterMap[t.member.id] || t.member;
-    const m = brainMk(p.name, p.role, p.emoji || '🤖', p.color || '#6366f1', true);
+    const m = brainMk(p.name, p.role, p.emoji || '🤖', p.color || '#6366f1');
     brainLog.appendChild(m);
+    m.querySelector('.tText').textContent = t.text;
     brainLog.scrollTop = brainLog.scrollHeight;
-    await new Promise((r) => setTimeout(r, 500));
-    const body = m.querySelector('.tText');
-    m.classList.remove('pending');
-    brainRevealText(body, t.text);
     const text = `${p.name} (${p.role}): ${t.text}`;
     brainTranscript += (brainTranscript ? '\n\n' : '') + text;
-    await new Promise((r) => setTimeout(r, 350));
+    await new Promise((r) => setTimeout(r, 250));
   }
   brainRunning = false;
-  brainReveal = false;
   brainAgain.hidden = true; brainBuild.hidden = true; brainCopy.hidden = true;
   await new Promise((r) => setTimeout(r, 150));
   brainAgain.hidden = false; brainBuild.hidden = false; brainCopy.hidden = false;
