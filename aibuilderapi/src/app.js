@@ -14,6 +14,7 @@ import { live } from './live.js';
 import { auth, requireUser, canWrite } from './auth.js';
 import { teams } from './teams.js';
 import { features } from './features.js';
+import { forum } from './forum.js';
 import { teamPool, personalBalance } from './credits.js';
 import { fn } from './fn.js';
 import { v2 } from './v2.js';
@@ -604,6 +605,7 @@ app.route('/api/v2', v2);
 app.route('/api/ai-team', aiteam);
 app.route('/', teams);
 app.route('/', features);
+app.route('/api/forum', forum);
 app.route('/preview', preview);
 
 // 404s: API callers get a JSON error, browsers get a simple page

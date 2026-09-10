@@ -695,5 +695,98 @@ export function createPgStore() {
       const { error } = await client().from('features').update({ status }).eq('id', id);
       if (error) throw new Error(`db feature status: ${error.message}`);
     },
+
+    // ---- forum ---------------------------------------------------------------
+    async forumCategory(catId) {
+      const { data, error } = await client().from('forum_categories').select('*').eq('id', catId).maybeSingle();
+      if (error) throw new Error(`db forum category: ${error.message}`);
+      return data || null;
+    },
+    async forumCategories() {
+      const { data, error } = await client().from('forum_categories').select('*').order('position', { ascending: true });
+      if (error) throw new Error(`db forum categories: ${error.message}`);
+      return (data || []).map((c) => ({ ...c, threads: null, last: null }));
+    },
+    async forumThreads(category, me, before, limit) {
+      const lim = Math.min(50, Math.max(1, Number(limit) || 20));
+      let q = client().from('forum_threads')
+        .select('id, category, title, author, created_at, last_at, pinned, closed, posts:forum_posts(id), likes:forum_likes("user", vote)');
+      q = q.eq('category', category);
+      if (before) q = q.lt('last_at', before);
+      const { data, error } = await q.order('pinned', { ascending: false })
+        .order('last_at', { ascending: false }).limit(lim);
+      if (error) throw new Error(`db forum threads: ${error.message}`);
+      return (data || []).map((t) => {
+        const ts = (t.likes || []).reduce((s, r) => s + (r.vote || 0), 0);
+        const mine = me ? ((t.likes || []).find((r) => r.user === me)?.vote ?? 0) : null;
+        return {
+          id: t.id, category: t.category, title: t.title, author: t.author,
+          created_at: t.created_at, last_at: t.last_at, pinned: t.pinned, closed: t.closed,
+          posts: (t.posts || []).length, score: ts, mine,
+        };
+      });
+    },
+    async forumCreateThread({ category, title, author, content }) {
+      const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+      const now = Date.now();
+      const { error: tErr } = await client().from('forum_threads').insert({
+        id, category, title, author, created_at: now, last_at: now, pinned: 0, closed: 0,
+      });
+      if (tErr) throw new Error(`db forum create thread: ${tErr.message}`);
+      const { error: pErr } = await client().from('forum_posts').insert({
+        id: crypto.randomUUID().replace(/-/g, '').slice(0, 16),
+        thread_id: id, author, content, created_at: now, updated_at: now,
+      });
+      if (pErr) throw new Error(`db forum create post: ${pErr.message}`);
+      return id;
+    },
+    async forumThread(tid, me) {
+      const { data: t, error } = await client().from('forum_threads')
+        .select('id, category, title, author, created_at, last_at, pinned, closed, likes:forum_likes("user", vote)')
+        .eq('id', tid).maybeSingle();
+      if (error) throw new Error(`db forum thread: ${error.message}`);
+      if (!t) return null;
+      const { data: posts } = await client().from('forum_posts')
+        .select('id, author, content, created_at').eq('thread_id', tid).order('created_at', { ascending: true });
+      const score = (t.likes || []).reduce((s, r) => s + (r.vote || 0), 0);
+      return {
+        ...t,
+        score,
+        mine: me ? ((t.likes || []).find((r) => r.user === me)?.vote ?? 0) : null,
+        posts: (posts || []).map((p) => ({ ...p })),
+      };
+    },
+    async forumReply(tid, author, content) {
+      const { data: t, error } = await client().from('forum_threads').select('id, closed').eq('id', tid).maybeSingle();
+      if (error) throw new Error(`db forum reply: ${error.message}`);
+      if (!t) return { error: 'thread not found' };
+      if (t.closed) return { error: 'thread is closed' };
+      const now = Date.now();
+      const { error: pErr } = await client().from('forum_posts').insert({
+        id: crypto.randomUUID().replace(/-/g, '').slice(0, 16),
+        thread_id: tid, author, content, created_at: now, updated_at: now,
+      });
+      if (pErr) throw new Error(`db forum add reply: ${pErr.message}`);
+      await client().from('forum_threads').update({ last_at: now }).eq('id', tid);
+      return { ok: true };
+    },
+    async forumVote(threadId, user, vote, updatedAt) {
+      const { error } = await client().from('forum_likes').upsert(
+        { thread_id: threadId, user, vote, updated_at: updatedAt }, { onConflict: 'thread_id,user' });
+      if (error) throw new Error(`db forum vote: ${error.message}`);
+    },
+    async forumMod(tid, patch) {
+      if (patch.delete) {
+        const { error } = await client().from('forum_threads').delete().eq('id', tid);
+        if (error) throw new Error(`db forum delete: ${error.message}`);
+        return { ok: true, deleted: true };
+      }
+      const fields = {};
+      if (patch.pinned !== undefined) fields.pinned = patch.pinned ? 1 : 0;
+      if (patch.closed !== undefined) fields.closed = patch.closed ? 1 : 0;
+      const { error } = await client().from('forum_threads').update(fields).eq('id', tid);
+      if (error) throw new Error(`db forum mod: ${error.message}`);
+      return { ok: true, ...fields };
+    },
   };
 }

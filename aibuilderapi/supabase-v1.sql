@@ -211,6 +211,52 @@ create table if not exists public.feature_votes (
 );
 create index if not exists idx_feature_votes on public.feature_votes (feature_id);
 
+-- ---- community forum -------------------------------------------------------
+create table if not exists public.forum_categories (
+  id          text primary key,
+  name        text not null,
+  description text not null default '',
+  position    integer not null default 0
+);
+
+create table if not exists public.forum_threads (
+  id         text primary key,
+  category   text not null,
+  title      text not null,
+  author     text not null,
+  created_at bigint not null,
+  last_at    bigint not null,
+  pinned     integer not null default 0,
+  closed     integer not null default 0
+);
+create index if not exists idx_forum_threads_cat on public.forum_threads (category, pinned, last_at);
+
+create table if not exists public.forum_posts (
+  id         text primary key,
+  thread_id  text not null references public.forum_threads(id) on delete cascade,
+  author     text not null,
+  content    text not null,
+  created_at bigint not null,
+  updated_at bigint not null
+);
+create index if not exists idx_forum_posts_thread on public.forum_posts (thread_id, created_at);
+
+create table if not exists public.forum_likes (
+  thread_id text not null references public.forum_threads(id) on delete cascade,
+  "user"    text not null,
+  vote      integer not null,
+  updated_at bigint not null,
+  primary key (thread_id, "user")
+);
+create index if not exists idx_forum_likes_thread on public.forum_likes (thread_id);
+
+insert into public.forum_categories (id, name, description, position) values
+  ('general', 'General',       'Welcome, intros, and anything that does not fit elsewhere.', 1),
+  ('show',    'Show & Tell',   'Publish an app you built and show it off to the community.',      2),
+  ('ideas',   'Ideas',         'Propose something new for aibuilder — features, tools, fixes.',    3),
+  ('help',    'Help & Support','Questions about building, publishing, teams, credits or billing.',   4)
+on conflict (id) do nothing;
+
 -- ---- lock everything down --------------------------------------------------
 -- RLS on with zero policies = service_role-only access (bypasses RLS); nothing
 -- is exposed to anon/authenticated. Mirrors the ~/v2 lockdown philosophy.
@@ -222,7 +268,8 @@ begin
              'projects','files','messages','users','sessions','a1_usage','meta',
              'events','file_versions','snapshots','snapshot_files','teams',
              'team_members','interactions','earnings','presence','a1_baas',
-             'features','feature_votes')
+             'features','feature_votes','forum_categories','forum_threads',
+             'forum_posts','forum_likes')
   loop
     execute format('alter table public.%I enable row level security', t.tablename);
   end loop;

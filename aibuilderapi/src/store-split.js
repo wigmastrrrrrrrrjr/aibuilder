@@ -309,6 +309,16 @@ export function createSplitStore(d1) {
     async featureAdd(f) { return pg.featureAdd(f); },
     async featureVote(id, user, vote, at) { return pg.featureVote(id, user, vote, at); },
     async featureStatus(id, status) { return pg.featureStatus(id, status); },
+
+    // ---- forum (PG-only) ----------------------------------------------------
+    async forumCategory(catId) { return pg.forumCategory(catId); },
+    async forumCategories() { return pg.forumCategories(); },
+    async forumThreads(category, me, before, limit) { return pg.forumThreads(category, me, before, limit); },
+    async forumCreateThread(a) { return pg.forumCreateThread(a); },
+    async forumThread(tid, me) { return pg.forumThread(tid, me); },
+    async forumReply(tid, author, content) { return pg.forumReply(tid, author, content); },
+    async forumVote(threadId, user, vote, at) { return pg.forumVote(threadId, user, vote, at); },
+    async forumMod(tid, patch) { return pg.forumMod(tid, patch); },
   };
 
   return impl;

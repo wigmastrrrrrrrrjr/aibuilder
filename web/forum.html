@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forum — aibuilder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
+<link rel="stylesheet" href="style.css?v=24">
+  <script>(function(){try{var t=localStorage.getItem("ab.theme")||((window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}})();</script>
+<style>
+  .forumShell{display:grid;grid-template-columns:260px 1fr;gap:20px;max-width:1060px;margin:0 auto;padding:0 20px 60px}
+  @media(max-width:820px){.forumShell{grid-template-columns:1fr}}
+  .forumCats{display:flex;flex-direction:column;gap:8px;align-self:start;position:sticky;top:14px}
+  @media(max-width:820px){.forumCats{position:static;flex-direction:row;overflow-x:auto;padding-bottom:4px}}
+  .catBtn{border:1px solid var(--border);border-radius:12px;padding:10px 12px;cursor:pointer;text-align:left;background:var(--surface);color:var(--text);transition:border-color .12s,background .12s}
+  .catBtn:hover{border-color:var(--primary)}
+  .catBtn.on{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary) inset}
+  .catBtn b{display:block;font-size:14px}
+  .catBtn span{font-size:12px;color:var(--muted);opacity:.85}
+  .threadList{display:flex;flex-direction:column;gap:10px}
+  .threadRow{border:1px solid var(--border);background:var(--surface);border-radius:14px;padding:12px 14px;cursor:pointer;transition:border-color .12s}
+  .threadRow:hover{border-color:var(--primary)}
+  .threadRow.pinned{border-left:3px solid var(--primary)}
+  .threadRow h3{margin:0 0 2px;font-size:15px;font-weight:700;color:var(--text)}
+  .threadRow .meta{font-size:12px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .badge{font-size:10.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;padding:1px 7px;border-radius:999px}
+  .badge.pin{background:var(--primary);color:#fff}
+  .badge.closed{background:var(--muted-2);color:#fff}
+  .postBox{border:1px solid var(--border);background:var(--surface);border-radius:14px;padding:14px 16px;margin:0 0 12px}
+  .postBox .pWho{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .postBox .pName{font-weight:700;font-size:13.5px;color:var(--primary)}
+  .postBox .pWhen{font-size:11.5px;color:var(--muted)}
+  .postBox .pBody{font-size:14px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--text)}
+  .forumToolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .voteRow{display:flex;align-items:center;gap:6px}
+  .voteBtn{border:1px solid var(--border);background:var(--surface);color:var(--text);min-width:30px;height:30px;border-radius:9px;cursor:pointer;font-weight:800}
+  .voteBtn:hover{border-color:var(--primary)}
+  .voteBtn.on{background:var(--primary);color:#fff;border-color:var(--primary)}
+  .score{font-weight:800;font-size:14px;min-width:34px;text-align:center;color:var(--text)}
+  .composer{border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--surface);display:flex;flex-direction:column;gap:10px}
+  .composer input,.composer textarea{width:100%;box-sizing:border-box}
+  .composer textarea{min-height:88px;resize:vertical}
+  .forumHints{font-size:12.5px;color:var(--muted);margin:0}
+  .closedNote{font-size:12.5px;color:var(--muted);padding:8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
+  .pill{font-size:11px;border:1px solid var(--border);border-radius:999px;padding:2px 9px;color:var(--muted)}
+  .empty{color:var(--muted);text-align:center;padding:40px 0;font-size:14px}
+  a.back{font-size:13px;color:var(--primary-strong);text-decoration:none}
+  a.back:hover{text-decoration:underline}
+  .threadHead h2{margin:2px 0 6px;font-size:20px;font-weight:800;color:var(--text)}
+  #forumAuth{max-width:1060px;margin:0 auto 18px;padding:0 20px}
+  .authCard{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--border);border-radius:14px;padding:12px 16px;background:var(--surface);flex-wrap:wrap}
+  .authForm{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .authForm input{min-width:140px}
+  .authNote{font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body class="discoverBody">
+<header id="discoverHeader">
+  <a href="index.html" class="logo">a<span>ibuilder</span></a>
+  <span style="font-size:13px">Community forum</span>
+</header>
+
+<div class="discoverHero">
+  <h1>Forum</h1>
+  <p>Talk about building, show off what you made, ask for help, and shape where aibuilder goes next.</p>
+</div>
+
+<div id="forumAuth"></div>
+<main class="forumShell">
+  <aside id="forumCats" class="forumCats"></aside>
+  <section id="forumMain">
+    <div id="forumView"></div>
+  </section>
+</main>
+
+<footer class="siteFoot">
+  <a class="logo" href="index.html">a<span>ibuilder</span></a>
+  <span class="footSep">·</span>
+  <a class="footBtn" href="discover.html">Discover</a>
+  <span class="footSep">·</span>
+  <a class="footBtn" href="tos.html" target="_blank" rel="noopener">Terms of Service</a>
+  <a class="footBtn" href="tou.html" target="_blank" rel="noopener">Terms of Use</a>
+  <a class="footBtn" href="privacy.html" target="_blank" rel="noopener">Privacy</a>
+</footer>
+<script>
+'use strict';
+
+const WORKER_ORIGIN = 'https://aibuilderapi.csomeone301.workers.dev';
+const API = location.hostname.endsWith('github.io') ? WORKER_ORIGIN : '';
+const $ = (s) => document.querySelector(s);
+const catsEl = $('#forumCats');
+const viewEl = $('#forumView');
+
+const tok = () => localStorage.getItem('ab.tok') || '';
+const uname = () => localStorage.getItem('ab.user') || '';
+const HEADERS = (extra) => {
+  const h = Object.assign({ 'content-type': 'application/json' }, extra || {});
+  if (tok()) h['x-ab-sess'] = tok();
+  return h;
+};
+
+/* ---------- auth bar ---------- */
+function renderAuth() {
+  const el = $('#forumAuth');
+  el.innerHTML = '';
+  if (uname()) {
+    const card = document.createElement('div');
+    card.className = 'authCard';
+    const left = document.createElement('span');
+    left.textContent = `Signed in as ${uname()}`;
+    const right = document.createElement('span');
+    const log = document.createElement('button');
+    log.className = 'cardBtn';
+    log.textContent = 'Sign out';
+    log.onclick = () => { localStorage.removeItem('ab.tok'); localStorage.removeItem('ab.user'); location.reload(); };
+    right.append(log);
+    card.append(left, right);
+    el.append(card);
+    return;
+  }
+  const card = document.createElement('div');
+  card.className = 'authCard';
+  const note = document.createElement('span');
+  note.className = 'authNote';
+  note.textContent = 'Sign in to post, reply and vote.';
+  const form = document.createElement('form');
+  form.className = 'authForm';
+  form.innerHTML = '<input id="aUser" placeholder="username" autocomplete="username" maxlength="24">' +
+    '<input id="aPass" type="password" placeholder="password" maxlength="100" autocomplete="current-password">' +
+    '<button class="cardBtn primary" type="submit">Sign in</button>';
+  const err = document.createElement('span');
+  err.className = 'authNote';
+  err.style.color = 'var(--danger)';
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.textContent = '';
+    try {
+      const r = await fetch(`${API}/api/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: form.querySelector('#aUser').value.trim(), password: form.querySelector('#aPass').value }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
+      if (d.tfaRequired) throw new Error(d.message || 'two-factor code required — sign in on the main app');
+      localStorage.setItem('ab.tok', d.token);
+      localStorage.setItem('ab.user', d.username);
+      location.reload();
+    } catch (err) {
+      err.textContent = err.message || String(err);
+    }
+  });
+  card.append(note, form, err);
+  el.append(card);
+}
+
+/* ---------- categories ---------- */
+let cats = [];
+async function loadCats() {
+  const r = await fetch(`${API}/api/forum/categories`);
+  if (!r.ok) throw new Error(`categories ${r.status}`);
+  cats = await r.json();
+  catsEl.innerHTML = '';
+  for (const c of cats) {
+    const b = document.createElement('button');
+    b.className = 'catBtn' + (curCat === c.id ? ' on' : '');
+    b.innerHTML = `<b>${esc(c.name)}</b><span>${c.threads} thread${c.threads === 1 ? '' : 's'}${c.last ? ' · ' + esc(c.last.title) : ''}</span>`;
+    b.onclick = () => { curCat = c.id; loadThreads(true); };
+    catsEl.append(b);
+  }
+}
+
+/* ---------- threads ---------- */
+let curCat = cats.length ? cats[0].id : 'general';
+let before = null;
+let more = false;
+
+function esc(s) { const d = document.createElement('div'); d.textContent = String(s ?? ''); return d.innerHTML; }
+function ago(ts) {
+  const s = Math.max(0, (Date.now() - Number(ts)) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  if (s < 86400) return Math.floor(s / 3600) + 'h';
+  if (s < 2592000) return Math.floor(s / 86400) + 'd';
+  const d = new Date(ts);
+  return d.toLocaleDateString();
+}
+async function loadThreads(reset) {
+  if (reset) { before = null; more = false; }
+  if (!curCat) return;
+  for (const b of catsEl.querySelectorAll('.catBtn')) b.classList.toggle('on', b.innerText.includes(cats.find((c) => c.id === curCat)?.name || curCat));
+  const r = await fetch(`${API}/api/forum/categories/${curCat}/threads?limit=20${before ? '&before=' + before : ''}`);
+  if (!r.ok) throw new Error(`threads ${r.status}`);
+  const d = await r.json();
+  const rows = d.threads || [];
+  if (reset) { viewEl.innerHTML = ''; }
+  more = rows.length === 20;
+  const toolbar = document.createElement('div');
+  toolbar.className = 'forumToolbar';
+  const h = document.createElement('h3');
+  h.style.margin = '0';
+  h.textContent = cats.find((c) => c.id === curCat)?.name || curCat;
+  toolbar.append(h);
+  if (uname()) {
+    const btn = document.createElement('button');
+    btn.className = 'cardBtn primary';
+    btn.textContent = '+ New thread';
+    btn.onclick = () => showComposer();
+    toolbar.append(btn);
+  }
+  viewEl.append(toolbar);
+
+  if (!rows.length && reset) {
+    viewEl.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No threads here yet — be the first to post.' }));
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'threadList';
+  for (const t of rows) {
+    const row = document.createElement('div');
+    row.className = 'threadRow' + (t.pinned ? ' pinned' : '');
+    row.innerHTML =
+      '<h3>' + esc(t.title) + '</h3>' +
+      '<div class="meta">' +
+      (t.pinned ? '<span class="badge pin">pinned</span>' : '') +
+      (t.closed ? '<span class="badge closed">closed</span>' : '') +
+      `<span>by ${esc(t.author)}</span>` +
+      `<span class="pill">${t.posts} post${t.posts === 1 ? '' : 's'}</span>` +
+      `<span class="pill">${t.score > 0 ? '▲' : ''} ${t.score}</span>` +
+      `<span>${ago(t.last_at)}</span>` +
+      '</div>';
+    row.onclick = () => openThread(t.id);
+    list.append(row);
+    before = t.last_at;
+  }
+  viewEl.append(list);
+  if (more && rows.length) {
+    const moreBtn = document.createElement('button');
+    moreBtn.className = 'cardBtn';
+    moreBtn.textContent = 'Load more';
+    moreBtn.style.margin = '10px auto 0';
+    moreBtn.style.display = 'block';
+    moreBtn.onclick = () => loadThreads(false);
+    viewEl.append(moreBtn);
+  }
+}
+
+/* ---------- composer ---------- */
+function showComposer() {
+  viewEl.innerHTML = '';
+  const back = backLink(`threads for ${cats.find((c) => c.id === curCat)?.name || curCat}`);
+  const comp = document.createElement('div');
+  comp.className = 'composer';
+  comp.innerHTML = '<input id="coTitle" maxlength="160" placeholder="Thread title">' +
+    '<textarea id="coBody" maxlength="20000" placeholder="What do you want to say?"></textarea>' +
+    '<div style="display:flex;gap:8px;align-items:center">' +
+    '<button class="cardBtn primary" id="coGo">Post thread</button>' +
+    '<span id="coErr" class="forumHints" style="color:var(--danger)"></span></div>';
+  comp.querySelector('#coGo').onclick = async () => {
+    const title = comp.querySelector('#coTitle').value.trim();
+    const content = comp.querySelector('#coBody').value.trim();
+    const err = comp.querySelector('#coErr');
+    err.textContent = '';
+    if (title.length < 3) { err.textContent = 'title too short'; return; }
+    if (!content) { err.textContent = 'say something'; return; }
+    try {
+      const r = await fetch(`${API}/api/forum/categories/${curCat}/threads`, {
+        method: 'POST', headers: HEADERS(), body: JSON.stringify({ title, content }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      openThread(d.thread.id);
+    } catch (e) { err.textContent = (e.message || String(e)).slice(0, 120); }
+  };
+  viewEl.append(back, comp);
+}
+
+function backLink(label) {
+  const a = document.createElement('a');
+  a.className = 'back';
+  a.href = 'javascript:void(0)';
+  a.textContent = '← ' + label;
+  a.onclick = () => loadThreads(true);
+  return a;
+}
+
+/* ---------- thread ---------- */
+async function openThread(tid) {
+  viewEl.innerHTML = '';
+  viewEl.append(backLink(cats.find((c) => c.id === curCat)?.name || curCat));
+  const r = await fetch(`${API}/api/forum/threads/${tid}`);
+  if (!r.ok) { viewEl.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'thread not found' })); return; }
+  const { thread } = await r.json();
+  const head = document.createElement('div');
+  head.className = 'threadHead';
+  head.innerHTML = '<div class="meta" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">' +
+    (thread.pinned ? '<span class="badge pin">pinned</span>' : '') +
+    (thread.closed ? '<span class="badge closed">closed</span>' : '') +
+    `<span class="pill">in ${esc(cats.find((c) => c.id === thread.category)?.name || thread.category)}</span>` +
+    '</div>' +
+    `<h2>${esc(thread.title)}</h2>` +
+    '<p class="forumHints">Started by <b>' + esc(thread.author) + '</b> · ' + ago(thread.created_at) + '</p>';
+  viewEl.append(head);
+
+  const iconv = document.createElement('div');
+  iconv.className = 'voteRow';
+  iconv.innerHTML = `<button class="voteBtn${thread.mine === 1 ? ' on' : ''}" data-v="1">▲</button>` +
+    `<span class="score">${thread.score}</span>` +
+    `<button class="voteBtn${thread.mine === -1 ? ' on' : ''}" data-v="-1">▼</button>`;
+  if (!uname()) {
+    iconv.style.opacity = '.5';
+    iconv.title = 'sign in to vote';
+  } else {
+    iconv.querySelectorAll('.voteBtn').forEach((b) => {
+      b.onclick = async () => {
+        const v = Number(b.dataset.v) === thread.mine ? 0 : Number(b.dataset.v);
+        try {
+          const rr = await fetch(`${API}/api/forum/threads/${tid}/vote`, {
+            method: 'POST', headers: HEADERS(), body: JSON.stringify({ vote: v }),
+          });
+          const dd = await rr.json().catch(() => ({}));
+          if (!rr.ok) throw new Error(dd.error || `HTTP ${rr.status}`);
+          const after = dd.thread;
+          iconv.querySelector('.score').textContent = after.score;
+          iconv.querySelectorAll('.voteBtn').forEach((x) => x.classList.toggle('on', x.dataset.v === String(after.mine)));
+          thread.mine = after.mine; thread.score = after.score;
+        } catch (e) { alert('⚠ ' + (e.message || String(e)).slice(0, 120)); }
+      };
+    });
+  }
+  viewEl.append(iconv);
+
+  for (const p of thread.posts) {
+    const box = document.createElement('div');
+    box.className = 'postBox';
+    box.innerHTML = `<div class="pWho"><span class="pName">${esc(p.author)}</span><span class="pWhen">${ago(p.created_at)}</span></div><div class="pBody">${esc(p.content)}</div>`;
+    viewEl.append(box);
+  }
+
+  if (thread.closed) {
+    viewEl.append(Object.assign(document.createElement('div'), { className: 'closedNote', textContent: 'This thread is closed to new replies.' }));
+  } else if (uname()) {
+    const rep = document.createElement('div');
+    rep.className = 'composer';
+    rep.style.marginTop = '14px';
+    rep.innerHTML = '<textarea id="reBody" maxlength="20000" placeholder="Write a reply…"></textarea>' +
+      '<div style="display:flex;gap:8px;align-items:center"><button class="cardBtn primary" id="reGo">Reply</button><span id="reErr" class="forumHints" style="color:var(--danger)"></span></div>';
+    rep.querySelector('#reGo').onclick = async () => {
+      const content = rep.querySelector('#reBody').value.trim();
+      const err = rep.querySelector('#reErr');
+      err.textContent = '';
+      if (!content) { err.textContent = 'say something'; return; }
+      try {
+        const rr = await fetch(`${API}/api/forum/threads/${tid}/reply`, {
+          method: 'POST', headers: HEADERS(), body: JSON.stringify({ content }),
+        });
+        const dd = await rr.json().catch(() => ({}));
+        if (!rr.ok) throw new Error(dd.error || `HTTP ${rr.status}`);
+        openThread(tid);
+      } catch (e) { err.textContent = (e.message || String(e)).slice(0, 120); }
+    };
+    viewEl.append(rep);
+  } else {
+    viewEl.append(Object.assign(document.createElement('div'), { className: 'closedNote', textContent: 'Sign in to reply.' }));
+  }
+}
+
+/* ---------- boot ---------- */
+(async () => {
+  renderAuth();
+  try {
+    await loadCats();
+    if (!curCat && cats.length) curCat = cats[0].id;
+    await loadThreads(true);
+  } catch (e) {
+    viewEl.append(Object.assign(document.createElement('div'), {
+      className: 'empty',
+      textContent: 'Could not load the forum — ' + ((e && e.message) || String(e)),
+    }));
+  }
+})();
+</script>
+</body>
+</html>
