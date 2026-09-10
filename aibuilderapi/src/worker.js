@@ -4,7 +4,7 @@
 
 import { app } from './app.js';
 import { useStore, store } from './store.js';
-import { createD1Store } from './store-d1.js';
+import { createSplitStore } from './store-split.js';
 import { setVars, getVar } from './env.js';
 import { hashPassword } from './auth.js';
 import { MAINTENANCE_MODE, maintenanceResponse } from './maintenance.js';
@@ -149,7 +149,7 @@ export default {
       );
     }
 
-    useStore(createD1Store(env.DB));
+    useStore(createSplitStore(env.DB));
 
     // Backfill columns the live D1 tables may predate (CREATE TABLE IF NOT EXISTS
     // won't add columns to an existing table; mirrors db.js ensureColumn).
