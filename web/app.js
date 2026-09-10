@@ -749,6 +749,9 @@ async function runBrainRound(members) {
   brainRounds += 1;
   brainRoundEl.textContent = `round ${brainRounds}`;
   const idea = brainIdea.value.trim();
+  const rosterMap = {};
+  for (const p of BRAIN_ROSTER) rosterMap[p.id] = p;
+
   let res;
   try {
     res = await fetch(`${API}/api/ai-team/turn`, {
@@ -762,27 +765,66 @@ async function runBrainRound(members) {
     openBrain();
     return;
   }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.team) {
-    notify('AI team', (data.error || `HTTP ${res.status}`).slice(0, 120));
+  if (!res.ok || !res.body) {
+    const d = await res.json().catch(() => ({}));
+    notify('AI team', (d.error || `HTTP ${res.status}`).slice(0, 140));
     brainRunning = false;
     openBrain();
     return;
   }
-  const rosterMap = {};
-  for (const p of BRAIN_ROSTER) rosterMap[p.id] = p;
-  for (const t of data.team) {
-    const p = rosterMap[t.member.id] || t.member;
-    const m = brainMk(p.name, p.role, p.emoji || '🤖', p.color || '#6366f1');
-    brainLog.appendChild(m);
-    m.querySelector('.tText').textContent = t.text;
-    brainLog.scrollTop = brainLog.scrollHeight;
-    const text = `${p.name} (${p.role}): ${t.text}`;
-    brainTranscript += (brainTranscript ? '\n\n' : '') + text;
-    await new Promise((r) => setTimeout(r, 250));
+
+  let cur = null, curFull = '', curName = '', curRole = '';
+  try {
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let lineBuf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      lineBuf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = lineBuf.indexOf('\n\n')) !== -1) {
+        const line = lineBuf.slice(0, nl).trim(); lineBuf = lineBuf.slice(nl + 2);
+        if (!line.startsWith('data:')) continue;
+        let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
+        if (ev.type === 'meta') {
+          continue;
+        } else if (ev.type === 'turn') {
+          const p = rosterMap[ev.member.id] || ev.member;
+          curName = p.name; curRole = p.role;
+          curFull = '';
+          cur = brainMk(p.name, p.role, p.emoji || '🤖', p.color || '#6366f1');
+          brainLog.appendChild(cur);
+          brainLog.scrollTop = brainLog.scrollHeight;
+        } else if (ev.type === 'token') {
+          if (cur) {
+            curFull += ev.v;
+            cur.querySelector('.tText').innerHTML = mdHtml(curFull);
+            brainLog.scrollTop = brainLog.scrollHeight;
+          }
+        } else if (ev.type === 'done') {
+          if (cur) {
+            brainTranscript += (brainTranscript ? '\n\n' : '') + `${curName} (${curRole}): ${curFull}`;
+            cur = null;
+          }
+          await new Promise((r) => setTimeout(r, 180));
+        } else if (ev.type === 'error') {
+          throw new Error(ev.message || 'brainstorm failed');
+        }
+      }
+    }
+    if (cur) {
+      brainTranscript += (brainTranscript ? '\n\n' : '') + `${curName} (${curRole}): ${curFull}`;
+      cur = null;
+    }
+  } catch (err) {
+    notify('AI team', (err.message || String(err)).slice(0, 160));
+    brainRunning = false;
+    openBrain();
+    return;
   }
+
   brainRunning = false;
-  brainAgain.hidden = true; brainBuild.hidden = true; brainCopy.hidden = true;
   await new Promise((r) => setTimeout(r, 150));
   brainAgain.hidden = false; brainBuild.hidden = false; brainCopy.hidden = false;
   brainPlanMd = brainPlanMarkdown(brainSel, brainIdea.value.trim());

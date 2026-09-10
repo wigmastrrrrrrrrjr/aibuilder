@@ -7,7 +7,6 @@ import { openrouterKey, mistralKey, localOllamaUrl } from './keys.js';
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL_RE = /^[A-Za-z0-9._:/+%-]{1,64}$/;
 
 export const PERSONAS = [
   { id: 'pm',     name: 'Mira',  role: 'Product Lead',        discipline: 'scope, MVP, user flows and success metrics',           emoji: '🌱', color: '#818cf8' },
@@ -26,62 +25,105 @@ Stay squarely in YOUR discipline. What you say is seen by your teammates next, s
 - If another teammate proposed something wrong in your discipline, call it out in one terset line, then move on.`;
 
 const MAX_TURNS = 3;
+const SIGNAL_MS = 180_000;
 
 export const aiteam = new Hono();
 
 aiteam.use('/turn', rateLimit({ windowMs: 60_000, max: 15 }));
 
-async function upstream(model, messages, key) {
+function personaPublic(p) {
+  return { id: p.id, name: p.name, role: p.role, emoji: p.emoji, color: p.color };
+}
+
+async function openStream(model, messages, signal) {
   const orKey = openrouterKey();
   const mk = mistralKey();
+  const key = builtinKey();
   const base = await localOllamaUrl();
   const wantOR = typeof model === 'string' && (model.includes('/') || model === 'openrouter/free');
   const wantLocal = typeof model === 'string' && model.startsWith('local:');
   const orModel = wantOR ? model : 'openrouter/free';
   const localModel = wantLocal ? model.slice(6) : 'gemma3:4b';
-  const signal = AbortSignal.timeout(90_000);
 
   if (wantLocal && base) {
     const r = await fetch(`${base}/api/chat`, {
       method: 'POST', signal,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: localModel, messages, stream: false }),
+      body: JSON.stringify({ model: localModel, messages, stream: true }),
     });
-    const j = await r.json().catch(() => ({}));
-    return String(j.message?.content || '');
+    return { res: r, shape: 'ollama' };
   }
   if (orKey) {
     const r = await fetch(OPENROUTER_URL, {
       method: 'POST', signal,
       headers: { authorization: `Bearer ${orKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: orModel, messages, stream: false }),
+      body: JSON.stringify({ model: orModel, messages, stream: true }),
     });
-    const j = await r.json().catch(() => ({}));
-    return String(j.choices?.[0]?.message?.content || '');
+    return { res: r, shape: 'chat' };
   }
   if (mk) {
     const r = await fetch(MISTRAL_URL, {
       method: 'POST', signal,
       headers: { authorization: `Bearer ${mk}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'mistral-small-latest', messages, stream: false }),
+      body: JSON.stringify({ model: 'mistral-small-latest', messages, stream: true }),
     });
-    const j = await r.json().catch(() => ({}));
-    return String(j.choices?.[0]?.message?.content || '');
+    return { res: r, shape: 'chat' };
   }
   if (key) {
     const r = await fetch(OLLAMA_URL, {
       method: 'POST', signal,
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: getVar('OLLAMA_MODEL') || 'gpt-oss:120b', messages, stream: false }),
+      body: JSON.stringify({ model: getVar('OLLAMA_MODEL') || 'gpt-oss:120b', messages, stream: true }),
     });
-    const j = await r.json().catch(() => ({}));
-    return String(j.message?.content || '');
+    return { res: r, shape: 'ollama' };
   }
-  return '';
+  return null;
 }
 
-function clean(text) {
-  return String(text || '').replace(/```[a-z]*/gi, '').replace(/`/g, '').trim();
+// Stream only the answer content — reasoning/thinking is never forwarded.
+// Returns the full text; `send` receives purposeful token fragments.
+async function streamText(model, messages, send) {
+  const ac = new AbortController();
+  const sig = AbortSignal.any([ac.signal, AbortSignal.timeout(SIGNAL_MS)]);
+  const opened = await openStream(model, messages, sig);
+  if (!opened) throw new Error('no provider key configured for the AI team yet');
+  const r = opened.res;
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error(`provider ${r.status}: ${t.slice(0, 160)}`);
+  }
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let lineBuf = '';
+  let full = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    lineBuf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = lineBuf.indexOf('\n')) !== -1) {
+      const line = lineBuf.slice(0, nl).trim();
+      lineBuf = lineBuf.slice(nl + 1);
+      if (!line || line === 'data: [DONE]') continue;
+      let j;
+      try {
+        const payload = line.startsWith('data: ') ? line.slice(6) : line;
+        j = JSON.parse(payload);
+      } catch { continue; }
+      let tok = '';
+      if (opened.shape === 'chat') {
+        tok = j?.choices?.[0]?.delta?.content ?? '';
+      } else {
+        const msg = j?.message ?? {};
+        tok = msg.content ?? '';
+      }
+      if (!tok) continue;
+      full += tok;
+      send(tok);
+    }
+  }
+  if (!full.trim()) throw new Error('model returned no message');
+  return full;
 }
 
 aiteam.post('/turn', async (c) => {
@@ -100,34 +142,44 @@ aiteam.post('/turn', async (c) => {
   }
   if (!picked.length) return c.json({ error: 'pick at least one member' }, 400);
 
-  const persona = picked;
-  const key = builtinKey();
-  let haveProvider = Boolean(openrouterKey() || mistralKey() || key);
-  if (!haveProvider) {
-    const lok = await localOllamaUrl();
-    haveProvider = Boolean(lok);
-  }
-  if (!haveProvider && !model) {
-    return c.json({ error: 'no provider key configured for the AI team yet' }, 500);
-  }
+  let controller;
+  const ac = new AbortController();
+  const stream = new ReadableStream({
+    async start(ctl) {
+      controller = ctl;
+      const send = (ev) => {
+        try { controller.enqueue(`data: ${JSON.stringify(ev)}\n\n`); } catch { ac.abort(); }
+      };
+      try {
+        send({ type: 'meta', idea, members: picked.map(personaPublic) });
+        let roundPrior = '';
+        for (const p of picked) {
+          const priorParts = [];
+          if (transcript) priorParts.push(transcript);
+          if (roundPrior) priorParts.push(roundPrior);
+          const messages = [
+            { role: 'system', content: SPEAK_PROMPT },
+            {
+              role: 'user',
+              content: `PROJECT IDEA: ${idea}\n\nWHAT THE TEAM HAS SAID SO FAR:\n${priorParts.join('\n\n') || '(You are opening the brainstorm — first take on it.)'}\n\nNow it is your turn, ${p.name} — ${p.role}. Cover: ${p.discipline}.`,
+            },
+          ];
+          send({ type: 'turn', member: personaPublic(p) });
+          const full = await streamText(model, messages, (tok) => send({ type: 'token', v: tok }));
+          roundPrior += (roundPrior ? '\n\n' : '') + `${p.name} (${p.role}): ${full}`;
+          send({ type: 'done', member: personaPublic(p) });
+        }
+      } catch (e) {
+        send({ type: 'error', message: `AI team failed: ${String(e.message || e).slice(0, 160)}` });
+      } finally {
+        controller.close();
+      }
+    },
+    cancel() { ac.abort(); },
+  });
 
-  const texts = [];
-  for (let i = 0; i < picked.length; i++) {
-    const p = picked[i];
-    const prior = transcript
-      ? transcript
-      : (texts.length ? texts.map((t) => t.text).join('\n\n') : '');
-    const messages = [
-      { role: 'system', content: SPEAK_PROMPT },
-      {
-        role: 'user',
-        content: `PROJECT IDEA: ${idea}\n\nWHAT THE TEAM HAS SAID SO FAR:\n${prior || '(You are opening the brainstorm — first take on it.)'}\n\nNow it is your turn, ${p.name} — ${p.role}. Cover: ${p.discipline}.`,
-      },
-    ];
-    const text = clean(await upstream(model, messages, key));
-    if (!text) throw new Error(`${p.name} returned nothing — model unavailable?`);
-    texts.push({ member: p, text });
-  }
-
-  return c.json({ ok: true, team: texts });
+  return c.newResponse(stream, 200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache',
+  });
 });
