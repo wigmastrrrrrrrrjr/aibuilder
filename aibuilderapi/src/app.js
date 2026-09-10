@@ -4,6 +4,7 @@ import { store } from './store.js';
 import { chat } from './chat.js';
 import { baas } from './baas.js';
 import { aiteam } from './aiteam.js';
+import { appLimitCheck, projectIdOfPath } from './app-limit.js';
 import { preview, BAAS_SDK_JS } from './preview.js';
 import { models, FREE_DAILY_CREDITS, creditsToUnits, unitsToCredits } from './models.js';
 import { getVar } from './env.js';
@@ -580,6 +581,20 @@ app.use('/api/projects/*/fn/*', fnLimit);
 app.use('/api/projects/*/upload', uploadLimit);
 app.use('/api/credits/gift', giftLimit);
 app.use('/api/credits/grant', giftLimit);
+// per-app resource budget (preview / BaaS / live / fn) — 200k req/min default
+app.use('*', async (c, next) => {
+  const pid = projectIdOfPath(c.req.path);
+  if (pid) {
+    const r = appLimitCheck(pid);
+    c.header('X-App-Limit', String(r.limit));
+    c.header('X-App-Limit-Remaining', String(r.remaining));
+    if (r.over) {
+      c.header('Retry-After', '60');
+      return c.json({ error: 'app resource limit exceeded — too many requests (200k/min). Slow down and retry.', limit: r.limit, window: '60s' }, 429);
+    }
+  }
+  return next();
+});
 app.route('/', auth);
 app.route('/api/chat', chat);
 app.route('/', live);
