@@ -156,18 +156,18 @@ create table if not exists public.interactions (
 
 create table if not exists public.earnings (
   name  text primary key,
-  units integer not null default 0
+  units bigint not null default 0
 );
 
-create or replace function public.a1_earn(_name text, _units int)
-returns int language sql volatile as $$
+create or replace function public.a1_earn(_name text, _units bigint)
+returns bigint language sql volatile as $$
   insert into public.earnings (name, units) values (_name, _units)
   on conflict (name) do update set units = public.earnings.units + excluded.units
   returning units;
 $$;
 
-create or replace function public.a1_spend(_name text, _units int)
-returns int language sql volatile as $$
+create or replace function public.a1_spend(_name text, _units bigint)
+returns bigint language sql volatile as $$
   update public.earnings set units = greatest(0, units - _units) where name = _name
   returning units;
 $$;
