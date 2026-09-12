@@ -601,7 +601,9 @@ async function serveFile(c, pid, rawPath) {
 
   const ext = (target.split('.').pop() || '').toLowerCase();
   const type = MIME[ext] || 'application/octet-stream';
-  const content = row.encoding === 'base64' ? fromBase64(row.content) : row.content;
+  const content = type.startsWith('text/html') && row.encoding === 'base64'
+    ? new TextDecoder().decode(fromBase64(row.content))
+    : (row.encoding === 'base64' ? fromBase64(row.content) : row.content);
   const body = type.startsWith('text/html')
     ? inject(content, pid)
     : content;
