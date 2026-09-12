@@ -10,7 +10,19 @@ let BAAS_SDK_RAW = `(function () {
   var pid = window.__CREAT_PROJECT__;
   var TOK_KEY = 'ab_app_tok';
   function tok() {
-    try { return localStorage.getItem(TOK_KEY) || ''; } catch (e) { return ''; }
+    try {
+      // signed-in users of the builder store the session under ab.tok; the legacy
+      // preview key ab_app_tok is kept as a fallback so creat.me()/creat.credits
+      // resolve the identity of accounts that logged in through older previews.
+      return localStorage.getItem('ab.tok') || localStorage.getItem(TOK_KEY) || '';
+    } catch (e) { return ''; }
+  }
+  function setTok(token, username) {
+    try {
+      localStorage.setItem('ab.tok', token || '');
+      localStorage.setItem('ab.user', username || '');
+      localStorage.setItem(TOK_KEY, token || '');
+    } catch (e) {}
   }
   function authHeaders(extra) {
     var h = extra || {};
@@ -73,7 +85,7 @@ let BAAS_SDK_RAW = `(function () {
       }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (res) {
           if (!res.ok) throw new Error(res.j.error || ('HTTP error'));
-          try { localStorage.setItem(TOK_KEY, res.j.token); } catch (err) {}
+          setTok(res.j.token, res.j.username);
           d.remove();
           (onDone || function () { location.reload(); })();
         })
