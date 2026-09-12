@@ -6,6 +6,8 @@ import { extractKey, builtinKey, localOllamaUrl, openrouterKey } from './keys.js
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
 import { createClient } from '@supabase/supabase-js';
+import { effortLevel, EFFORT, modelCost, creditsToUnits, unitsToCredits } from './models.js';
+import { personalBalance } from './credits.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
@@ -31,6 +33,37 @@ let subRound = 0;
 
 export const chat = new Hono();
 
+// Charge the user's credit balance for paid effort tiers (Deep/Deepest).
+// Returns null on success, or a { error, credits } rejection body. BYOK and
+// local-tunnel requests are free — the user supplies the compute themselves.
+async function chargeEffort(user, model, effort) {
+  const cfg = EFFORT[effort] || EFFORT[2];
+  if (!cfg.creditMult) return null;
+  const cost = modelCost(model) * cfg.creditMult;
+  const units = creditsToUnits(cost);
+  const day = new Date().toISOString().slice(0, 10);
+  const bal = await personalBalance(user, day);
+  if (bal.leftUnits < units) {
+    return {
+      error: `${cfg.label} mode costs ${cost} credit${cost === 1 ? '' : 's'} and you have ${bal.leftCredits} left. Standard mode is free — or earn credits by publishing apps and getting visits, or bring your own Ollama API key (🔑).`,
+      credits: {
+        total: bal.totalCredits,
+        used: unitsToCredits(bal.spent) + unitsToCredits(bal.earned),
+        left: bal.leftCredits,
+        day,
+      },
+    };
+  }
+  const dailyLeft = Math.max(0, bal.totalUnits - bal.spent);
+  if (dailyLeft >= units) {
+    await store.spendCredits(user.id, day, units);
+  } else {
+    await store.spendCredits(user.id, day, dailyLeft);
+    await store.spendEarnings(user.name, units - dailyLeft);
+  }
+  return null;
+}
+
 chat.post('/', async (c) => {
   const user = await getUser(c);
   if (!user) return c.json({ error: 'sign in required' }, 401);
@@ -48,6 +81,10 @@ chat.post('/', async (c) => {
   // BYOK: a user-supplied key (x-api-key header or body.apiKey) takes priority
   // over the built-in platform key. It is used for this request only.
   const isLocalModel = typeof body.model === 'string' && body.model.startsWith('local:');
+  const ownKey = Boolean(extractKey(
+    c.req.header('x-api-key'),
+    typeof body.apiKey === 'string' ? body.apiKey : '',
+  ));
   const key = extractKey(
     c.req.header('x-api-key'),
     typeof body.apiKey === 'string' ? body.apiKey : '',
@@ -101,6 +138,15 @@ chat.post('/', async (c) => {
   // credit cost. Credit balances are still tracked for the gift feature.
   await store.setModel(pid, model);
 
+  // Effort: the user picks how hard the AI works. Deep/Deepest charge credits
+  // (Standard and Fast stay free); platform-paid requests only — BYOK/local
+  // requests get the longer generation for free since the user owns the compute.
+  const effort = effortLevel(body.effort);
+  if (!ownKey && !isLocalModel) {
+    const chargeErr = await chargeEffort(user, model, effort);
+    if (chargeErr) return c.json(chargeErr, 402);
+  }
+
   const [history, fileCtx] = await Promise.all([
     store.history(pid).then(ms => ms.map(m => ({ role: m.role, content: m.content }))),
     buildFileContext(pid),
@@ -126,7 +172,7 @@ chat.post('/', async (c) => {
           controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
         } catch { closed = true; }
       };
-      send({ type: 'meta', projectId: pid, model });
+      send({ type: 'meta', projectId: pid, model, effort: EFFORT[effort].label });
 
       const mistralKey = getVar('MISTRAL_API_KEY') || '';
       const localUrl = await localOllamaUrl();
@@ -135,7 +181,7 @@ chat.post('/', async (c) => {
       let provider = 'ollama';
       const emit = (ev) => send(ev);
       try {
-        ({ upstream, provider } = await openUpstream(model, messages, key, ac.signal, emit));
+        ({ upstream, provider } = await openUpstream(model, messages, key, ac.signal, emit, EFFORT[effort]));
       } catch (e) {
         send({ type: 'error', message: e.message });
         try { controller.close(); } catch {}
@@ -476,19 +522,21 @@ chat.post('/', async (c) => {
 
 // ---- generator op helpers ---------------------------------------------------
 
-async function openUpstream(model, messages, key, signal, emit) {
+async function openUpstream(model, messages, key, signal, emit, effortCfg) {
   const mistralKey = getVar('MISTRAL_API_KEY') || '';
   const orKey = openrouterKey();
   const localUrl = await localOllamaUrl();
   const isLocalModel = typeof model === 'string' && model.startsWith('local:');
   const localModel = isLocalModel ? model.slice(6) : model;
+  const eff = effortCfg || EFFORT[2];
+  const ollamaOpts = { num_predict: eff.tokens, num_ctx: eff.ctx };
 
   const tryOllama = async () => {
     const r = await fetch(OLLAMA_URL, {
       method: 'POST',
       signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: true }),
+      body: JSON.stringify({ model, messages, stream: true, think: eff.think, options: ollamaOpts }),
     });
     if (!r.ok) throw new Error(`ollama ${r.status}`);
     return { upstream: r, provider: 'ollama' };
@@ -500,7 +548,7 @@ async function openUpstream(model, messages, key, signal, emit) {
       method: 'POST',
       signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
       headers: { Authorization: `Bearer ${mistralKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: MISTRAL_MODEL, messages, stream: true }),
+      body: JSON.stringify({ model: MISTRAL_MODEL, messages, stream: true, max_tokens: eff.tokens }),
     });
     if (!r.ok) {
       const t = await r.text().catch(() => '');
@@ -515,7 +563,7 @@ async function openUpstream(model, messages, key, signal, emit) {
       method: 'POST',
       signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: localModel, messages, stream: true }),
+      body: JSON.stringify({ model: localModel, messages, stream: true, think: eff.think, options: ollamaOpts }),
     });
     if (!r.ok) throw new Error(`local ollama ${r.status}`);
     return { upstream: r, provider: 'local' };
@@ -532,7 +580,7 @@ async function openUpstream(model, messages, key, signal, emit) {
         'HTTP-Referer': 'https://github.com/wigmastrrrrrrrrjr/aibuilder',
         'X-Title': 'aibuilder',
       },
-      body: JSON.stringify({ model, messages, stream: true }),
+      body: JSON.stringify({ model, messages, stream: true, max_tokens: eff.tokens }),
     });
     if (!r.ok) {
       const t = await r.text().catch(() => '');
@@ -597,6 +645,10 @@ async function workspaceChat(c, body, message, user) {
   }
 
   const isLocalModel = typeof body.model === 'string' && body.model.startsWith('local:');
+  const ownKey = Boolean(extractKey(
+    c.req.header('x-api-key'),
+    typeof body.apiKey === 'string' ? body.apiKey : '',
+  ));
   const key = extractKey(
     c.req.header('x-api-key'),
     typeof body.apiKey === 'string' ? body.apiKey : '',
@@ -607,6 +659,12 @@ async function workspaceChat(c, body, message, user) {
 
   const requested = typeof body.model === 'string' && MODEL_RE.test(body.model) ? body.model : '';
   const model = requested || getVar('OLLAMA_MODEL') || 'gemma4:31b';
+
+  const effort = effortLevel(body.effort);
+  if (!ownKey && !isLocalModel) {
+    const chargeErr = await chargeEffort(user, model, effort);
+    if (chargeErr) return c.json(chargeErr, 402);
+  }
 
   const history = Array.isArray(body.history) ? body.history.slice(-40) : [];
   const messages = [
@@ -628,13 +686,13 @@ async function workspaceChat(c, body, message, user) {
           controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
         } catch { closed = true; }
       };
-      send({ type: 'meta', workspace: true, model });
+      send({ type: 'meta', workspace: true, model, effort: EFFORT[effort].label });
 
       let upstream;
       let provider = 'ollama';
       const emit = (ev) => send(ev);
       try {
-        ({ upstream, provider } = await openUpstream(model, messages, key, ac.signal, emit));
+        ({ upstream, provider } = await openUpstream(model, messages, key, ac.signal, emit, EFFORT[effort]));
       } catch (e) {
         send({ type: 'error', message: e.message });
         try { controller.close(); } catch {}

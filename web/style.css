@@ -1070,54 +1070,16 @@ button { font-family: inherit; }
 @media (max-width: 560px) {
   .siteFoot { height: auto; padding: 10px 12px; row-gap: 6px; }
 }
-/* ===== AI team brainstorm ===== */
-.brainCard { max-width: 640px; width: 94%; max-height: 88vh; overflow: auto; }
-.brainHint { color: var(--muted); font-size: 13px; margin: 12px 2px 14px; line-height: 1.5; }
-.brainHint b { color: var(--primary); }
-.brainRoster { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
-.persona {
-  border: 1.5px solid var(--border); background: var(--surface-2);
-  border-radius: var(--radius); padding: 11px 12px; cursor: pointer;
-  transition: border-color .12s, background .12s, transform .1s; text-align: left;
-  display: flex; flex-direction: column; gap: 5px; position: relative;
+/* ===== Effort selector ===== */
+.effortSel {
+  display: inline-flex; gap: 2px;
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px;
+  background: var(--surface-2);
 }
-.persona:hover { border-color: var(--primary); transform: translateY(-1px); }
-.persona.picked { border-color: var(--primary); background: var(--primary-soft); }
-.persona.locked { opacity: .45; pointer-events: none; }
-.persona .pTop { display: flex; align-items: center; gap: 8px; }
-.persona .pAva { font-size: 20px; width: 30px; height: 30px; border-radius: 50%;
-  display: grid; place-items: center; color: #fff; flex: none; }
-.persona .pName { font-weight: 700; font-size: 14px; }
-.persona .pTag { font-size: 11px; color: var(--primary); font-weight: 600; letter-spacing: .3px; }
-.persona .pDesc { font-size: 12px; color: var(--muted); line-height: 1.4; }
-.persona .pPick { position: absolute; top: 8px; right: 8px; width: 18px; height: 18px; border-radius: 50%;
-  border: 1.5px solid var(--border); display: grid; place-items: center;
-  color: transparent; font-size: 11px; font-weight: 700; }
-.persona.picked .pPick { background: var(--primary); border-color: var(--primary); color: #fff; }
-.brainPick { font-size: 12px; color: var(--muted); margin: 10px 2px 6px; text-align: right; }
-#brainIdea {
-  width: 100%; resize: vertical; border: 1.5px solid var(--border); border-radius: var(--radius);
-  background: var(--surface); color: var(--text); padding: 11px 12px; font: 14px inherit;
-  margin: 4px 0 12px; min-height: 74px;
+.effortSel button {
+  border: none; background: transparent; font: 600 12px inherit;
+  color: var(--muted); padding: 4px 11px; border-radius: 999px; cursor: pointer;
+  transition: color .12s, background .12s;
 }
-#brainIdea:focus { outline: none; border-color: var(--primary); box-shadow: var(--focus-ring); }
-.brainPrimary {
-  background: var(--primary); color: #fff; border: none; border-radius: var(--radius);
-  font: 700 14px inherit; padding: 11px 18px; cursor: pointer; transition: filter .12s, opacity .12s;
-}
-.brainPrimary:hover { filter: brightness(1.08); }
-.brainPrimary:disabled { opacity: .5; cursor: not-allowed; }
-.brainRound { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; margin: 4px 2px 10px; }
-.brainTurn {
-  border: 1.5px solid var(--border); background: var(--surface-2); border-radius: var(--radius-lg);
-  margin-bottom: 12px; padding: 13px 15px; animation: brainIn .25s ease;
-}
-@keyframes brainIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-.brainTurn .tHead { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
-.brainTurn .tAva { width: 28px; height: 28px; border-radius: 50%; color: #fff;
-  display: grid; place-items: center; font-size: 15px; flex: none; }
-.brainTurn .tName { font-weight: 700; font-size: 14px; }
-.brainTurn .tRole { font-size: 11px; color: var(--primary); font-weight: 600; }
-.brainTurn .tText { font-size: 14px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-word; }
-.brainCtl { display: flex; gap: 10px; justify-content: flex-end; align-items: center; margin-top: 6px; flex-wrap: wrap; }
-.brainCtl .brainPrimary { margin-left: auto; }
+.effortSel button:hover:not(.on) { color: var(--text); }
+.effortSel button.on { background: var(--primary); color: #fff; }

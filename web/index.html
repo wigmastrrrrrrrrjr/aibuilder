@@ -15,7 +15,7 @@
 
 <!-- Enterprise top navigation -->
 <header class="topbar">
-  <a class="brand" href="index.html"><div class="logo">a<span>ibuilder</span></div></a>
+  <a class="brand" href="index.html"><div class="logo"><span>aibuilder</span></div></a>
   <div class="topbarRight" id="topbarRightWrap">
     <button id="themeBtn" title="Toggle dark / light mode"><span class="ms">dark_mode</span></button>
     <div id="acctMenu" hidden>
@@ -39,7 +39,6 @@
     <input type="file" id="uploadInput" multiple hidden>
     <a id="discoverLink" class="navItem" href="discover.html"><span class="ms">explore</span> Discover apps</a>
     <a id="forumLink" class="navItem" href="forum.html"><span class="ms">forum</span> Forum</a>
-    <button id="brainBtn" class="navItem" title="Brainstorm an app with an AI team"><span class="ms">psychology</span> AI team brainstorm</button>
 
     <div class="navDivider"></div>
     <div class="navSection">Your projects</div>
@@ -88,6 +87,13 @@
         <div id="composerTop">
           <span class="fieldLabel">Model</span>
           <select id="modelSel" title="Model used for generation"></select>
+          <span class="fieldLabel">Effort</span>
+          <div class="effortSel" id="effortSel" role="group" aria-label="Effort level">
+            <button type="button" data-effort="1" title="Fast — quickest, free">Fast</button>
+            <button type="button" data-effort="2" class="on" title="Standard — free">Standard</button>
+            <button type="button" data-effort="3" title="Deep — 2× credits, works longer">Deep</button>
+            <button type="button" data-effort="4" title="Deepest — 4× credits, works hardest">Deepest</button>
+          </div>
           <span class="promptHint">Enter to send · Shift+Enter for a new line</span>
         </div>
         <div id="composerMain">
@@ -164,31 +170,6 @@
 <!-- drag-and-drop target overlay (Phase 2) -->
 <div id="dropOverlay" hidden><span>Drop files to add them to this project</span></div>
 
-<!-- AI team brainstorm -->
-<div id="brainModal" hidden>
-  <div class="teamCard brainCard">
-    <header><span class="ms">psychology</span> Brainstorm &middot; AI team
-      <button id="brainClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
-    </header>
-    <div id="brainSetup">
-      <p class="brainHint">Pick up to <b>3</b> specialists. They take turns — one at a time — and every one builds on what the last one said.</p>
-      <div id="brainRoster" class="brainRoster"></div>
-      <div class="brainPick" id="brainPick">0 / 3 chosen</div>
-      <textarea id="brainIdea" rows="3" maxlength="400" placeholder="Pitch the app… e.g. “a habit tracker for night-shift nurses with offline mode”"></textarea>
-      <button id="brainStart" class="brainPrimary" disabled>Run the brainstorm</button>
-    </div>
-    <div id="brainRoom" hidden>
-      <div class="brainRound" id="brainRound"></div>
-      <div id="brainLog"></div>
-      <div class="brainCtl">
-        <button id="brainCopy" class="chipBtn" hidden title="Copy the whole plan">Copy plan</button>
-        <button id="brainAgain" class="chipBtn" hidden>Another round</button>
-        <button id="brainBuild" class="brainPrimary" hidden>Build app from this plan &rarr;</button>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- teams (teambuild) -->
 <div id="teamModal" hidden>
   <div class="teamCard">
@@ -249,7 +230,7 @@
   <div class="authCard">
     <aside class="authBrand">
       <div>
-        <a class="logo" href="index.html" title="aibuilder">a<span>ibuilder</span></a>
+        <a class="logo" href="index.html" title="aibuilder"><span>aibuilder</span></a>
         <h1 class="bHead">Build production apps by describing them.</h1>
         <p class="bSub">aibuilder engineers, iterates, and previews your app in real time — one prompt at a time.</p>
         <div class="bPoints">
@@ -302,7 +283,7 @@
 </div>
 
 <footer class="siteFoot">
-  <a class="logo" href="index.html">a<span>ibuilder</span></a>
+  <a class="logo" href="index.html"><span>aibuilder</span></a>
   <span class="footSep">·</span>
   <a class="footBtn" href="discover.html">Discover</a>
   <span class="footSep">·</span>
@@ -317,6 +298,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=24"></script>
+    <script src="app.js?v=25"></script>
 </body>
 </html>

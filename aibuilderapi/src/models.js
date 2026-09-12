@@ -64,6 +64,21 @@ const CODING_RANK = [
 // Free daily credit grant, reset at midnight UTC.
 export const FREE_DAILY_CREDITS = 30;
 
+// Effort levels: higher tiers make the model spend longer and consume credits.
+// Standard (default, level 2) is free as before. Deep/Deepest charge a
+// multiplier of the base model cost from the user's daily grant + earnings.
+export const EFFORT = {
+  1: { label: 'Fast',      creditMult: 0, tokens: 2048,  think: false, ctx: 8000 },
+  2: { label: 'Standard',  creditMult: 0, tokens: 8192,  think: false, ctx: 16000 },
+  3: { label: 'Deep',      creditMult: 2, tokens: 32768, think: true,  ctx: 64000 },
+  4: { label: 'Deepest',   creditMult: 4, tokens: 65536, think: true,  ctx: 128000 },
+};
+export const DEFAULT_EFFORT = 2;
+export function effortLevel(v) {
+  const n = Number(v);
+  return EFFORT[n] ? n : DEFAULT_EFFORT;
+}
+
 // Credits are stored as integer units of 1/10 credit so fractional costs
 // (local models = 0.4) fit the integer usage table.
 export const CREDIT_PRECISION = 10;
