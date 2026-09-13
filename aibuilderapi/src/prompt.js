@@ -70,7 +70,6 @@ export function systemPrompt() {
 - No build tools, no npm installs, no frameworks unless explicitly requested. No local imports of packages.
 - External CDN references (fonts, icons) are OK but keep them minimal; apps must work offline-ish otherwise.
 - The app is served over HTTP from its project root ("/"), so relative paths and fetch() to same-origin work fine.
-- Files under "functions/" are NOT public web pages — they are serverless functions (see below).
 - Make apps look modern and polished by default: clean layout, good spacing, responsive, tasteful colors, subtle transitions. Mobile friendly.
 
 ## On the SDK and you
@@ -191,17 +190,6 @@ so any viewer can rewind the conversation. Identity is auto-attached.
 - Display messages through chat.on() or by polling chat.list({since: lastId}) — pick ONE
   path so you don't double-print (chat.on() already includes your own sends).
 - Anon viewers are shown as 'anon #xxxx' automatically — no name input needed.
-
-### creat.call — Run a serverless function
-
-  var result = await creat.call('functionName', { input: 'data' });
-  // result = whatever the function's main() returned
-
-- Calls the file functions/functionName.js on the server.
-- The function MUST define: function main(input) { return ...; }
-- input is passed as the single argument. result is the return value.
-- Functions are pure computation — no network, no DOM, no timers, no file access.
-- Use for: scoring, validation, math, formatting, game rules — NOT for persistence (use creat.db).
 
 ### creat.me — Get current user identity
 
@@ -351,24 +339,18 @@ Dark modern theme: body bg #0f172a, card #1e293b, accent #38bdf8, rounded corner
 <<<END>>>
 Do NOT also write or edit that same delegated file yourself later.
 
-6. MOVE/RENAME a file. The system updates every other file that references it (src=, href=, url(...), creat.call, fetch):
+6. MOVE/RENAME a file. The system updates every other file that references it (src=, href=, url(...), fetch):
 <<<RENAME:js/style.css -> css/theme.css>>>
 <<<END>>>
 Don't also rewrite the moved file's contents here — just move it.
 
-7. RUN a serverless function (functions/name.js) to compute something mid-build: extract, score, sort, validate. Write the function file FIRST with <<<FILE>>>, then call it passing JSON input:
-<<<RUN:functions/score.js>>>
-{"a": 5, "b": 2}
-<<<END>>>
-The engine echoes the result and shows it as an action card. Functions are pure computation (math, logic, transforms) — no network, timers, or DOM. Return values via function main(input) { return ...; }.
-
-8. ASSET / IMAGE — add images or binary assets. SVG/CSS/JSON can be plain text; binary formats (png/jpg/ico) go as a data: URI (or a bare base64 string prefixed with base64:):
+7. ASSET / IMAGE — add images or binary assets. SVG/CSS/JSON can be plain text; binary formats (png/jpg/ico) go as a data: URI (or a bare base64 string prefixed with base64:):
 <<<ASSET:img/logo.png>>>
 data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
 <<<END>>>
 Remove heavy data URIs from <img> tags once the asset file exists — reference it by relative path instead.
 
-9. SEED — pre-fill a creat.db collection with demo data (rows are JSON objects; an id is generated for each). To replace existing rows first, add "clear": true:
+8. SEED — pre-fill a creat.db collection with demo data (rows are JSON objects; an id is generated for each). To replace existing rows first, add "clear": true:
 <<<SEED:products>>>
 [{"name": "Starship", "price": 42}, {"name": "Blaster", "price": 99}]
 <<<END>>>
@@ -377,7 +359,7 @@ or
 {"clear": true, "items": [{"title": "Hello world"}]}
 <<<END>>>
 
-10. BATCH — group several of the above ops that belong together (atomic: if one fails, the rest are skipped). Closed with <<<BATCHEND>>>:
+9. BATCH — group several of the above ops that belong together (atomic: if one fails, the rest are skipped). Closed with <<<BATCHEND>>>:
 <<<BATCH>>>
 <<<FILE:index.html>>>
 <main>App</main>
@@ -390,8 +372,7 @@ or
 Rules:
 - ALWAYS prefer EDIT over FILE when updating existing files you can see in the project state; use FILE only for brand-new files or full rewrites.
 - After deleting or renaming responsibilities between files, DELETE leftovers instead of leaving dead code.
-- The UI shows your work as live action cards (files, edits, renames, runs, assets, seeds). Keep prose to 1-3 short sentences BEFORE blocks describing the plan (mention refactors explicitly) and at most one sentence AFTER. Do NOT narrate each op in words — the cards tell the story.
+- The UI shows your work as live action cards (files, edits, renames, assets, seeds). Keep prose to 1-3 short sentences BEFORE blocks describing the plan (mention refactors explicitly) and at most one sentence AFTER. Do NOT narrate each op in words — the cards tell the story.
 - When a build has pieces that belong together (e.g. new page + its data seeding), wrap them in one BATCH.
-- Always write functions/<name>.js BEFORE RUNning it.
 - On follow-up requests, touch ONLY files that need to change.`;
 }

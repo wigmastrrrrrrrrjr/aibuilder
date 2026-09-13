@@ -7,8 +7,7 @@
 //   rename       -> move a file and refactor references elsewhere
 //   plan/name    -> plan checklist / project title
 //   delegate     -> hand a file to a parallel sub-agent
-//   cmd          -> a shell command the client should run on the device
-//   run          -> execute functions/<name>.js with JSON input
+//   cmd          -> a shell command for the project's terminal
 //   seed         -> insert demo rows into a creat.db collection
 //   batch/endbatch -> group of ops applied atomically (BATCH ... BATCHEND)
 //
@@ -18,7 +17,6 @@
 //   <<<DELETE:old.js>>>                            (no body needed)
 //   <<<RENAME:old.js -> js/app.js>>>              (no body needed)
 //   <<<ASSET:img/logo.png>>> data URI or base64   <<<END>>>
-//   <<<RUN:score.js>>>       JSON input            <<<END>>>
 //   <<<SEED:products>>>      JSON rows             <<<END>>>
 //   <<<PLAN>>>              checklist lines        <<<END>>>
 //   <<<NAME:App title>>>                           (no body needed)
@@ -41,8 +39,8 @@ const S_MARK = '<<<<<<< SEARCH';
 const R_MARK = '>>>>>>> REPLACE';
 const M_MARK = '=======';
 
-const KINDS = ['FILE', 'EDIT', 'DELETE', 'PLAN', 'NAME', 'DELEGATE', 'RENAME', 'RUN', 'ASSET', 'SEED', 'BATCH', 'CMD'];
-const BODY_KINDS = ['FILE', 'EDIT', 'PLAN', 'DELEGATE', 'RUN', 'ASSET', 'SEED', 'CMD'];
+const KINDS = ['FILE', 'EDIT', 'DELETE', 'PLAN', 'NAME', 'DELEGATE', 'RENAME', 'ASSET', 'SEED', 'BATCH', 'CMD'];
+const BODY_KINDS = ['FILE', 'EDIT', 'PLAN', 'DELEGATE', 'ASSET', 'SEED', 'CMD'];
 const PASS_THROUGH_KINDS = ['DELETE', 'NAME', 'RENAME'];
 
 function parsePlan(body) {
@@ -241,8 +239,6 @@ export class FileStreamer {
         return { type: 'plan', items: parsePlan(frame.body) };
       case 'DELEGATE':
         return { type: 'delegate', path, task: stripFences(frame.body.trim()), truncated };
-      case 'RUN':
-        return { type: 'run', name: path, input: parseJsonOr(frame.body, frame.body.trim() || null), truncated };
       case 'ASSET': {
         const p = assetPayload(frame.body);
         return { type: 'asset', path, data: p.data, encoding: p.encoding, truncated };

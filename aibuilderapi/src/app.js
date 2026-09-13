@@ -15,7 +15,6 @@ import { teams } from './teams.js';
 import { features } from './features.js';
 import { forum } from './forum.js';
 import { teamPool, personalBalance } from './credits.js';
-import { fn } from './fn.js';
 import { v2 } from './v2.js';
 import { rateLimit } from './rate-limit.js';
 import { blockDatacenterIps } from './vpn-block.js';
@@ -115,7 +114,6 @@ const MIN = 60000;
 const globalLimit = rateLimit({ windowMs: DAY, max: 200 });   // 200 API calls/day per IP
 const chatLimit   = rateLimit({ windowMs: MIN, max: 3000 });  // 3000 chats/min per IP
 const authLimit   = rateLimit({ windowMs: MIN, max: 3 });     // 3 auth attempts/min per IP
-const fnLimit     = rateLimit({ windowMs: DAY, max: 50 });    // 50 function calls/day per IP
 const uploadLimit = rateLimit({ windowMs: MIN, max: 3 });     // 3 uploads/min per IP
 const giftLimit   = rateLimit({ windowMs: MIN, max: 3 });     // 3 gifts/min per IP
 
@@ -146,7 +144,7 @@ app.get('/api/docs', (c) => {
       storage: 'Supabase (schema: supabase-v2.sql) — the v1 API persists in Cloudflare D1; v2 lives in Postgres with Realtime.',
     },
     streams: [
-      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'workspace'" }, events: ['meta', 'token', 'think', 'file', 'edit', 'delete', 'rename', 'asset', 'plan', 'name', 'delegate', 'subagent', 'refactor', 'seed', 'run', 'warn', 'error', 'done'] },
+      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'workspace'" }, events: ['meta', 'token', 'think', 'file', 'edit', 'delete', 'rename', 'asset', 'plan', 'name', 'delegate', 'subagent', 'refactor', 'seed', 'warn', 'error', 'done'] },
     ],
     endpoints: [
       { method: 'GET', path: '/api/docs', auth: 'none', description: 'This documentation' },
@@ -205,8 +203,6 @@ app.get('/api/docs', (c) => {
       { method: 'GET', path: '/api/projects/:pid/live/:room?since=<seq>&limit=<n>', auth: 'none', description: 'Poll realtime events (browsers normally use SSE — see live.js)' },
       { method: 'POST', path: '/api/projects/:pid/chat/send', auth: 'none', body: { room: 'string', text: 'string' }, description: 'Room chat message' },
       { method: 'GET', path: '/api/projects/:pid/chat/list?room=<r>&since=<seq>&limit=<n>', auth: 'none', description: 'Room chat history' },
-
-      { method: 'POST', path: '/api/projects/:pid/fn/:name', auth: 'none', body: { input: 'any' }, description: 'Run functions/<name>.js (pure computation, 1.5s cap)' },
 
       { method: 'GET', path: '/api/baas/:pid/:coll', auth: 'none', description: 'BaaS list rows' },
       { method: 'POST', path: '/api/baas/:pid/:coll', auth: 'none', body: 'row fields', description: 'BaaS insert' },
@@ -576,11 +572,10 @@ function cleanUploadPath(name) {
 
 app.use('/api/auth/*', authLimit);
 app.use('/api/chat', chatLimit);
-app.use('/api/projects/*/fn/*', fnLimit);
 app.use('/api/projects/*/upload', uploadLimit);
 app.use('/api/credits/gift', giftLimit);
 app.use('/api/credits/grant', giftLimit);
-// per-app resource budget (preview / BaaS / live / fn) — 200k req/min default
+// per-app resource budget (preview / BaaS / live) — 200k req/min default
 app.use('*', async (c, next) => {
   const pid = projectIdOfPath(c.req.path);
   if (pid) {
@@ -597,7 +592,6 @@ app.use('*', async (c, next) => {
 app.route('/', auth);
 app.route('/api/chat', chat);
 app.route('/', live);
-app.route('/', fn);
 app.route('/api/baas', baas);
 app.route('/api/v2', v2);
 app.route('/', teams);

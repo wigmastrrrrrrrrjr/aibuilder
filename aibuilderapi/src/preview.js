@@ -424,23 +424,6 @@ let BAAS_SDK_RAW = `(function () {
         };
       }
     },
-    call: function (name, input) {
-      return fetch('/api/projects/' + pid + '/fn/' + name, {
-        method: 'POST',
-        headers: authHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify({ input: input === undefined ? null : input })
-      }).then(function (r) {
-        return r.text().then(function (t) {
-          var j = t ? JSON.parse(t) : {};
-          if (!r.ok) {
-            var msg = friendlyError(r.status);
-            if (r.status === 404) msg += ' <a href="/" style="color:#7c5cff;text-decoration:underline">Create one here</a>';
-            throw new Error(msg);
-          }
-          return j.result;
-        });
-      });
-    },
     credits: {
       // Current credit balance for the signed-in user (daily grant + earnings).
       balance: function () {
@@ -579,11 +562,6 @@ async function serveFile(c, pid, rawPath) {
   const p = safePath(rawPath);
   if (p === null) return c.text('bad path', 400);
   let target = p === '' ? 'index.html' : p;
-
-  // functions/ are server-side only — never served as web pages
-  if (target === 'functions' || target.startsWith('functions/')) {
-    return c.text('not found', 404);
-  }
 
   let row = await store.getFile(pid, target);
   if (!row && target !== 'index.html') {

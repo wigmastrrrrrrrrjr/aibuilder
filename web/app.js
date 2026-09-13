@@ -80,7 +80,7 @@ function BlockFilter() {
       buf = buf.slice(e + 3);
       if (kind === 'END' || kind === 'BATCHEND') {
         depth = Math.max(0, depth - 1);
-      } else if (['FILE', 'EDIT', 'PLAN', 'DELEGATE', 'RUN', 'ASSET', 'SEED', 'BATCH'].includes(kind)) {
+      } else if (['FILE', 'EDIT', 'PLAN', 'DELEGATE', 'ASSET', 'SEED', 'BATCH'].includes(kind)) {
         depth++;
       }
     }
@@ -1078,8 +1078,6 @@ const actCards = {
   d: (p) => '<span class="acIco">D</span><span class="acBody"><b>removed</b> ' + escHtml(p) + '</span>',
   r: (f, t, n) => '<span class="acIco">R</span><span class="acBody"><b>renamed</b> ' + escHtml(f) + ' → ' + escHtml(t) + (n ? ' <em>+' + n + ' ref' + (n === 1 ? '' : 's') + '</em>' : '') + '</span>',
   a: (p) => '<span class="acIco">A</span><span class="acBody"><b>asset</b> ' + escHtml(p) + '</span>',
-  runok: (n) => '<span class="acIco">R</span><span class="acBody"><b>ran</b> ' + escHtml(n) + '</span>',
-  runbad: (n, err) => '<span class="acIco">R</span><span class="acBody"><b>ran</b> ' + escHtml(n) + '<em> — ' + escHtml(err) + '</em></span>',
   seed: (c, n) => '<span class="acIco">DB</span><span class="acBody"><b>seeded</b> “' + escHtml(c) + '” with ' + n + ' row' + (n === 1 ? '' : 's') + '</span>',
   sub: (p) => '<span class="acIco">S</span><span class="acBody"><b>sub-agent</b> finished ' + escHtml(p) + '</span>',
   plan: () => '<span class="acIco">P</span><span class="acBody"><b>plan</b> updated</span>',
@@ -1209,9 +1207,6 @@ async function send() {
           if (aiMsg) aiMsg.card(actCards.a(ev.path));
           activityText.textContent = `Saved asset ${ev.path}`;
           schedulePreview();
-        } else if (ev.type === 'run') {
-          if (aiMsg) aiMsg.card(ev.ok ? actCards.runok(ev.name) : actCards.runbad(ev.name, ev.error || ''));
-          activityText.textContent = ev.ok ? `Ran ${ev.name}` : `Run failed: ${ev.name}`;
         } else if (ev.type === 'seed') {
           if (aiMsg) aiMsg.card(actCards.seed(ev.collection, ev.count || 0));
           activityText.textContent = `Seeded ${ev.collection} (${ev.count || 0} rows)`;

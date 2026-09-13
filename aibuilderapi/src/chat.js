@@ -195,7 +195,6 @@ chat.post('/', async (c) => {
       const deleted = [];
       const renamed = [];
       const assets = [];
-      const runs = [];
       const seeds = [];
       const subAgentTasks = [];
       let ops = 0;
@@ -260,10 +259,6 @@ chat.post('/', async (c) => {
           } catch (e) {
             send({ type: 'warn', message: `asset failed on ${ev.path}: ${String(e.message || e)}` });
           }
-        } else if (ev.type === 'run' && ev.name) {
-          const res = await runFunction(pid, ev.name, ev.input);
-          runs.push({ name: ev.name, ok: res.ok });
-          send({ type: 'run', name: ev.name, ok: res.ok, error: res.error || null, result: res.result });
         } else if (ev.type === 'seed' && ev.collection) {
           try {
             const n = await seedCollection(pid, ev.collection, ev.items || [], ev.clear);
@@ -490,7 +485,7 @@ chat.post('/', async (c) => {
         // Phase 2: capture a point-in-time snapshot after each generation so
         // the project can be rolled back to any prior state (best-effort).
         try { await store.takeSnapshot(pid, message.slice(0, 60)); } catch { /* snapshots are best-effort */ }
-        send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, runs, seeds, model });
+        send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, seeds, model });
         // co-build: tell everyone else watching this project that it changed
         try {
           const sbUrl = getVar('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co';
@@ -832,8 +827,6 @@ async function applyEdit(pid, fpath, hunks) {
 // Move a file and refresh every other text file that references it
 // (src="...", href="...", url(...), fetch('...'), import "...", scripts).
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const BANNED = /\b(import|require|fetch|XMLHttpRequest|WebSocket|EventSource|eval|Function|globalThis|localStorage|sessionStorage|indexedDB|setTimeout|setInterval|setImmediate|queueMicrotask|constructor|process|Deno|document|window)\b/;
-const LOOPS = /while\s*\(\s*(true|1)\s*\)|for\s*\(\s*;\s*;\s*\)/;
 
 async function applyRename(pid, from, to) {
   const row = await store.getFile(pid, from);
@@ -865,31 +858,6 @@ async function applyRename(pid, from, to) {
   await store.saveFile(pid, to, row.content, row.encoding || 'utf8');
   try { await store.deleteFile(pid, from); } catch { /* already gone */ }
   return refs;
-}
-
-// RUN blocks execute functions/<name>.js in the same sandbox as the /fn
-// endpoint: a scoped function of `input` with a hard 1.5s cap, no network,
-// no timers, no DOM — pure computation (math, logic, ordering, transforms).
-async function runFunction(pid, name, input) {
-  const norm = name.startsWith('functions/') ? name : `functions/${name}`;
-  let row;
-  try { row = await store.getFile(pid, norm); } catch { row = null; }
-  if (!row) return { ok: false, error: `functions/${name}.js not found — write it first with <<<FILE>>>` };
-  if (row.encoding && row.encoding !== 'utf8') return { ok: false, error: 'not a text function file' };
-  const code = String(row.content ?? '');
-  if (BANNED.test(code) || LOOPS.test(code)) {
-    return { ok: false, error: 'function must be pure computation (no network, timers, I/O, loops)' };
-  }
-  try {
-    const factory = new Function('input', `"use strict";\n${code};\nif (typeof main === 'function') return main(input);\nif (typeof handler === 'function') return handler(input);\nreturn null;`);
-    const result = await Promise.race([
-      Promise.resolve(factory(input ?? null)),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout (max 1.5s)')), 1500)),
-    ]);
-    return { ok: true, result: result ?? null };
-  } catch (e) {
-    return { ok: false, error: String(e?.message || e) };
-  }
 }
 
 // SEED blocks insert rows (optionally clearing first) into a creat.db-style
