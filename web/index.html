@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
-<link rel="stylesheet" href="style.css?v=24">
+<link rel="stylesheet" href="style.css?v=25">
 </head>
 <body>
 
@@ -107,6 +107,7 @@
       <header id="previewHeader">
         <div id="fileChips"></div>
         <div class="headerBtns">
+          <button id="termBtn" class="iconBtn" title="Cloud terminal (the AI's command workspace)"><span class="ms">terminal</span></button>
           <button id="snapBtn" class="iconBtn" title="Project snapshots — roll back to any prior state"><span class="ms">history</span></button>
           <button id="refreshBtn" class="iconBtn" title="Reload preview"><span class="ms">refresh</span></button>
           <button id="openBtn" class="iconBtn" title="Open in new tab"><span class="ms">open_in_new</span></button>
@@ -121,6 +122,21 @@
           <button id="planClose" title="Close"><span class="ms">close</span></button>
         </header>
         <ul id="planList"></ul>
+      </aside>
+
+      <!-- cloud terminal: mirrors the AI's command workspace on the VM -->
+      <aside id="termPane" hidden>
+        <header>
+          <span class="ms">terminal</span>
+          <span class="fpTitle">Cloud terminal</span>
+          <button id="termClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+        </header>
+        <div id="termBody" class="termBody"></div>
+        <div id="termBar" class="termBar">
+          <span id="termStatus" class="termStatus">…</span>
+          <input id="termInput" class="termInput" placeholder="run a command…" autocomplete="off" spellcheck="false">
+          <button id="termRun" class="chipBtn" title="Run command">Run</button>
+        </div>
       </aside>
 
       <!-- file viewer: click a chip in #previewHeader to open (Phase 2) -->
@@ -298,6 +314,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=25"></script>
+    <script src="app.js?v=26"></script>
 </body>
 </html>

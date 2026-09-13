@@ -773,6 +773,42 @@ button { font-family: inherit; }
 .diffView .add { background: var(--success-soft); color: #166534; display: block; }
 .diffView .del { background: var(--danger-soft); color: #991b1b; display: block; }
 
+#termPane {
+  position: absolute; top: 48px; right: 10px; bottom: 10px; width: min(440px, 70%);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg); z-index: 34;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+#termPane > header {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border); background: var(--surface-2);
+  font-weight: 700; font-size: 13.5px; color: var(--text);
+}
+#termPane > header .ms { color: var(--primary); }
+.termBody {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px;
+  background: #0b0d14; font: 12px/1.5 ui-monospace, 'SF Mono', Monaco, monospace;
+}
+.termLine { margin: 0 0 4px; white-space: pre-wrap; word-break: break-word; color: #c9d1d9; }
+.termLine.cmd { color: var(--primary-strong, #7c5cff); font-weight: 600; }
+.termLine.meta { color: #8b949e; font-size: 11px; }
+.termLine.out { color: #e6edf3; }
+.termBar {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border-top: 1px solid var(--border); background: var(--surface-2);
+}
+.termStatus { font-size: 11px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.termStatus.on { color: var(--success); }
+.termInput {
+  flex: 1; min-width: 0; padding: 7px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--surface-3);
+  color: var(--text); font: 12px ui-monospace, 'SF Mono', Monaco, monospace;
+}
+.termInput:focus { outline: none; border-color: var(--primary); box-shadow: var(--focus-ring); }
+@media (max-width: 900px) {
+  #termPane { width: min(92vw, 340px); }
+}
+
 #snapModal {
   position: fixed; inset: 0; z-index: 95; background: rgba(15, 23, 42, 0.45);
   display: flex; align-items: center; justify-content: center; padding: 18px;

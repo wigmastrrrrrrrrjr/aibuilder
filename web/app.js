@@ -1080,6 +1080,7 @@ const actCards = {
   a: (p) => '<span class="acIco">A</span><span class="acBody"><b>asset</b> ' + escHtml(p) + '</span>',
   seed: (c, n) => '<span class="acIco">DB</span><span class="acBody"><b>seeded</b> “' + escHtml(c) + '” with ' + n + ' row' + (n === 1 ? '' : 's') + '</span>',
   sub: (p) => '<span class="acIco">S</span><span class="acBody"><b>sub-agent</b> finished ' + escHtml(p) + '</span>',
+  term: (cmd) => '<span class="acIco">›</span><span class="acBody"><b>command</b> ' + escHtml(cmd).slice(0, 120) + '</span>',
   plan: () => '<span class="acIco">P</span><span class="acBody"><b>plan</b> updated</span>',
   warn: (m) => '<span class="acIco warn">!</span><span class="acBody">' + escHtml(m) + '</span>',
   summary: (bits) => '<span class="acIco">OK</span><span class="acBody">' + bits + '</span>',
@@ -1211,6 +1212,13 @@ async function send() {
           if (aiMsg) aiMsg.card(actCards.seed(ev.collection, ev.count || 0));
           activityText.textContent = `Seeded ${ev.collection} (${ev.count || 0} rows)`;
           schedulePreview();
+        } else if (ev.type === 'cmd') {
+          if (window.__termLine) {
+            window.__termLine('$ ' + (ev.command || ''), 'cmd');
+            if (ev.output) window.__termLine(ev.output.replace(/\s+$/, ''), 'out');
+            window.__termLine(`[exit ${ev.code == null ? '-' : ev.code}] ${ev.error ? ev.error : 'ok'}`, 'meta');
+          }
+          if (aiMsg && ev.ok) aiMsg.card(actCards.term(ev.command));
         } else if (ev.type === 'plan') {
           renderPlan(ev.items || []);
           if (aiMsg) aiMsg.card(actCards.plan());
@@ -1724,3 +1732,56 @@ document.addEventListener('touchmove', (e) => {
 }, { passive: true });
 document.addEventListener('touchend', () => { edgeX = null; }, { passive: true });
 document.addEventListener('touchcancel', () => { edgeX = null; }, { passive: true });
+
+/* ---------- cloud terminal panel ---------- */
+const termPane = $('termPane'), termBody = $('termBody'), termInput = $('termInput'),
+  termStatus = $('termStatus');
+let termEnabled = null;
+
+function termLine(text, cls) {
+  const pre = document.createElement('pre');
+  pre.className = 'termLine ' + (cls || '');
+  pre.textContent = text;
+  termBody.appendChild(pre);
+  termBody.scrollTop = termBody.scrollHeight;
+  return pre;
+}
+
+async function refreshTermStatus() {
+  try {
+    const r = await fetch(API + '/api/terminal/status', { headers: authHeaders() });
+    const j = await r.json();
+    termEnabled = Boolean(j.enabled);
+    termStatus.textContent = termEnabled ? 'online' : 'offline';
+    termStatus.classList.toggle('on', !!termEnabled);
+  } catch { termStatus.textContent = 'offline'; }
+}
+
+async function termRun() {
+  const cmd = termInput.value.trim();
+  if (!cmd || termEnabled === false) return;
+  termInput.value = '';
+  const p = projectId; // current project (may be empty pre-creation)
+  termLine('$ ' + cmd, 'cmd');
+  const t0 = performance.now();
+  try {
+    const r = await fetch(API + '/api/terminal/exec', {
+      method: 'POST',
+      headers: authHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ pid: p || 'root', cmd }),
+    });
+    const j = await r.json();
+    if (j.output) termLine(j.output.replace(/\s+$/, ''), 'out');
+    termLine(`[exit ${j.code == null ? '-' : j.code}] ${j.error ? j.error : Math.round(performance.now() - t0) + 'ms'}`, 'meta');
+  } catch (e) {
+    termLine('error: ' + String(e.message || e), 'meta');
+  }
+}
+
+$('termBtn').onclick = () => { termPane.hidden = !termPane.hidden; if (!termPane.hidden) termBody.scrollTop = termBody.scrollHeight; };
+$('termClose').onclick = () => { termPane.hidden = true; };
+termInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') termRun(); });
+$('termRun').onclick = termRun;
+
+window.__termLine = termLine; // SSE handler pushes generator CMD runs here
+refreshTermStatus();

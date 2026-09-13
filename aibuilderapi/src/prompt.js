@@ -43,12 +43,13 @@ replacement text
 <<<RENAME:old/path.js -> new/path.js>>>
 <<<END>>>
 
-5. RUN A SHELL COMMAND on the user's device (works from your project folder). The output is returned to you so you can respond to it:
+5. RUN A COMMAND in your dedicated cloud terminal (a workspace held for this project on your VM). Use it to validate, run dev servers, install nothing heavy, or compute things you can't do in files. The output is returned to you:
 <<<CMD>>>
 python3 -m py_compile app.py
 <<<END>>>
 - Keep commands non-destructive unless the user asked for destructive action.
-- You may run up to a few commands per turn; wait for the output before continuing.
+- You may run up to a few commands per turn; the output is shown for each.
+- Commands run in the project's workspace folder on the terminal VM. If a command needs project code, inline it with a heredoc or run self-contained snippets.
 
 6. PLAN for multi-step or refactoring work (REQUIRED before large changes):
 <<<PLAN>>>

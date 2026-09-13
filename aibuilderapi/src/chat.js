@@ -8,6 +8,7 @@ import { getUser, canWrite } from './auth.js';
 import { createClient } from '@supabase/supabase-js';
 import { effortLevel, EFFORT, modelCost, creditsToUnits, unitsToCredits } from './models.js';
 import { personalBalance } from './credits.js';
+import { execCommand, terminalEnabled } from './terminal.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
@@ -268,6 +269,14 @@ chat.post('/', async (c) => {
             send({ type: 'seed', collection: ev.collection, count: n });
           } catch (e) {
             send({ type: 'warn', message: `seed failed on ${ev.collection}: ${String(e.message || e)}` });
+          }
+        } else if (ev.type === 'cmd' && ev.command) {
+          const command = String(ev.command).slice(0, 2000);
+          if (!terminalEnabled()) {
+            send({ type: 'warn', message: `command "${command.slice(0, 60)}" skipped — cloud terminal not configured yet` });
+          } else {
+            const res = await execCommand(pid, command);
+            send({ type: 'cmd', command, enabled: true, ok: res.ok, code: res.code, output: res.output, error: res.error });
           }
         } else if (ev.type === 'plan') {
           try {
@@ -752,10 +761,15 @@ async function workspaceChat(c, body, message, user) {
         } else if (ev.type === 'name' && ev.name) {
           send({ type: 'name', name: ev.name });
         } else if (ev.type === 'cmd' && ev.command) {
-          // Relay a shell command the client should run on the user's device.
-          // The client runs it locally (with approval) and sends the output
-          // back in a follow-up request so the model can keep working.
-          send({ type: 'cmd', command: String(ev.command) });
+          // Execute on the project's dedicated cloud terminal when configured;
+          // otherwise relay so the client can offer to run it locally.
+          const command = String(ev.command).slice(0, 2000);
+          if (terminalEnabled()) {
+            const res = await execCommand(pid, command);
+            send({ type: 'cmd', command, enabled: true, ok: res.ok, code: res.code, output: res.output, error: res.error });
+          } else {
+            send({ type: 'cmd', command, enabled: false });
+          }
         }
       };
 

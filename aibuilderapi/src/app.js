@@ -10,6 +10,7 @@ import { getVar } from './env.js';
 import { builtinKey } from './keys.js';
 import { toBase64 } from './base64.js';
 import { live } from './live.js';
+import { terminal } from './terminal.js';
 import { auth, requireUser, canWrite } from './auth.js';
 import { teams } from './teams.js';
 import { features } from './features.js';
@@ -116,6 +117,7 @@ const chatLimit   = rateLimit({ windowMs: MIN, max: 3000 });  // 3000 chats/min 
 const authLimit   = rateLimit({ windowMs: MIN, max: 3 });     // 3 auth attempts/min per IP
 const uploadLimit = rateLimit({ windowMs: MIN, max: 3 });     // 3 uploads/min per IP
 const giftLimit   = rateLimit({ windowMs: MIN, max: 3 });     // 3 gifts/min per IP
+const termLimit   = rateLimit({ windowMs: MIN, max: 30 });    // 30 terminal cmds/min per IP
 
 // ---- meta & models ----------------------------------------------------------
 app.get('/api/meta', (c) =>
@@ -144,7 +146,7 @@ app.get('/api/docs', (c) => {
       storage: 'Supabase (schema: supabase-v2.sql) — the v1 API persists in Cloudflare D1; v2 lives in Postgres with Realtime.',
     },
     streams: [
-      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'workspace'" }, events: ['meta', 'token', 'think', 'file', 'edit', 'delete', 'rename', 'asset', 'plan', 'name', 'delegate', 'subagent', 'refactor', 'seed', 'warn', 'error', 'done'] },
+      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'workspace'" }, events: ['meta', 'token', 'think', 'file', 'edit', 'delete', 'rename', 'asset', 'plan', 'name', 'delegate', 'subagent', 'refactor', 'seed', 'cmd', 'warn', 'error', 'done'] },
     ],
     endpoints: [
       { method: 'GET', path: '/api/docs', auth: 'none', description: 'This documentation' },
@@ -212,6 +214,9 @@ app.get('/api/docs', (c) => {
 
       { method: 'GET', path: '/preview/:projectId/*', auth: 'none', description: 'Serve a generated app with the BaaS SDK injected' },
       { method: 'GET', path: '/__baas.js', auth: 'none', description: 'Client SDK for generated apps (window.creat.db)' },
+
+      { method: 'GET', path: '/api/terminal/status', auth: 'none', description: 'Is the cloud terminal configured?' },
+      { method: 'POST', path: '/api/terminal/exec', auth: 'user', body: { pid: 'string', cmd: 'string', cwd: 'string', timeoutMs: 'number' }, description: 'Run a shell command on the project\'s cloud terminal' },
     ],
   });
 });
@@ -575,6 +580,7 @@ app.use('/api/chat', chatLimit);
 app.use('/api/projects/*/upload', uploadLimit);
 app.use('/api/credits/gift', giftLimit);
 app.use('/api/credits/grant', giftLimit);
+app.use('/api/terminal/exec', termLimit);
 // per-app resource budget (preview / BaaS / live) — 200k req/min default
 app.use('*', async (c, next) => {
   const pid = projectIdOfPath(c.req.path);
@@ -597,6 +603,7 @@ app.route('/api/v2', v2);
 app.route('/', teams);
 app.route('/', features);
 app.route('/api/forum', forum);
+app.route('/api/terminal', terminal);
 app.route('/preview', preview);
 
 // 404s: API callers get a JSON error, browsers get a simple page
