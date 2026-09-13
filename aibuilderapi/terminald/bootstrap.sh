@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# terminald bootstrap for a GratisVPS Starter Free VPS (or any Debian/Ubuntu box).
+# terminald bootstrap for a Google Cloud free-tier e2-micro (or any Debian/Ubuntu box).
 # Usage (as root on the VM):
 #   bash bootstrap.sh 'SOME_LONG_SHARED_TOKEN' [port] [sandbox]
 # Installs Node 20 + cloudflared, installs terminald as a systemd service,
