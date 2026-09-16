@@ -19,8 +19,11 @@ import { teamPool, personalBalance } from './credits.js';
 import { v2 } from './v2.js';
 import { rateLimit } from './rate-limit.js';
 import { blockDatacenterIps } from './vpn-block.js';
+import {
+  CORS_OPTIONS, DEFAULT_ALLOWED_ORIGINS, GITHUB_URL, blockForeignOrigins,
+} from './web-origin.js';
 
-const GITHUB_URL = 'https://github.com/wigmastrrrrrrrrjr/aibuilder';
+export { DEFAULT_ALLOWED_ORIGINS };
 
 export const app = new Hono();
 
@@ -29,65 +32,11 @@ export const app = new Hono();
 // are kept for local `npm start` development. Anything else gets the block
 // message. Requests with no Origin (same-origin, curl, non-browser tooling)
 // pass through. Add more with the ALLOWED_ORIGINS env var (comma-separated).
-export const DEFAULT_ALLOWED_ORIGINS = [
-  'https://websim.com',
-  'http://localhost',
-  'http://127.0.0.1',
-  'https://aibuilderapi.csomeone301.workers.dev'
-];
-const BLOCK_MSG = 'nice try script kiddy this won\'t work!';
+// (Policy lives in web-origin.js so the chat/preview workers share it.)
 
-const WEBSIM_RE = /^https:\/\/(?:[a-z0-9-]+\.)*websim\.com$/i;
+app.use('*', blockForeignOrigins);
 
-// The origin set only changes when the env value changes — build it once and
-// reuse across requests instead of allocating a Set + splitting env every time.
-let _originKey = null;
-let _origins = null;
-function allowedOrigins() {
-  const extra = getVar('ALLOWED_ORIGINS') || '';
-  if (_originKey === extra) return _origins;
-  const set = new Set(DEFAULT_ALLOWED_ORIGINS);
-  for (const o of extra.split(',')) {
-    const t = o.trim();
-    if (t) set.add(t);
-  }
-  _origins = set;
-  _originKey = extra;
-  return set;
-}
-
-function originAllowed(origin) {
-  if (!origin) return true;
-  if (WEBSIM_RE.test(origin)) return true;
-  const set = allowedOrigins();
-  if (set.has(origin)) return true;
-  let host = origin;
-  try {
-    const u = new URL(origin);
-    host = `${u.protocol}//${u.hostname}`;
-    if (WEBSIM_RE.test(host)) return true;
-  } catch { /* keep raw value */ }
-  return set.has(host);
-}
-
-app.use('*', async (c, next) => {
-  const origin = c.req.header('origin');
-  if (origin && !originAllowed(origin)) {
-    return c.text(BLOCK_MSG, 403, {
-      'content-type': 'text/plain; charset=utf-8',
-      'access-control-allow-origin': origin,
-      'cache-control': 'no-store',
-    });
-  }
-  return next();
-});
-
-app.use('*', cors({
-  origin: (origin) => (originAllowed(origin) ? origin || '*' : null),
-  allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'x-ab-sess', 'x-recaptcha-token', 'x-api-key'],
-  exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'Retry-After'],
-}));
+app.use('*', cors(CORS_OPTIONS));
 
 // NO compression, NO caching. The client that consumes this API cannot decode
 // gzip, and Cloudflare's edge re-encodes responses (even identity/q=0 requests

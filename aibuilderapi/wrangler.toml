@@ -23,6 +23,14 @@ database_id = "637d0000-61e9-4e4d-9332-418b2669cdd1"
 directory = "../web"
 binding = "ASSETS"
 
+# Heavy routes are offloaded to dedicated workers when these service bindings
+# are wired (see wrangler.chat.toml / wrangler.preview.toml). Until they are
+# deployed, the router falls back to handling everything locally — exactly the
+# old single-worker behaviour — so an empty binding never breaks deploys.
+[services]
+CHAT_WORKER = { binding = "CHAT_WORKER", service = "aibuilderapi-chat" }
+PREVIEW_WORKER = { binding = "PREVIEW_WORKER", service = "aibuilderapi-preview" }
+
 [vars]
 OLLAMA_MODEL = "gemma4:31b"
 SUPABASE_URL = "https://trwxpgmkpaddnyktbleg.supabase.co"

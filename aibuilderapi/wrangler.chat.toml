@@ -1,0 +1,33 @@
+# Dedicated chat worker — serves /api/chat (main + workspace AI generation).
+# Shares the live D1 database and env with the main worker; the public router
+# offloads /api/chat here via the [services] binding in wrangler.toml.
+#
+# Deploy:  npm run deploy:chat
+# The chat worker reads the same secrets as the main worker. Mirror them once:
+#   npx wrangler secret put OLLAMA_API_KEY       -c wrangler.chat.toml
+#   npx wrangler secret put MISTRAL_API_KEY      -c wrangler.chat.toml
+#   npx wrangler secret put LOCAL_OLLAMA_URL     -c wrangler.chat.toml
+#   npx wrangler secret put SUPABASE_SERVICE_KEY -c wrangler.chat.toml
+#   npx wrangler secret put OPENROUTER_API_KEY   -c wrangler.chat.toml
+
+name = "aibuilderapi-chat"
+main = "src/worker-chat.js"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aibuildersehdatabase"
+database_id = "637d0000-61e9-4e4d-9332-418b2669cdd1"
+
+[vars]
+OLLAMA_MODEL = "gemma4:31b"
+SUPABASE_URL = "https://trwxpgmkpaddnyktbleg.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE"
+CONTENT_ENC_KEY = "554a4f426433f3a7b77831d2581e7cdf3b46a14b10477c73f96dfd40eb487d05"
+FORUM_ADMIN_KEY = "99ba2a73255d85f2181778ee7457ce65"
+TERMINAL_URL = ""
+TERMINAL_TOKEN = ""
+
+[observability]
+enabled = true
+head_sampling_rate = 1
