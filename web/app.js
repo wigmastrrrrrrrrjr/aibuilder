@@ -25,6 +25,28 @@ const fileChips = $('fileChips'), frame = $('previewFrame'), projName = $('projN
 const modelSel = $('modelSel'), publishBtn = $('publishBtn');
 const effortSel = $('effortSel');
 
+/* freeze quarantine: when a build has a non-terminating loop we hide the
+   preview, stop it from loading, and keep it disabled until a clean build. */
+const previewStage = $('previewStage'), freezeOverlay = $('freezeOverlay'), freezeFilesEl = $('freezeFiles');
+let previewQuarantined = false;
+function setPreviewQuarantine(files) {
+  previewQuarantined = true;
+  frame.src = 'about:blank'; // kill whatever was loading before it can peg the tab
+  previewStage.classList.add('quarantined');
+  freezeFilesEl.textContent = '';
+  for (const f of files || []) {
+    const c = document.createElement('code');
+    c.textContent = f;
+    freezeFilesEl.appendChild(c);
+  }
+  freezeOverlay.hidden = false;
+}
+function clearPreviewQuarantine() {
+  previewQuarantined = false;
+  previewStage.classList.remove('quarantined');
+  freezeOverlay.hidden = true;
+}
+
 /* chat header status dot (mockup: ● Ready / Building / Saved) */
 function setStatus(text) {
   const em = $('statusTxt');
@@ -155,6 +177,7 @@ function flashChip(path) {
 
 function refreshPreview(bust) {
   if (!projectId) return;
+  if (previewQuarantined) return; // disabled until the freeze is fixed
   frame.src = `${API}/preview/${projectId}/` + (bust ? `?t=${Date.now()}` : '');
 }
 
@@ -853,6 +876,7 @@ async function selectProject(pid) {
   try { plan = typeof data.project.plan === 'string' ? JSON.parse(data.project.plan) : (data.project.plan || []); } catch { plan = []; }
   renderPlan(plan);
   setChips(data.files);
+  clearPreviewQuarantine();
   refreshPreview(false);
   loadProjects();
   watchProject(pid);
@@ -896,6 +920,7 @@ function resetToNew() {
     </div>`;
   setChips([]);
   frame.src = 'about:blank';
+  clearPreviewQuarantine();
   renderPlan([]);
   watchProject(null);
   promptBox.focus();
@@ -1355,6 +1380,16 @@ async function send() {
           if (!ev.ok) notify('Page test failed', (ev.errors || []).slice(0, 3).map((e) => `${e.file}${e.ref ? ' → ' + e.ref : ''}${e.message ? ' · ' + e.message : ''}`).join('\n'));
         } else if (ev.type === 'note') {
           notify('Heads up', ev.message);
+        } else if (ev.type === 'freeze') {
+          setPreviewQuarantine(ev.files || []);
+          notify('Preview disabled', 'The page contains a loop that would freeze the browser. Ask the AI to fix it — it re-enables once the build passes again.');
+        } else if (ev.type === 'unfreeze') {
+          const wasQuarantined = previewQuarantined;
+          clearPreviewQuarantine();
+          if (wasQuarantined) {
+            notify('Preview re-enabled', 'The build is safe again — the page reloads.');
+            refreshPreview(true);
+          }
         } else if (ev.type === 'error') {
           if (aiMsg) aiMsg.setStatus('error');
           addAiBubble(`⚠ ${ev.message}`);
@@ -1830,7 +1865,14 @@ sendBtn.onclick = send;
 modelSel.addEventListener('change', () => localStorage.setItem('ab.model', modelSel.value));
 $('newBtn').onclick = () => { if (!busy) resetToNew(); };
 $('refreshBtn').onclick = () => refreshPreview(true);
-$('openBtn').onclick = () => projectId && window.open(`${API}/preview/${projectId}/`, '_blank');
+$('openBtn').onclick = () => {
+  if (!projectId) return;
+  if (previewQuarantined) {
+    notify('Preview disabled', 'The page is quarantined (freeze risk) and can\'t be opened yet — ask the AI to fix it first.');
+    return;
+  }
+  window.open(`${API}/preview/${projectId}/`, '_blank');
+};
 
 /* ---------- device preview switcher ---------- */
 function setDevice(d) {

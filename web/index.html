@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
-<link rel="stylesheet" href="style.css?v=29">
+<link rel="stylesheet" href="style.css?v=30">
 </head>
 <body>
 
@@ -139,6 +139,13 @@
       <div id="previewStage">
         <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
                 src="about:blank"></iframe>
+        <div id="freezeOverlay" hidden>
+          <div class="foIco">!</div>
+          <p class="foTitle">Preview disabled</p>
+          <p class="foBody">The page contains a loop that would freeze the browser, so it is temporarily disabled.</p>
+          <div id="freezeFiles"></div>
+          <p class="foHint">Ask the AI to fix it — the preview returns automatically once the build passes again.</p>
+        </div>
       </div>
 
       <!-- plan sidebar: docked rail on desktop, slide-over on mobile -->
@@ -362,6 +369,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=29"></script>
+    <script src="app.js?v=30"></script>
 </body>
 </html>

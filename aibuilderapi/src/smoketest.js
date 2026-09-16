@@ -94,6 +94,141 @@ function jsError(src) {
   try { new Function(src); return null; } catch (e) { return e; }
 }
 
+// ---- freeze-risk detector ----------------------------------------------------
+// A loop that provably never exits (always-true condition AND no break/return/
+// throw anywhere in its body) locks the browser tab — nothing can paint or
+// respond, which is exactly the "page is about to freeze" failure built pages
+// hit after a careless edit. Detection is deliberately conservative so real
+// loops with counters or exit keywords are never flagged.
+
+const LOOP_ESCAPE_RE = /\b(?:break|return|throw)\b/;
+
+// Runs a bare expression to see if it's deterministically TRUE. Pure
+// expressions like true, 1, !0, 1===1 evaluate fine; anything referencing
+// globals or variables throws and is treated as "not provably always true".
+function alwaysTrueCond(condSrc) {
+  const c = String(condSrc || '').trim();
+  if (!c) return true; // for(;;) — empty condition
+  try { return Boolean(new Function('return (' + c + ')')()); } catch { return false; }
+}
+
+// for(;;) / for(;true;) style forever-loops: the always-true clause sits in the
+// SECOND semicolon slot of the header.
+function forCondAlwaysTrue(condSrc) {
+  const t = String(condSrc || '').trim();
+  if (!t) return true;
+  const parts = t.split(';');
+  if (parts.length >= 2) {
+    const clause = (parts[1] || '').trim();
+    return !clause || alwaysTrueCond(clause);
+  }
+  return alwaysTrueCond(t);
+}
+
+function scanLoops(src) {
+  const loops = [];
+  const n = src.length;
+  const isId = (ch) => /[A-Za-z0-9_$]/.test(ch || '');
+  const skipWs = (j) => { while (j < n && /\s/.test(src[j])) j++; return j; };
+  // match a balanced open/close bracket starting at `j`, skipping strings,
+  // comments and template literals. Returns the index of the closer (-1 fail).
+  const matchBal = (j, open, close) => {
+    if (src[j] !== open) return -1;
+    let depth = 0, k = j, q = null, esc = false, lc = false, bc = false, tpl = false;
+    for (; k < n; k++) {
+      const ch = src[k], nx = src[k + 1];
+      if (lc) { if (ch === '\n') lc = false; continue; }
+      if (bc) { if (ch === '*' && nx === '/') { bc = false; k++; } continue; }
+      if (q) {
+        if (esc) { esc = false; continue; }
+        if (ch === '\\') { esc = true; continue; }
+        if (ch === q) q = null;
+        continue;
+      }
+      if (ch === '/' && nx === '/') { lc = true; k++; continue; }
+      if (ch === '/' && nx === '*') { bc = true; k++; continue; }
+      if (ch === '"' || ch === "'") { q = ch; continue; }
+      if (ch === '`') { tpl = !tpl; continue; }
+      if (tpl) continue;
+      if (ch === open) depth++;
+      else if (ch === close) { depth--; if (depth === 0) return k; }
+    }
+    return -1;
+  };
+  const bodyOf = (b) => {
+    // returns the loop body source for a block body or a single statement
+    if (src[b] === '{') {
+      const e = matchBal(b, '{', '}');
+      if (e === -1) return '';
+      return src.slice(b + 1, e);
+    }
+    let e = b;
+    while (e < n && src[e] !== ';' && src[e] !== '{' && src[e] !== '}') e++;
+    if (src[e] === '{') return src.slice(b, e + 1);
+    return src.slice(b, Math.min(e + 1, n));
+  };
+
+  let i = 0;
+  while (i < n) {
+    const ch = src[i], nx = src[i + 1];
+    if (ch === '/' && nx === '/') { let j = i + 2; while (j < n && src[j] !== '\n') j++; i = j + 1; continue; }
+    if (ch === '/' && nx === '*') { let j = i + 2; while (j < n && !(src[j] === '*' && src[j + 1] === '/')) j++; i = j + 2; continue; }
+    if (ch === '"' || ch === "'" || ch === '`') { let q = ch, j = i + 1, esc = false; while (j < n) { if (esc) { esc = false; j++; continue; } if (src[j] === '\\') { esc = true; j++; continue; } if (src[j] === q) { j++; break; } j++; } i = j; continue; }
+    if (!isId(ch)) { i++; continue; }
+    let j = i;
+    while (j < n && isId(src[j])) j++;
+    const word = src.slice(i, j);
+    const prev = i > 0 ? src[i - 1] : '';
+    let lp = null;
+    if (word === 'while' || word === 'for') {
+      if (prev !== '.') { // obj.for(1) is invalid JS; never a loop statement
+        const k = skipWs(j);
+        if (src[k] === '(') {
+          const close = matchBal(k, '(', ')');
+          if (close !== -1) {
+            lp = { kind: word, cond: src.slice(k + 1, close), body: bodyOf(skipWs(close + 1)), at: i };
+          }
+        }
+      }
+    } else if (word === 'do') {
+      const k = skipWs(j);
+      if (src[k] === '{') {
+        const close = matchBal(k, '{', '}');
+        if (close !== -1) {
+          const body = src.slice(k + 1, close);
+          let cond = 'true';
+          let resume = close + 1;
+          const w = skipWs(close + 1);
+          if (src.slice(w, w + 5).toLowerCase() === 'while') {
+            const p = skipWs(w + 5);
+            if (src[p] === '(') {
+              const c2 = matchBal(p, '(', ')');
+              if (c2 !== -1) { cond = src.slice(p + 1, c2); resume = c2 + 1; }
+            }
+          }
+          lp = { kind: 'do', cond, body, resume, at: i };
+        }
+      }
+    }
+    i = (lp && lp.resume != null) ? lp.resume : j;
+    if (lp) loops.push(lp);
+  }
+  return loops;
+}
+
+export function scriptFreezeRisks(src) {
+  const risks = [];
+  for (const lp of scanLoops(src)) {
+    const alwaysTrue = lp.kind === 'for'
+      ? forCondAlwaysTrue(lp.cond)
+      : alwaysTrueCond(lp.cond);
+    if (!alwaysTrue) continue;
+    if (LOOP_ESCAPE_RE.test(lp.body)) continue;
+    risks.push(`non-terminating ${lp.kind} loop at offset ${lp.at} — it runs forever with no break/return/throw and would freeze the page`);
+  }
+  return risks;
+}
+
 function decodeFile(f) {
   if (f.encoding === 'base64' && typeof f.content === 'string') {
     try {
@@ -137,10 +272,14 @@ export async function pageTest({ files }) {
         scripts++;
         const e = jsError(decodeFile(map.get(hit)));
         if (e) errors.push({ file: hit, type: 'script syntax error', message: e.message });
+        for (const fr of scriptFreezeRisks(decodeFile(map.get(hit))))
+          errors.push({ file: hit, type: 'freeze risk', message: fr });
       } else if (body && body.trim()) {
         scripts++;
         const e = jsError(body);
         if (e) errors.push({ file: hp, type: 'inline script syntax error', message: e.message });
+        for (const fr of scriptFreezeRisks(body))
+          errors.push({ file: hp, type: 'freeze risk (inline)', message: fr });
       }
     }
 
@@ -184,6 +323,7 @@ export async function pageTest({ files }) {
     refs,
     errors,
     more,
+    freezeRisk: errors.some((e) => e.type === 'freeze risk' || e.type === 'freeze risk (inline)'),
   };
 }
 

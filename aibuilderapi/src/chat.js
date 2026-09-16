@@ -9,7 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 import { effortLevel, EFFORT, modelCost, creditsToUnits, unitsToCredits } from './models.js';
 import { personalBalance } from './credits.js';
 import { execCommand, terminalEnabled } from './terminal.js';
-import { pageTest, reportToText } from './smoketest.js';
+import { pageTest, reportToText, scriptFreezeRisks } from './smoketest.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
@@ -262,6 +262,10 @@ chat.post('/', async (c) => {
           written.push(ev.path);
           ops++;
           maybeRefactor();
+          if (scriptFreezeRisks(ev.content).length) {
+            diag.push(`freeze risk detected in ${ev.path} (non-terminating loop) — the page is disabled until this is fixed.`);
+            await quarantineSync([ev.path], send);
+          }
           send({ type: 'file', path: ev.path });
         } else if (ev.type === 'edit' && ev.path) {
           const res = await applyEdit(pid, ev.path, ev.hunks || []);
@@ -269,6 +273,10 @@ chat.post('/', async (c) => {
             edited.push(ev.path);
             ops++;
             maybeRefactor();
+            if (res.content && scriptFreezeRisks(res.content).length) {
+              diag.push(`freeze risk detected in ${ev.path} (non-terminating loop) — the page is disabled until this is fixed.`);
+              await quarantineSync([ev.path], send);
+            }
             send({ type: 'edit', path: ev.path });
           } else {
             send({ type: 'warn', message: `edit failed on ${ev.path}: ${res.error}` });
@@ -302,6 +310,10 @@ chat.post('/', async (c) => {
             assets.push(ev.path);
             ops++;
             maybeRefactor();
+            if ((!ev.encoding || ev.encoding === 'utf8') && scriptFreezeRisks(ev.data || '').length) {
+              diag.push(`freeze risk detected in asset ${ev.path} (non-terminating loop) — the page is disabled until this is fixed.`);
+              await quarantineSync([ev.path], send);
+            }
             send({ type: 'asset', path: ev.path, encoding: ev.encoding });
           } catch (e) {
             send({ type: 'warn', message: `asset failed on ${ev.path}: ${String(e.message || e)}` });
@@ -382,9 +394,38 @@ chat.post('/', async (c) => {
           const label = note ? `PAGE TEST (${note})` : 'PAGE TEST';
           testReports.push(reportToText(r, label));
           evSend({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, note });
+          await quarantineFromReport(r, evSend);
         } catch (e) {
           evSend({ type: 'warn', message: `page test failed to run: ${String(e.message || e)}` });
           diag.push(`page test failed to run: ${String(e.message || e)}`);
+        }
+      };
+
+      // Quarantine state: a project with a freeze-risk loop is "temporarily
+      // disabled" — its preview serves a static blocker (no scripts can run)
+      // until a fixing generation's page test comes back clean. Stored in meta
+      // so it survives reloads and is enforced server-side by the preview route.
+      const quarantineSync = async (freezeFiles, evSend) => {
+        try {
+          if (freezeFiles && freezeFiles.length) {
+            await store.metaSet('q:' + pid, JSON.stringify({ at: Date.now(), files: freezeFiles }));
+            evSend({ type: 'freeze', files: freezeFiles });
+          } else {
+            await store.metaSet('q:' + pid, '');
+            evSend({ type: 'unfreeze' });
+          }
+        } catch { /* quarantine is best-effort */ }
+      };
+      const quarantineFromReport = async (r, evSend) => {
+        const frozen = r && r.freezeRisk
+          ? (r.errors || []).filter((e) => e.type === 'freeze risk' || e.type === 'freeze risk (inline)')
+            .map((e) => e.file).filter((p, i2, a) => p && a.indexOf(p) === i2)
+          : [];
+        if (frozen.length) {
+          diag.push(`PAGE TEST: freeze risk in ${frozen.join(', ')} — the preview is disabled until the loop is fixed.`);
+          await quarantineSync(frozen, evSend);
+        } else {
+          await quarantineSync([], evSend);
         }
       };
 
@@ -590,6 +631,7 @@ chat.post('/', async (c) => {
               const r = await pageTest({ files: all });
               testReports.push(reportToText(r, 'AUTO PAGE TEST'));
               send({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, auto: true });
+              await quarantineFromReport(r, send);
             }
           } catch { /* page test is best-effort */ }
         }
@@ -991,7 +1033,7 @@ async function applyEdit(pid, fpath, hunks) {
     text = text.slice(0, i) + h.replace + text.slice(i + h.search.length);
   }
   await store.saveFile(pid, fpath, text);
-  return { ok: true };
+  return { ok: true, content: text };
 }
 
 // Move a file and refresh every other text file that references it

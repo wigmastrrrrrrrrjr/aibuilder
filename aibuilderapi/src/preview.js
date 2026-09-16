@@ -558,6 +558,33 @@ function notYet(c, pid) {
   );
 }
 
+// Freeze quarantine blocker: a project whose last build contained a
+// non-terminating loop gets a static page instead of its real one — no
+// scripts, so it physically cannot freeze the browser. The builder re-enables
+// the project (sends `unfreeze`) once a page test comes back clean.
+async function quarantineFor(pid) {
+  try {
+    const raw = await store.metaGet('q:' + pid);
+    if (!raw) return null;
+    const q = JSON.parse(raw);
+    return q && Array.isArray(q.files) && q.files.length ? q : null;
+  } catch { return null; }
+}
+
+function quarantineBlocker(pid, files) {
+  const list = (files || []).map((f) => `<code style="background:#241f3a;padding:2px 7px;border-radius:6px;color:#cfc7ff">${f.replace(/[<>&"']/g, '')}</code>`).join('  ');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Page disabled — freeze risk</title></head>
+<body style="font-family:system-ui,-apple-system,sans-serif;background:#120f1c;color:#e8eaf6;display:grid;place-items:center;height:100vh;margin:0;text-align:center">
+<div style="max-width:440px;padding:24px">
+<div style="width:52px;height:52px;margin:0 auto 14px;display:grid;place-items:center;border-radius:14px;background:rgba(239,68,68,.15);color:#f87171;font-weight:800;font-size:24px">!</div>
+<h2 style="margin:0 0 8px;font-size:18px">This page was temporarily disabled</h2>
+<p style="color:#9aa0c3;line-height:1.55;margin:0 0 10px">The last build contained a loop that would freeze the browser
+${list ? '<br>' + list : ''}. It has been quarantined so it can't run again until it's fixed.</p>
+<p style="color:#7d83a8;font-size:13px">Ask the builder to fix the page — it comes back automatically once the build passes again.</p>
+</div></body></html>`;
+}
+
 async function serveFile(c, pid, rawPath) {
   const p = safePath(rawPath);
   if (p === null) return c.text('bad path', 400);
@@ -579,6 +606,12 @@ async function serveFile(c, pid, rawPath) {
 
   const ext = (target.split('.').pop() || '').toLowerCase();
   const type = MIME[ext] || 'application/octet-stream';
+  // Freeze quarantine: HTML pages only (assets can't freeze the tab). Served
+  // instead of the real page, pre-injection, so no generated script ever runs.
+  if (type.startsWith('text/html')) {
+    const q = await quarantineFor(pid);
+    if (q) return c.html(quarantineBlocker(pid, q.files), 200, { 'cache-control': 'no-store', 'x-ab-quarantined': '1' });
+  }
   const content = type.startsWith('text/html') && row.encoding === 'base64'
     ? new TextDecoder().decode(fromBase64(row.content))
     : (row.encoding === 'base64' ? fromBase64(row.content) : row.content);
