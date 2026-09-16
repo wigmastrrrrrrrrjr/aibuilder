@@ -63,10 +63,44 @@ const DAY = 86400000;
 const MIN = 60000;
 const globalLimit = rateLimit({ windowMs: DAY, max: 200 });   // 200 API calls/day per IP
 const chatLimit   = rateLimit({ windowMs: MIN, max: 3000 });  // 3000 chats/min per IP
+const projectsLimit = rateLimit({ windowMs: MIN, max: 2000 }); // per-IP on /api/projects* (live polling auto-excluded)
+const baasLimit     = rateLimit({ windowMs: MIN, max: 4000 }); // per-IP on /api/baas
 const authLimit   = rateLimit({ windowMs: MIN, max: 3 });     // 3 auth attempts/min per IP
 const uploadLimit = rateLimit({ windowMs: MIN, max: 3 });     // 3 uploads/min per IP
 const giftLimit   = rateLimit({ windowMs: MIN, max: 3 });     // 3 gifts/min per IP
 const termLimit   = rateLimit({ windowMs: MIN, max: 30 });    // 30 terminal cmds/min per IP
+
+// Limiters MUST be registered before any matching route: Hono skips app.use()
+// middleware for a path once a route for that exact path already exists.
+app.use('/api/auth/*', authLimit);
+app.use('/api/chat', chatLimit);
+app.use('/api/projects/*/upload', uploadLimit);
+app.use('/api/credits/gift', giftLimit);
+app.use('/api/credits/grant', giftLimit);
+app.use('/api/terminal/exec', termLimit);
+// Projects + BaaS: one dispatcher so the bare path and every subpath count a
+// single hit (registering both '/p' and '/p/*' double-counts the bare path).
+app.use('*', async (c, next) => {
+  const p = c.req.path;
+  if (p === '/api/projects' || p.startsWith('/api/projects/')) return projectsLimit(c, next);
+  if (p === '/api/baas' || p.startsWith('/api/baas/')) return baasLimit(c, next);
+  return next();
+});
+
+// per-app resource budget (preview / BaaS / live) — 200k req/min default
+app.use('*', async (c, next) => {
+  const pid = projectIdOfPath(c.req.path);
+  if (pid) {
+    const r = appLimitCheck(pid);
+    c.header('X-App-Limit', String(r.limit));
+    c.header('X-App-Limit-Remaining', String(r.remaining));
+    if (r.over) {
+      c.header('Retry-After', '60');
+      return c.json({ error: 'app resource limit exceeded — too many requests (200k/min). Slow down and retry.', limit: r.limit, window: '60s' }, 429);
+    }
+  }
+  return next();
+});
 
 // ---- meta & models ----------------------------------------------------------
 app.get('/api/meta', (c) =>
@@ -540,26 +574,6 @@ function cleanUploadPath(name) {
   return segs.slice(0, 8).join('/').slice(0, 200);
 }
 
-app.use('/api/auth/*', authLimit);
-app.use('/api/chat', chatLimit);
-app.use('/api/projects/*/upload', uploadLimit);
-app.use('/api/credits/gift', giftLimit);
-app.use('/api/credits/grant', giftLimit);
-app.use('/api/terminal/exec', termLimit);
-// per-app resource budget (preview / BaaS / live) — 200k req/min default
-app.use('*', async (c, next) => {
-  const pid = projectIdOfPath(c.req.path);
-  if (pid) {
-    const r = appLimitCheck(pid);
-    c.header('X-App-Limit', String(r.limit));
-    c.header('X-App-Limit-Remaining', String(r.remaining));
-    if (r.over) {
-      c.header('Retry-After', '60');
-      return c.json({ error: 'app resource limit exceeded — too many requests (200k/min). Slow down and retry.', limit: r.limit, window: '60s' }, 429);
-    }
-  }
-  return next();
-});
 app.route('/', auth);
 app.route('/api/chat', chat);
 app.route('/', live);
