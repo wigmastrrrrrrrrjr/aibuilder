@@ -304,11 +304,6 @@ chat.post('/', async (c) => {
         } else if (ev.type === 'delegate' && ev.path) {
           const task = String(ev.task || '').trim();
           if (!task) return;
-          if (subAgentTasks.length >= 100) {
-            send({ type: 'warn', message: `sub-agent queue full — skipping delegate for ${ev.path}` });
-            diag.push(`sub-agent for ${ev.path} was skipped (queue full)`);
-            return;
-          }
           send({ type: 'delegate', path: ev.path });
           subAgentTasks.push(spawnSubAgent(ev.path, task));
         } else if (ev.type === 'test') {
