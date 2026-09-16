@@ -1219,11 +1219,15 @@ async function send() {
   let chipFiles = [];
   let doneReceived = false;
   let previewTimer = null;
-  // Live preview: refresh on every build event (tiny debounce only coalesces
-  // the same-instant burst). `done` refreshes once more at the end.
+  // Live preview: per-event, but rate-capped so bursts of file changes collapse
+  // into one reload per interval (with a guaranteed trailing refresh). `done`
+  // refreshes once more at the end so the preview always lands current.
+  const PREVIEW_INTERVAL = 1200;
+  let lastPreview = 0;
   const schedulePreview = () => {
     clearTimeout(previewTimer);
-    previewTimer = setTimeout(() => refreshPreview(true), 40);
+    const wait = Math.max(0, lastPreview + PREVIEW_INTERVAL - Date.now());
+    previewTimer = setTimeout(() => { lastPreview = Date.now(); refreshPreview(true); }, wait);
   };
   // Terminal-style build log: one timestamped line per build event.
   const termLog = (text, cls) => {
