@@ -504,10 +504,10 @@ chat.post('/', async (c) => {
           // the stream stops.
           if (diag.length > diagAtStart) wantRepair = true;
           if (wantRepair) send({ type: 'note', message: 'The build still has errors — continuing in this session so the AI can fix them right now.' });
+          const roundDiag = diag.slice(diagAtStart);
           if (raw.trim()) {
             let recorded = raw;
             const notes = [];
-            const roundDiag = diag.slice(diagAtStart);
             if (roundDiag.length) {
               notes.push('DIAGNOSTICS — these operations FAILED just now, so the app may be incomplete or broken. Fix them in your very next step using the exact errors above:\n' +
                 roundDiag.map((x) => ' - ' + x).join('\n'));
