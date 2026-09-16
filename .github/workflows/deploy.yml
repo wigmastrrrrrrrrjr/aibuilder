@@ -40,6 +40,44 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      - name: Deploy dedicated workers (chat + preview)
+        working-directory: aibuilderapi
+        run: |
+          npx wrangler deploy -c wrangler.chat.toml
+          npx wrangler deploy -c wrangler.preview.toml
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Mirror secrets to dedicated workers
+        working-directory: aibuilderapi
+        run: |
+          for cfg in wrangler.chat.toml wrangler.preview.toml; do
+            for var in OLLAMA_API_KEY MISTRAL_API_KEY LOCAL_OLLAMA_URL LOCAL_OLLAMA_BEACON OPENROUTER_API_KEY SUPABASE_SERVICE_KEY RECAPTCHA_SECRET BOTBYE_SERVER_KEY EMAILJS_PUBLIC_KEY EMAILJS_SERVICE_ID EMAILJS_TEMPLATE_ID EMAILJS_PRIVATE_KEY; do
+              val=$(eval echo \$$var)
+              if [ -n "$val" ]; then
+                printf '%s' "$val" | npx wrangler secret put $var -c "$cfg"
+              else
+                echo "$var (via $cfg) secret not set — skipping"
+              fi
+            done
+          done
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          LOCAL_OLLAMA_URL: ${{ secrets.LOCAL_OLLAMA_URL }}
+          LOCAL_OLLAMA_BEACON: ${{ secrets.LOCAL_OLLAMA_BEACON }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          RECAPTCHA_SECRET: ${{ secrets.RECAPTCHA_SECRET }}
+          BOTBYE_SERVER_KEY: ${{ secrets.BOTBYE_SERVER_KEY }}
+          EMAILJS_PUBLIC_KEY: ${{ secrets.EMAILJS_PUBLIC_KEY }}
+          EMAILJS_SERVICE_ID: ${{ secrets.EMAILJS_SERVICE_ID }}
+          EMAILJS_TEMPLATE_ID: ${{ secrets.EMAILJS_TEMPLATE_ID }}
+          EMAILJS_PRIVATE_KEY: ${{ secrets.EMAILJS_PRIVATE_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Sync Ollama key
         working-directory: aibuilderapi
         run: |
