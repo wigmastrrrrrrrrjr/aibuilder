@@ -24,6 +24,16 @@ const activityEl = $('activity'), activityText = $('activityText'), rawStream = 
 const fileChips = $('fileChips'), frame = $('previewFrame'), projName = $('projName');
 const modelSel = $('modelSel'), publishBtn = $('publishBtn');
 const effortSel = $('effortSel');
+
+/* chat header status dot (mockup: ● Ready / Building / Saved) */
+function setStatus(text) {
+  const em = $('statusTxt');
+  if (!em) return;
+  em.textContent = text;
+  const dot = $('statusDot');
+  if (dot) dot.dataset.state = text;
+}
+const saveBtn = $('saveBtn'), saveLbl = $('saveLbl');
 let effort = 2;
 const EFFORT_HINT = {
   1: 'Fast — free',
@@ -364,10 +374,16 @@ function setPub(published) {
 if (!sessTok()) {
    // Not signed in – require an account (no guest mode)
    $('authGate').hidden = false;
- } else {
-   whoBtn.hidden = false;
-   const ic = document.createElement('span'); ic.className = 'ms'; ic.textContent = 'person';
-whoBtn.append(ic, document.createTextNode(sessName()));
+} else {
+    whoBtn.hidden = false;
+    const ic = document.createElement('span'); ic.className = 'ms'; ic.textContent = 'person';
+    whoBtn.append(ic, document.createTextNode(sessName()));
+    const af = $('accountFoot');
+    if (af) {
+      const fn = $('footName');
+      if (fn) fn.textContent = sessName();
+      af.hidden = false;
+    }
     loadCredits();
   }
   // deep-link into a team invite (?join=<tid>&code=<CODE>)
@@ -414,6 +430,45 @@ const themeBtn = $('themeBtn');
 if (themeBtn) themeBtn.addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
 const menuTheme = $('menuTheme');
 if (menuTheme) menuTheme.addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+const footWho = $('footWho');
+if (footWho) footWho.addEventListener('click', () => { const sm = $('settingsModal'); if (sm) sm.hidden = false; });
+
+/* ---------- settings modal (mockup "⚙ Settings") ---------- */
+const settingsModal = $('settingsModal');
+if (settingsModal) {
+  const settingsBtn = $('settingsBtn');
+  if (settingsBtn) settingsBtn.addEventListener('click', () => {
+    const st = $('settingsThemeState');
+    if (st) st.textContent = document.documentElement.dataset.theme === 'dark' ? 'Dark' : 'Light';
+    const sn = $('settingsSignoutName');
+    if (sn) sn.textContent = sessName() || 'Account';
+    settingsModal.hidden = false;
+  });
+  const closeSettings = (e) => {
+    if (!e || e.target === settingsModal || (e.target.closest && e.target.closest('#settingsClose'))) settingsModal.hidden = true;
+  };
+  $('settingsClose').addEventListener('click', closeSettings);
+  settingsModal.addEventListener('click', closeSettings);
+  $('settingsTheme').addEventListener('click', () => {
+    applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+    const st = $('settingsThemeState');
+    if (st) st.textContent = document.documentElement.dataset.theme === 'dark' ? 'Dark' : 'Light';
+  });
+  $('settingsCli').addEventListener('click', () => {
+    const im = $('installModal');
+    if (im) im.hidden = false;
+  });
+  $('settingsSignout').addEventListener('click', () => {
+    settingsModal.hidden = true;
+    const so = $('menuSignout');
+    if (so) so.click();
+    else {
+      try { fetch(`${API}/api/auth/logout`, { method: 'POST', headers: authHeaders() }); } catch { /* ignore */ }
+      try { localStorage.removeItem('ab.tok'); localStorage.removeItem('ab.user'); } catch { /* ignore */ }
+      location.href = 'index.html';
+    }
+  });
+}
 const menuSignout = $('menuSignout');
 if (menuSignout) menuSignout.addEventListener('click', async () => {
   toggleAcctMenu(false);
@@ -768,6 +823,8 @@ async function selectProject(pid) {
   snapModal.hidden = true;
   $('delBtn').hidden = !mine;
   $('renameBtn').hidden = !mine;
+  if (saveBtn) saveBtn.disabled = false;
+  setStatus('Ready');
   if (data.project.model && [...modelSel.options].some(o => o.value === data.project.model)) {
     modelSel.value = data.project.model;
   }
@@ -800,6 +857,8 @@ function resetToNew() {
   setPub(false);
   $('delBtn').hidden = true;
   $('renameBtn').hidden = true;
+  if (saveBtn) saveBtn.disabled = true;
+  setStatus('Ready');
   messagesEl.innerHTML = `
     <div class="empty">
       <div class="emptyMark"><span class="ms">auto_awesome</span></div>
@@ -1092,6 +1151,7 @@ async function send() {
   if (!message || busy) return;
   busy = true; sendBtn.disabled = true;
   promptBox.value = '';
+  setStatus('Building');
 
   const emptyHero = messagesEl.querySelector('.empty');
   if (emptyHero) emptyHero.remove();
@@ -1288,6 +1348,8 @@ async function send() {
     busy = false; sendBtn.disabled = false;
     promptBox.focus();
     loadProjects();
+    setStatus('Ready');
+    if (saveBtn && projectId) saveBtn.disabled = false;
   }
 }
 
@@ -1317,6 +1379,24 @@ async function doRename() {
 }
 $('renameBtn').addEventListener('click', doRename);
 projName.addEventListener('click', () => { if (!$('renameBtn').hidden) doRename(); });
+
+/* ---------- save (everything is autosaved server-side; this resyncs & confirms) ---------- */
+if (saveBtn) saveBtn.addEventListener('click', () => {
+  if (busy) return;
+  if (!projectId) {
+    notify('Save', 'Nothing to save yet — describe an app to start building.');
+    return;
+  }
+  refreshPreview(false);
+  setStatus('Saved');
+  if (saveLbl) saveLbl.textContent = 'Saved';
+  saveBtn.disabled = true;
+  setTimeout(() => {
+    if (saveLbl) saveLbl.textContent = 'Save';
+    saveBtn.disabled = false;
+    setStatus('Ready');
+  }, 1600);
+});
 
 /* ---------- publish / upload / delete ---------- */
 publishBtn.addEventListener('click', async () => {

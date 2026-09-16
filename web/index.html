@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
-<link rel="stylesheet" href="style.css?v=25">
+<link rel="stylesheet" href="style.css?v=27">
 </head>
 <body>
 
@@ -48,7 +48,13 @@
     <button id="keyBtn" class="navItem" title="Use your own Ollama API key"><span class="ms">key</span> <i id="keyLbl" style="font-style:normal">Own API key</i></button>
     <button id="giftBtn" class="navItem" title="Gift credits to another user"><span class="ms">redeem</span> Gift credits</button>
     <button id="installBtn" class="navItem" title="Install the aib terminal client on any device"><span class="ms">terminal</span> Install CLI</button>
+    <button id="settingsBtn" class="navItem" title="Appearance, account and more"><span class="ms">settings</span> Settings</button>
     <div id="metaBar"></div>
+    <div id="accountFoot" hidden>
+      <button id="footWho" title="Account menu" type="button"><span class="ms">person</span>
+        <span class="afBody"><b id="footName">Account</b><em>Signed in</em></span>
+      </button>
+    </div>
   </aside>
 
   <main id="main">
@@ -58,10 +64,14 @@
         <span class="headerBtns">
           <button id="menuBtn" title="Show history"><span class="ms">menu</span></button>
         </span>
-        <span id="projName" title="Click to rename">New app</span>
-        <span id="liveBadge" hidden></span>
-        <button id="renameBtn" class="iconBtn" title="Rename project" hidden><span class="ms">edit</span></button>
+        <span id="headerTitle">
+          <span id="projName" title="Click to rename">New app</span>
+          <span id="statusDot" class="status" title="Generation status"><i></i><em id="statusTxt">Ready</em></span>
+          <span id="liveBadge" hidden></span>
+          <button id="renameBtn" class="iconBtn" title="Rename project" hidden><span class="ms">edit</span></button>
+        </span>
         <span class="headerBtns">
+          <button id="saveBtn" class="iconBtn" title="Save project" disabled><span class="ms">save</span><i id="saveLbl" style="font-style:normal">Save</i></button>
           <button id="planBtn" class="iconBtn" title="Plan" hidden><span class="ms">checklist</span><em id="planCount"></em></button>
           <button id="publishBtn" title="Publish to the discovery feed" disabled><span class="ms">publish</span><i id="pubLbl" style="font-style:normal">Publish</i></button>
           <button id="delBtn" class="iconBtn" title="Delete project" hidden><span class="ms">delete</span></button>
@@ -242,6 +252,29 @@
   </div>
 </div>
 
+<!-- settings -->
+<div id="settingsModal" hidden>
+  <div class="teamCard settingsCard">
+    <header><span class="ms">settings</span> Settings
+      <button id="settingsClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+    </header>
+    <div class="settingsBody">
+      <button class="settingsRow" id="settingsTheme" type="button" title="Toggle dark / light mode">
+        <span class="ms">contrast</span>
+        <span class="srBody"><b>Appearance</b><em id="settingsThemeState">Light</em></span>
+      </button>
+      <button class="settingsRow" id="settingsCli" type="button" title="Install the aib terminal client">
+        <span class="ms">terminal</span>
+        <span class="srBody"><b>Terminal CLI</b><em>Install the aib client on your devices</em></span>
+      </button>
+      <button class="settingsRow danger" id="settingsSignout" type="button" title="Sign out">
+        <span class="ms">logout</span>
+        <span class="srBody"><b>Sign out</b><em id="settingsSignoutName">…</em></span>
+      </button>
+    </div>
+  </div>
+</div>
+
 <div id="authGate" hidden>
   <div class="authCard">
     <aside class="authBrand">
@@ -314,6 +347,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=26"></script>
+    <script src="app.js?v=27"></script>
 </body>
 </html>
