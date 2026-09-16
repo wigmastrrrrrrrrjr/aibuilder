@@ -27,8 +27,19 @@ Rules:
 - Do not explain or narrate. Match the app's existing style and conventions.
 - The file must be complete and self-contained so it works on its own. abide by these or you will be terminated by the host AI`;
 
-const OR_SUB_MODEL = 'z-ai/glm-5.2:free';
+// Sub-agents only use the free OpenRouter models (all rate-limited). If one
+// answers with 429 we skip it and try the next until one responds.
+const OR_SUB_MODELS = [
+  'z-ai/glm-5.2:free',
+  'z-ai/glm-4.5-flash:free',
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'qwen/qwen3-32b:free',
+  'deepseek/deepseek-r1-distill-qwen-32b:free',
+  'moonshotai/kimi-k2-instruct:free',
+  'openrouter/auto:free',
+];
 const active = { mistral: 0, ollama: 0, local: 0, openrouter: 0 };
+let subRound = 0;
 
 export const chat = new Hono();
 
@@ -369,7 +380,8 @@ chat.post('/', async (c) => {
 
       // Spin off a parallel sub-agent: a focused single-file generator that
       // runs concurrently with the main response and merges its FILE output in.
-      // Sub-agents always run through OpenRouter on their own sub-model.
+      // Sub-agents always run through OpenRouter on free rate-limited models;
+      // if a model responds 429 (rate-limited) we skip it and try another.
       const spawnSubAgent = async (subPath, task) => {
         if (!orKey) throw new Error('sub-agents need OpenRouter configured (OPENROUTER_API_KEY)');
         const msg = [
@@ -378,58 +390,63 @@ chat.post('/', async (c) => {
             `Task from the main engineer:\n${task}\n\n` +
             `Return ONLY a single <<<FILE:${subPath}>>> ... <<<END>>> block.` },
         ];
-        const r = await fetch(OPENROUTER_URL, {
-          method: 'POST',
-          signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
-          headers: {
-            Authorization: `Bearer ${orKey}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://github.com/wigmastrrrrrrrrjr/aibuilder',
-            'X-Title': 'aibuilder',
-          },
-          body: JSON.stringify({ model: OR_SUB_MODEL, messages: msg, stream: true }),
-        });
-        if (!r.ok) throw new Error(`openrouter ${r.status}`);
         const sp = new FileStreamer();
         const evs = [];
-        const reader = r.body.getReader();
         const d = new TextDecoder();
         let lb = '';
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          lb += d.decode(value, { stream: true });
-          let nl;
-          while ((nl = lb.indexOf('\n')) !== -1) {
-            const line = lb.slice(0, nl).trim();
-            lb = lb.slice(nl + 1);
-            if (!line || line === 'data: [DONE]') continue;
-            let j;
-            try {
-              const payload = line.startsWith('data: ') ? line.slice(6) : line;
-              j = JSON.parse(payload);
-            } catch { continue; }
-            const tok = j?.choices?.[0]?.delta?.content ?? '';
-            if (!tok) continue;
-            for (const ev of sp.feed(tok)) {
-              if (ev.type === 'file' && ev.path) {
-                ev.path = subPath;
-                evs.push(ev);
-              } else if (ev.type === 'file') {
-                evs.push(ev);
+        for (let i = 0; i < OR_SUB_MODELS.length; i++) {
+          const subModel = OR_SUB_MODELS[(subRound++ + i) % OR_SUB_MODELS.length];
+          const r = await fetch(OPENROUTER_URL, {
+            method: 'POST',
+            signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+            headers: {
+              Authorization: `Bearer ${orKey}`,
+              'Content-Type': 'application/json',
+              'HTTP-Referer': 'https://github.com/wigmastrrrrrrrrjr/aibuilder',
+              'X-Title': 'aibuilder',
+            },
+            body: JSON.stringify({ model: subModel, messages: msg, stream: true }),
+          });
+          if (r.status === 429) continue; // rate-limited — try a different model
+          if (!r.ok) throw new Error(`openrouter ${r.status} on ${subModel}`);
+          const reader = r.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            lb += d.decode(value, { stream: true });
+            let nl;
+            while ((nl = lb.indexOf('\n')) !== -1) {
+              const line = lb.slice(0, nl).trim();
+              lb = lb.slice(nl + 1);
+              if (!line || line === 'data: [DONE]') continue;
+              let j;
+              try {
+                const payload = line.startsWith('data: ') ? line.slice(6) : line;
+                j = JSON.parse(payload);
+              } catch { continue; }
+              const tok = j?.choices?.[0]?.delta?.content ?? '';
+              if (!tok) continue;
+              for (const ev of sp.feed(tok)) {
+                if (ev.type === 'file' && ev.path) {
+                  ev.path = subPath;
+                  evs.push(ev);
+                } else if (ev.type === 'file') {
+                  evs.push(ev);
+                }
               }
             }
           }
-        }
-        for (const ev of sp.flush()) {
-          if (ev.type === 'file' && ev.path) {
-            ev.path = subPath;
-            evs.push(ev);
-          } else if (ev.type === 'file') {
-            evs.push(ev);
+          for (const ev of sp.flush()) {
+            if (ev.type === 'file' && ev.path) {
+              ev.path = subPath;
+              evs.push(ev);
+            } else if (ev.type === 'file') {
+              evs.push(ev);
+            }
           }
+          return { evs, provider: 'openrouter', model: subModel };
         }
-        return { evs, provider: 'openrouter' };
+        throw new Error('all sub-agent models are rate-limited right now — skipping this sub-agent');
       };
 
       // One "round" = one model generation plus its post-build checks. If the
@@ -520,7 +537,7 @@ chat.post('/', async (c) => {
               }
               for (const ev of res.value.evs) {
                 await handleGen(ev);
-                send({ type: 'subagent', path: ev.path, model, provider: res.value.provider });
+                send({ type: 'subagent', path: ev.path, model, subModel: res.value.model, provider: res.value.provider });
               }
             }
           }
