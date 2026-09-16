@@ -27,9 +27,13 @@ binding = "ASSETS"
 # are wired (see wrangler.chat.toml / wrangler.preview.toml). Until they are
 # deployed, the router falls back to handling everything locally — exactly the
 # old single-worker behaviour — so an empty binding never breaks deploys.
-[services]
-CHAT_WORKER = { binding = "CHAT_WORKER", service = "aibuilderapi-chat" }
-PREVIEW_WORKER = { binding = "PREVIEW_WORKER", service = "aibuilderapi-preview" }
+[[services]]
+binding = "CHAT_WORKER"
+service = "aibuilderapi-chat"
+
+[[services]]
+binding = "PREVIEW_WORKER"
+service = "aibuilderapi-preview"
 
 [vars]
 OLLAMA_MODEL = "gemma4:31b"
