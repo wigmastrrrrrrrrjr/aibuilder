@@ -1,6 +1,8 @@
-# Dedicated chat worker — serves /api/chat (main + workspace AI generation).
-# Shares the live D1 database and env with the main worker; the public router
-# offloads /api/chat here via the [services] binding in wrangler.toml.
+# Dedicated builder/API worker — mirrors the whole app and serves the heavy
+# surface the router offloads: /api/chat (main + workspace AI generation),
+# /api/baas (BaaS auto-save), /api/terminal (AI shell), /api/v2, /api/projects
+# (incl. live/presence/snapshots/upload) and /api/models.
+# Shares the same D1 database and env as the main worker.
 #
 # Deploy:  npm run deploy:chat
 # The chat worker reads the same secrets as the main worker. Mirror them once:
