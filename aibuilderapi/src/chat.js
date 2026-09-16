@@ -765,7 +765,7 @@ async function workspaceChat(c, body, message, user) {
           // otherwise relay so the client can offer to run it locally.
           const command = String(ev.command).slice(0, 2000);
           if (terminalEnabled()) {
-            const res = await execCommand(pid, command);
+            const res = await execCommand(String(body.pid || '').slice(0, 40), command);
             send({ type: 'cmd', command, enabled: true, ok: res.ok, code: res.code, output: res.output, error: res.error });
           } else {
             send({ type: 'cmd', command, enabled: false });

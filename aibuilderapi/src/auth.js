@@ -115,8 +115,15 @@ async function ipSecret() {
 }
 
 export function clientIp(c) {
+  // Prefer the header set by the trusted edge (Cloudflare), then the reverse
+  // proxy. x-forwarded-for is client-controllable when passed straight through,
+  // so it is only a last-resort fallback (never the first entry the client sent).
+  const cf = c.req.header('cf-connecting-ip');
+  if (cf && cf.trim()) return cf.trim();
+  const real = c.req.header('x-real-ip');
+  if (real && real.trim()) return real.trim();
   const xff = c.req.header('x-forwarded-for') || '';
-  return xff.split(',')[0].trim() || c.req.header('x-real-ip') || '';
+  return (xff.split(',')[0] || '').trim();
 }
 
 export async function ipTag(c) {

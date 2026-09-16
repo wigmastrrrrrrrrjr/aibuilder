@@ -148,8 +148,8 @@ function renderAuth() {
       localStorage.setItem('ab.tok', d.token);
       localStorage.setItem('ab.user', d.username);
       location.reload();
-    } catch (err) {
-      err.textContent = err.message || String(err);
+    } catch (loginErr) {
+      err.textContent = loginErr.message || String(loginErr);
     }
   });
   card.append(note, form, err);
@@ -173,7 +173,7 @@ async function loadCats() {
 }
 
 /* ---------- threads ---------- */
-let curCat = cats.length ? cats[0].id : 'general';
+let curCat = null;
 let before = null;
 let more = false;
 

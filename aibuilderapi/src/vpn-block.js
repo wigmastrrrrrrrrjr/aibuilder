@@ -3,6 +3,7 @@
 // Not 100% accurate (residential VPNs slip through) but catches the vast majority.
 
 import { resolveSession } from './session-cache.js';
+import { clientIp } from './auth.js';
 
 const CACHE_TTL = 3600000; // 1 hour
 const cache = new Map();
@@ -95,11 +96,7 @@ export function blockDatacenterIps() {
     // Ai_Dev bypasses VPN block
     if (await isBypassUser(c)) return next();
 
-    const ip = (
-      c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ||
-      c.req.header('x-real-ip') ||
-      ''
-    );
+    const ip = clientIp(c);
 
     if (!ip || !ip.includes('.')) return next(); // can't check, allow
 

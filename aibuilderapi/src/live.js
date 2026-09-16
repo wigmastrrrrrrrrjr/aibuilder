@@ -39,12 +39,18 @@ async function broadcast(roomKey, payload) {
   } catch { /* best effort */ }
 }
 
-async function identity(c, evt) {
+async function identity(c) {
   const u = await getUser(c);
   if (u) return u.name;
-  const who = (evt && (evt._user || evt.user)) || '';
-  if (typeof who === 'string' && who) return who.slice(0, 64);
-  return `anon #${crypto.randomUUID().slice(0, 8)}`;
+  // Never trust a client-supplied username on unauthenticated requests —
+  // anonymous joiners are shown as anon #xxxx so nobody can impersonate.
+  let anon = 'anon #';
+  if (crypto && crypto.randomUUID) {
+    anon += crypto.randomUUID().slice(0, 8);
+  } else {
+    anon += Math.random().toString(36).slice(2, 10);
+  }
+  return anon;
 }
 
 // ---- Multiplayer rooms ------------------------------------------------------
@@ -56,7 +62,7 @@ live.post('/api/projects/:pid/live/:room/push', async (c) => {
   const who = await identity(c, evt);
   const data = {
     type: 'message',
-    user: evt._user || evt.user || who,
+    user: who,
     data: evt.data !== undefined ? evt.data : evt,
     ts: Date.now(),
   };

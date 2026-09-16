@@ -34,17 +34,19 @@ function setStatus(text) {
   if (dot) dot.dataset.state = text;
 }
 const saveBtn = $('saveBtn'), saveLbl = $('saveLbl');
-let effort = 2;
+let effort = Math.min(4, Math.max(1, Number(localStorage.getItem('ab.effort')) || 2));
 const EFFORT_HINT = {
   1: 'Fast — free',
   2: 'Standard — free',
   3: 'Deep — 2× credits, works longer',
   4: 'Deepest — 4× credits, works hardest',
 };
+effortSel.querySelectorAll('button[data-effort]').forEach((b) => b.classList.toggle('on', Number(b.dataset.effort) === effort));
 effortSel.addEventListener('click', (e) => {
   const b = e.target.closest('button[data-effort]');
   if (!b) return;
   effort = Number(b.dataset.effort);
+  try { localStorage.setItem('ab.effort', String(effort)); } catch { /* ignore */ }
   effortSel.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
   const cur = currentModel();
   const label = EFFORT_HINT[effort] || '';
@@ -218,6 +220,19 @@ async function doAuth(e) {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ username, password, dob }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
+      finishAndEnter(d, () => location.reload());
+      return;
+    }
+
+    if (authMode === 'reset') {
+      if (password.length < 6) throw new Error('password must be at least 6 characters');
+      const r = await fetch(`${API}/api/auth/reset`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username, password }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
@@ -728,6 +743,7 @@ $('teamClose').addEventListener('click', () => { teamModal.hidden = true; });
 teamModal.addEventListener('click', (e) => { if (e.target === teamModal) teamModal.hidden = true; });
 $('teamsBtn').addEventListener('click', () => {
   if (!sessTok()) { alert('Sign in to use teams.'); return; }
+  $('teamsBtn').classList.add('active');
   openTeams();
 });
 
@@ -870,12 +886,27 @@ function resetToNew() {
         <div class="step"><div class="n">02</div><div class="t">Iterate</div><div class="s">Refine with follow-up prompts in the same thread.</div></div>
         <div class="step"><div class="n">03</div><div class="t">Publish</div><div class="s">Ship it to the discovery feed in one click.</div></div>
       </div>
+      <div class="emptyQuick">
+        <span class="eqLabel">Quick starts</span>
+        <button class="qt" data-prompt="Build a to-do list app. Users can add, edit, check off and delete tasks, and it saves everything to localStorage so it survives refresh. Make it look polished with a nice card layout, dark-mode friendly and fully responsive.">✓ To-do list</button>
+        <button class="qt" data-prompt="Build a modern one-page landing page for a fictional startup. Include a hero with a headline and call-to-action, a features grid, a pricing section with three tiers, a testimonials row and a footer. Use clean gradients and make it fully responsive.">🚀 Landing page</button>
+        <button class="qt" data-prompt="Build a billing dashboard. Show a KPI header (revenue, MRR, churn, active customers), a line chart of revenue over the last 12 months, a recent transactions table, and export the visible table to CSV. Style it like a professional SaaS admin.">📊 Billing dashboard</button>
+        <button class="qt" data-prompt="Build a small quiz game. Show one question at a time with four options, highlight correct/wrong answers, track a score, and show a results screen at the end with a play-again button. Add a clean modern theme.">🧠 Quiz game</button>
+      </div>
     </div>`;
   setChips([]);
   frame.src = 'about:blank';
   renderPlan([]);
   watchProject(null);
   promptBox.focus();
+  const quickStart = () => {
+    messagesEl.querySelectorAll('.emptyQuick .qt').forEach((b) => b.addEventListener('click', () => {
+      promptBox.value = b.dataset.prompt || '';
+      promptBox.focus();
+      send();
+    }));
+  };
+  quickStart();
 }
 
 /* ---------- plan sidebar ---------- */
@@ -895,14 +926,16 @@ function renderPlan(items) {
   $('planCount').textContent = items && items.length
     ? `${items.filter(i => i.done).length}/${items.length}` : '';
   if (!items || !items.length) { pane.hidden = true; return; }
-  // auto-open on desktop once a plan exists
-  if (window.innerWidth > 1100) pane.hidden = false;
+  // auto-open on desktop once a plan exists (respect manual close during streaming)
+  if (window.innerWidth > 1100 && !planDismissedByUser) pane.hidden = false;
 }
+let planDismissedByUser = false;
 $('planBtn').addEventListener('click', () => {
   const pane = $('planPane');
+  planDismissedByUser = !pane.hidden;
   pane.hidden = !pane.hidden;
 });
-$('planClose').addEventListener('click', () => { $('planPane').hidden = true; });
+$('planClose').addEventListener('click', () => { planDismissedByUser = true; $('planPane').hidden = true; });
 
 /* ---------- error notifications tray ---------- */
 const notifs = [];
@@ -981,9 +1014,9 @@ function watchProject(pid) {
 
 /* ---------- teambuild: live presence (who is building now) ---------- */
 let liveTimer = null;
+let liveInterval = null;
 async function refreshLive(pid) {
   const badge = $('liveBadge');
-  clearTimeout(liveTimer);
   if (!pid || !sessTok()) { badge.hidden = true; return; }
   try {
     const r = await fetch(`${API}/api/projects/${pid}/presence`, { headers: authHeaders() });
@@ -1010,6 +1043,7 @@ function stopCursors() {
     cursorState = null;
     const l = $('cursorLayer'); if (l) l.innerHTML = '';
   }
+  clearInterval(liveInterval);
   clearInterval(liveTimer);
 }
 function startCursors(pid) {
@@ -1046,7 +1080,7 @@ function startCursors(pid) {
     if (status === 'SUBSCRIBED') ch.track({ name: sessName() });
   });
   cursorState = { ch, layer };
-  liveTimer = setInterval(() => refreshLive(pid), 20000);
+  liveInterval = setInterval(() => refreshLive(pid), 20000);
   refreshLive(pid);
 }
 document.addEventListener('mousemove', (() => {
@@ -1121,9 +1155,10 @@ function makeAiMsg(model) {
       prose.innerHTML = mdHtml(this.full);
       scrollBottom();
     },
-    card(html) {
+    card(kind, html) {
+      if (html === undefined) { html = kind; kind = ''; }
       const c = document.createElement('div');
-      c.className = 'actCard';
+      c.className = 'actCard' + (kind ? ' ' + kind : '');
       c.innerHTML = html;
       acts.appendChild(c);
       scrollBottom();
@@ -1223,7 +1258,11 @@ async function send() {
         let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
 
         if (ev.type === 'meta') {
-          if (!projectId) { projectId = ev.projectId; canEdit = true; }
+          if (!projectId) {
+            projectId = ev.projectId; canEdit = true;
+            publishBtn.disabled = false;
+            if (saveBtn) saveBtn.disabled = false;
+          }
           projName.textContent = message.slice(0, 60);
           aiMsg = makeAiMsg(ev.model);
           activityText.textContent = `${ev.model} is working…`;
@@ -1239,37 +1278,37 @@ async function send() {
           }
         } else if (ev.type === 'file') {
           chipFiles.push(ev.path);
-          setChips(chipFiles, chipFiles);
+          setChips(chipFiles, [ev.path]);
           flashChip(ev.path);
-          if (aiMsg) aiMsg.card(actCards.w(ev.path));
+          if (aiMsg) aiMsg.card('', actCards.w(ev.path));
           activityText.textContent = `Generated ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'edit') {
           chipFiles.push(ev.path);
-          setChips(chipFiles, chipFiles);
+          setChips(chipFiles, [ev.path]);
           flashChip(ev.path);
-          if (aiMsg) aiMsg.card(actCards.e(ev.path));
+          if (aiMsg) aiMsg.card('', actCards.e(ev.path));
           activityText.textContent = `Updated ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'delete') {
           chipFiles = chipFiles.filter((p) => p !== ev.path);
           setChips(chipFiles);
-          if (aiMsg) aiMsg.card(actCards.d(ev.path));
+          if (aiMsg) aiMsg.card('d', actCards.d(ev.path));
           activityText.textContent = `Removed ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'rename') {
-          if (aiMsg) aiMsg.card(actCards.r(ev.from, ev.to, ev.refs || 0));
+          if (aiMsg) aiMsg.card('', actCards.r(ev.from, ev.to, ev.refs || 0));
           chipFiles = chipFiles.map((p) => (p === ev.from ? ev.to : p));
           if (!chipFiles.includes(ev.to)) chipFiles.push(ev.to);
-          setChips(chipFiles, chipFiles);
+          setChips(chipFiles, [ev.to]);
           activityText.textContent = `Renamed ${ev.from} → ${ev.to}`;
           schedulePreview();
         } else if (ev.type === 'asset') {
-          if (aiMsg) aiMsg.card(actCards.a(ev.path));
+          if (aiMsg) aiMsg.card('a', actCards.a(ev.path));
           activityText.textContent = `Saved asset ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'seed') {
-          if (aiMsg) aiMsg.card(actCards.seed(ev.collection, ev.count || 0));
+          if (aiMsg) aiMsg.card('seed', actCards.seed(ev.collection, ev.count || 0));
           activityText.textContent = `Seeded ${ev.collection} (${ev.count || 0} rows)`;
           schedulePreview();
         } else if (ev.type === 'cmd') {
@@ -1278,10 +1317,10 @@ async function send() {
             if (ev.output) window.__termLine(ev.output.replace(/\s+$/, ''), 'out');
             window.__termLine(`[exit ${ev.code == null ? '-' : ev.code}] ${ev.error ? ev.error : 'ok'}`, 'meta');
           }
-          if (aiMsg && ev.ok) aiMsg.card(actCards.term(ev.command));
+          if (aiMsg && ev.ok) aiMsg.card('run', actCards.term(ev.command));
         } else if (ev.type === 'plan') {
           renderPlan(ev.items || []);
-          if (aiMsg) aiMsg.card(actCards.plan());
+          if (aiMsg) aiMsg.card('', actCards.plan());
         } else if (ev.type === 'name') {
           projName.textContent = ev.name;
           document.title = `${ev.name} — aibuilder`;
@@ -1291,9 +1330,9 @@ async function send() {
           activityText.textContent = `Delegating ${ev.path} to a sub-agent…`;
         } else if (ev.type === 'subagent') {
           chipFiles.push(ev.path);
-          setChips(chipFiles, chipFiles);
+          setChips(chipFiles, [ev.path]);
           flashChip(ev.path);
-          if (aiMsg) aiMsg.card(actCards.sub(ev.path));
+          if (aiMsg) aiMsg.card('', actCards.sub(ev.path));
           activityText.textContent = `Sub-agent completed ${ev.path}`;
           schedulePreview();
         } else if (ev.type === 'refactor') {
@@ -1302,7 +1341,7 @@ async function send() {
           if (aiMsg) aiMsg.setStatus('restructuring…');
         } else if (ev.type === 'warn') {
           notify('Generator warning', ev.message);
-          if (aiMsg) aiMsg.card(actCards.warn(ev.message || ''));
+          if (aiMsg) aiMsg.card('', actCards.warn(ev.message || ''));
         } else if (ev.type === 'error') {
           if (aiMsg) aiMsg.setStatus('error');
           addAiBubble(`⚠ ${ev.message}`);
@@ -1321,7 +1360,7 @@ async function send() {
             if (ev.renamed?.length) bits.push(`${ev.renamed.length} renamed`);
             if (ev.seeds?.length) bits.push(`${ev.seeds.length} seeded`);
             if (ev.assets?.length) bits.push(`${ev.assets.length} asset${ev.assets.length === 1 ? '' : 's'}`);
-            if (bits.length) aiMsg.card(actCards.summary(bits.join(' · ')));
+            if (bits.length) aiMsg.card('', actCards.summary(bits.join(' · ')));
           } else {
             addAiBubble((displayText + filter.drain()).trim());
           }
@@ -1649,8 +1688,8 @@ async function renderRaw() {
 async function renderDiff() {
   if (!fpSelected) { showFpEmpty('Select a previous version to see the diff against the current file.'); return; }
   if (fpSelected.seq === fpCurrentSeq) { showFpEmpty('This is the current version — nothing has changed.'); return; }
-  const before = await versionContent(fpCurrentSeq);
-  const after = await versionContent(fpSelected.seq);
+  const before = await versionContent(fpSelected.seq);
+  const after = await versionContent(fpCurrentSeq);
   fpCode.innerHTML = '';
   const pre = document.createElement('pre');
   pre.className = 'diffView';
@@ -1762,7 +1801,7 @@ async function restoreSnapshot(s) {
 
 /* ---------- wire up ---------- */
 renderTemplates();
-fpClose.onclick = () => { fpPane.hidden = true; };
+$('fpClose').onclick = () => { fpPane.hidden = true; };
 fpRawBtn.onclick = async () => { fpRawBtn.classList.add('on'); fpDiffBtn.classList.remove('on'); await renderRaw(); };
 fpDiffBtn.onclick = async () => { fpDiffBtn.classList.add('on'); fpRawBtn.classList.remove('on'); await renderDiff(); };
 fpRestore.onclick = restoreVersion;
@@ -1779,6 +1818,28 @@ modelSel.addEventListener('change', () => localStorage.setItem('ab.model', model
 $('newBtn').onclick = () => { if (!busy) resetToNew(); };
 $('refreshBtn').onclick = () => refreshPreview(true);
 $('openBtn').onclick = () => projectId && window.open(`${API}/preview/${projectId}/`, '_blank');
+
+/* ---------- device preview switcher ---------- */
+function setDevice(d) {
+  const valid = ['desktop', 'tablet', 'mobile'];
+  if (!valid.includes(d)) d = 'desktop';
+  localStorage.setItem('ab.dev', d);
+  const stage = $('previewStage');
+  stage.classList.remove('dev-desktop', 'dev-tablet', 'dev-mobile');
+  stage.classList.add('dev-' + d);
+  document.querySelectorAll('#devSwitcher button').forEach((b) => b.classList.toggle('on', b.dataset.dev === d));
+}
+document.querySelectorAll('#devSwitcher button').forEach((b) => {
+  b.onclick = () => setDevice(b.dataset.dev);
+});
+setDevice(localStorage.getItem('ab.dev') || 'desktop');
+
+/* ---------- download project files ---------- */
+$('dlBtn').onclick = async () => {
+  if (!projectId) { notify('No project', 'Open or build a project first.'); return; }
+  window.open(`${API}/api/projects/${projectId}/export?download=1`, '_blank');
+};
+
 promptBox.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });

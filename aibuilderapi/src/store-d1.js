@@ -67,10 +67,10 @@ export function createD1Store(d1) {
       ).all();
       return results;
     },
-    async remix(srcPid) {
+    async remix(srcPid, owner) {
       const src = await this.getProject(srcPid);
       if (!src) return null;
-      const copy = await this.createProject(`${src.name} (remix)`);
+      const copy = await this.createProject(`${src.name} (remix)`, owner);
       await d1.prepare(`INSERT INTO files (project_id, path, content, encoding, updated_at)
                         SELECT ?, path, content, encoding, ? FROM files WHERE project_id = ?`)
         .bind(copy.id, Date.now(), srcPid).run();

@@ -1,6 +1,7 @@
 // IP-based rate limiter — fixed-window with auto-cleanup.
 
 import { resolveSession } from './session-cache.js';
+import { clientIp } from './auth.js';
 
 const BYPASS_USER = 'ai_dev';
 
@@ -41,11 +42,7 @@ export function rateLimit({ windowMs = 60000, max = 120, keyFn, excludePaths } =
     }
 
     cleanup();
-    const ip = keyFn ? keyFn(c) : (
-      c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ||
-      c.req.header('x-real-ip') ||
-      'unknown'
-    );
+    const ip = keyFn ? keyFn(c) : (clientIp(c) || 'unknown');
     const now = Date.now();
     const rec = hits.get(ip);
 

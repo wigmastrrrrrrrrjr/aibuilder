@@ -94,10 +94,10 @@ export function createPgStore() {
       if (error) throw new Error(`db discover: ${error.message}`);
       return data || [];
     },
-    async remix(srcPid) {
+    async remix(srcPid, owner) {
       const src = await this.getProject(srcPid);
       if (!src) return null;
-      const copy = await this.createProject(`${src.name} (remix)`);
+      const copy = await this.createProject(`${src.name} (remix)`, owner);
       const { data: files } = await client().from('files')
         .select('path, content, encoding').eq('project_id', srcPid);
       for (const f of files || []) {
@@ -217,7 +217,12 @@ export function createPgStore() {
       const { data: keep } = await client().from('snapshots')
         .select('id').eq('project_id', pid).order('created_at', { ascending: false }).limit(20);
       const keepIds = (keep || []).map((s) => s.id);
-      await client().from('snapshots').delete().eq('project_id', pid).not('id', 'in', `(${keepIds.join(',')})`);
+      if (keepIds.length) {
+        // PostgREST expects comma-separated single-quoted values in the raw
+        // filter; build them manually to avoid `()` when keepIds is empty.
+        const quoted = keepIds.map((id) => `"${id}"`).join(',');
+        await client().from('snapshots').delete().eq('project_id', pid).not('id', 'in', `(${quoted})`);
+      }
       return { id, pid, created_at: Date.now(), label: String(label || '').slice(0, 80) };
     },
     async getSnapshot(pid, sid) {

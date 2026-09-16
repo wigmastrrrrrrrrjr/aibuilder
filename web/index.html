@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
-<link rel="stylesheet" href="style.css?v=27">
+<link rel="stylesheet" href="style.css?v=28">
 </head>
 <body>
 
@@ -89,6 +89,13 @@
             <div class="step"><div class="n">02</div><div class="t">Iterate</div><div class="s">Refine with follow-up prompts in the same thread.</div></div>
             <div class="step"><div class="n">03</div><div class="t">Publish</div><div class="s">Ship it to the discovery feed in one click.</div></div>
           </div>
+          <div class="emptyQuick">
+            <span class="eqLabel">Quick starts</span>
+            <button class="qt" data-prompt="Build a to-do list app. Users can add, edit, check off and delete tasks, and it saves everything to localStorage so it survives refresh. Make it look polished with a nice card layout, dark-mode friendly and fully responsive.">✓ To-do list</button>
+            <button class="qt" data-prompt="Build a modern one-page landing page for a fictional startup. Include a hero with a headline and call-to-action, a features grid, a pricing section with three tiers, a testimonials row and a footer. Use clean gradients and make it fully responsive.">🚀 Landing page</button>
+            <button class="qt" data-prompt="Build a billing dashboard. Show a KPI header (revenue, MRR, churn, active customers), a line chart of revenue over the last 12 months, a recent transactions table, and export the visible table to CSV. Style it like a professional SaaS admin.">📊 Billing dashboard</button>
+            <button class="qt" data-prompt="Build a small quiz game. Show one question at a time with four options, highlight correct/wrong answers, track a score, and show a results screen at the end with a play-again button. Add a clean modern theme.">🧠 Quiz game</button>
+          </div>
         </div>
       </div>
       <div id="activity" hidden><span id="activityText"></span><pre id="rawStream"></pre></div>
@@ -104,7 +111,7 @@
             <button type="button" data-effort="3" title="Deep — 2× credits, works longer">Deep</button>
             <button type="button" data-effort="4" title="Deepest — 4× credits, works hardest">Deepest</button>
           </div>
-          <span class="promptHint">Enter to send · Shift+Enter for a new line</span>
+          <span class="promptHint">Enter or Ctrl+Enter to send · Shift+Enter for a new line</span>
         </div>
         <div id="composerMain">
           <textarea id="promptBox" rows="3" placeholder="Describe the app you want to build…"></textarea>
@@ -117,14 +124,22 @@
       <header id="previewHeader">
         <div id="fileChips"></div>
         <div class="headerBtns">
+          <div id="devSwitcher" role="group" aria-label="Preview device" title="Preview size">
+            <button id="devDesktop" class="iconBtn" data-dev="desktop" title="Desktop preview"><span class="ms">desktop_windows</span></button>
+            <button id="devTablet" class="iconBtn" data-dev="tablet" title="Tablet preview"><span class="ms">tablet_mac</span></button>
+            <button id="devMobile" class="iconBtn" data-dev="mobile" title="Mobile preview"><span class="ms">phone_iphone</span></button>
+          </div>
           <button id="termBtn" class="iconBtn" title="Cloud terminal (the AI's command workspace)"><span class="ms">terminal</span></button>
           <button id="snapBtn" class="iconBtn" title="Project snapshots — roll back to any prior state"><span class="ms">history</span></button>
           <button id="refreshBtn" class="iconBtn" title="Reload preview"><span class="ms">refresh</span></button>
+          <button id="dlBtn" class="iconBtn" title="Download all project files (zip)"><span class="ms">download</span></button>
           <button id="openBtn" class="iconBtn" title="Open in new tab"><span class="ms">open_in_new</span></button>
         </div>
       </header>
-      <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
-              src="about:blank"></iframe>
+      <div id="previewStage">
+        <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
+                src="about:blank"></iframe>
+      </div>
 
       <!-- plan sidebar: docked rail on desktop, slide-over on mobile -->
       <aside id="planPane" hidden>
@@ -347,6 +362,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=27"></script>
+    <script src="app.js?v=28"></script>
 </body>
 </html>

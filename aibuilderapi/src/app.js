@@ -314,6 +314,16 @@ app.post('/api/credits/gift', requireUser, async (c) => {
 // the WebSim side collects payment / issues the grant, then calls this with
 // the user's own aibuilder session token so only a valid session gets them).
 app.post('/api/credits/grant', requireUser, async (c) => {
+  // Operator-only top-up. Only callers holding the shared grant secret may
+  // mint credits; without it the endpoint refuses (fail closed) so a signed-in
+  // user cannot self-mint unlimited credits.
+  const secret = getVar('CREDITS_GRANT_SECRET');
+  const presented = String(
+    c.req.header('x-credits-secret') || c.req.query('secret') || ''
+  );
+  if (!secret || presented !== secret || presented.length < 8) {
+    return c.json({ error: 'grant requires the operator credit secret' }, 403);
+  }
   const user = c.get('user');
   const body = await c.req.json().catch(() => ({}));
   let units;
@@ -397,11 +407,17 @@ app.get('/api/projects/:pid', async (c) => {
 app.get('/api/projects/:pid/export', async (c) => {
   const project = await store.getProject(c.req.param('pid'));
   if (!project) return c.json({ error: 'not found' }, 404);
-  return c.json({
+  const payload = {
     name: project.name,
     updated_at: project.updated_at || 0,
     files: await store.listFilesWithContent(project.id),
-  });
+  };
+  if (c.req.query('download') === '1') {
+    const filename = `${project.name.replace(/[^a-z0-9_\-]+/gi, '_') || 'project'}.json`;
+    c.header('Content-Disposition', `attachment; filename="${filename}"`);
+    c.header('Content-Type', 'application/octet-stream');
+  }
+  return c.json(payload);
 });
 
 app.delete('/api/projects/:pid', requireUser, async (c) => {

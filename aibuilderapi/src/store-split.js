@@ -131,7 +131,7 @@ export function createSplitStore(d1) {
       const b = await d1s.discover();
       return mergeById(a, b, 'slug').sort((x, y) => y.created_at - x.created_at);
     },
-    async remix(srcPid) { await ensureProj(srcPid); return pg.remix(srcPid); },
+    async remix(srcPid, owner) { await ensureProj(srcPid); return pg.remix(srcPid, owner); },
 
     // ---- files --------------------------------------------------------------
     async saveFile(pid, fpath, content, encoding) { await ensureProj(pid); return pg.saveFile(pid, fpath, content, encoding); },
