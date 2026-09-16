@@ -9,6 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 import { effortLevel, EFFORT, modelCost, creditsToUnits, unitsToCredits } from './models.js';
 import { personalBalance } from './credits.js';
 import { execCommand, terminalEnabled } from './terminal.js';
+import { pageTest, reportToText } from './smoketest.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
@@ -31,6 +32,38 @@ const OR_SUB_MODEL = 'z-ai/glm-5.2:free';
 const PROVIDER_CAPS = { mistral: 4, ollama: 4, local: 4, openrouter: 4 };
 const active = { mistral: 0, ollama: 0, local: 0, openrouter: 0 };
 let subRound = 0;
+
+// Cloudflare drops streaming responses when the request runs too long or the
+// worker's CPU budget is exceeded by emitting thousands of tiny events. We
+// coalesce tokens/thinking into a handful of larger frames (pacing) and hard
+// cap the whole generation well under the platform's wall-clock ceiling so a
+// long run ends gracefully instead of being cut off mid-stream.
+const MAX_RUN_MS = 490000;        // 490s — leaves headroom under CF's 550s cap
+const PACER_BURST_MS = 60;        // flush accumulated output at least this often
+const PACER_CHUNK_CHARS = 200;    // flush a frame once this much text is buffered
+const PACER_THINK_MS = 1500;      // thinking events throttle to ~this cadence
+
+function makePacer(send) {
+  let text = '';
+  let timer = null;
+  let lastThink = 0;
+  const flush = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (text) { send({ type: 'token', v: text }); text = ''; }
+  };
+  return {
+    token(v) {
+      text += v;
+      if (text.length >= PACER_CHUNK_CHARS) flush();
+      else if (!timer) timer = setTimeout(flush, PACER_BURST_MS);
+    },
+    think(v) {
+      const now = Date.now();
+      if (now - lastThink >= PACER_THINK_MS) { lastThink = now; send({ type: 'think', v }); }
+    },
+    flush() { flush(); },
+  };
+}
 
 export const chat = new Hono();
 
@@ -198,6 +231,11 @@ chat.post('/', async (c) => {
       const assets = [];
       const seeds = [];
       const subAgentTasks = [];
+      const diag = [];          // operations that failed to apply — fed back to the model next turn
+      const testReports = [];   // page-test reports — appended to the recorded message
+      const pacer = makePacer(send);
+      const startedAt = Date.now();
+      let capped = false;
       let ops = 0;
       let refactorSent = false;
       let inBatch = false;
@@ -215,6 +253,11 @@ chat.post('/', async (c) => {
         if (ev.type === 'endbatch') { inBatch = false; await flushBatch(); return; }
         if (ev.batch && inBatch) { batchOps.push(ev); return; }
         if (ev.type === 'file' && ev.path) {
+          if (ev.truncated && capped) {
+            send({ type: 'warn', message: `file ${ev.path} was cut off mid-write and was NOT saved` });
+            diag.push(`file ${ev.path} was cut off mid-write and was not saved`);
+            return;
+          }
           await store.saveFile(pid, ev.path, ev.content);
           written.push(ev.path);
           ops++;
@@ -229,6 +272,7 @@ chat.post('/', async (c) => {
             send({ type: 'edit', path: ev.path });
           } else {
             send({ type: 'warn', message: `edit failed on ${ev.path}: ${res.error}` });
+            diag.push(`edit failed on ${ev.path}: ${res.error}`);
           }
         } else if (ev.type === 'delete' && ev.path) {
           try {
@@ -239,6 +283,7 @@ chat.post('/', async (c) => {
             send({ type: 'delete', path: ev.path });
           } catch (e) {
             send({ type: 'warn', message: `delete failed on ${ev.path}: ${e.message}` });
+            diag.push(`delete failed on ${ev.path}: ${e.message}`);
           }
         } else if (ev.type === 'rename' && ev.from && ev.to) {
           try {
@@ -249,6 +294,7 @@ chat.post('/', async (c) => {
             send({ type: 'rename', from: ev.from, to: ev.to, refs });
           } catch (e) {
             send({ type: 'warn', message: `rename failed: ${String(e.message || e)}` });
+            diag.push(`rename failed: ${String(e.message || e)}`);
           }
         } else if (ev.type === 'asset' && ev.path) {
           try {
@@ -259,6 +305,7 @@ chat.post('/', async (c) => {
             send({ type: 'asset', path: ev.path, encoding: ev.encoding });
           } catch (e) {
             send({ type: 'warn', message: `asset failed on ${ev.path}: ${String(e.message || e)}` });
+            diag.push(`asset failed on ${ev.path}: ${String(e.message || e)}`);
           }
         } else if (ev.type === 'seed' && ev.collection) {
           try {
@@ -269,6 +316,7 @@ chat.post('/', async (c) => {
             send({ type: 'seed', collection: ev.collection, count: n });
           } catch (e) {
             send({ type: 'warn', message: `seed failed on ${ev.collection}: ${String(e.message || e)}` });
+            diag.push(`seed failed on ${ev.collection}: ${String(e.message || e)}`);
           }
         } else if (ev.type === 'cmd' && ev.command) {
           const command = String(ev.command).slice(0, 2000);
@@ -277,6 +325,7 @@ chat.post('/', async (c) => {
           } else {
             const res = await execCommand(pid, command);
             send({ type: 'cmd', command, enabled: true, ok: res.ok, code: res.code, output: res.output, error: res.error });
+            if (!res.ok) diag.push(`command failed (exit ${res.code}): ${command.slice(0, 80)} — ${String(res.error || '').slice(0, 120)}`);
           }
         } else if (ev.type === 'plan') {
           try {
@@ -295,10 +344,13 @@ chat.post('/', async (c) => {
           if (!task) return;
           if (subAgentTasks.length >= 4) {
             send({ type: 'warn', message: `sub-agent queue full — skipping delegate for ${ev.path}` });
+            diag.push(`sub-agent for ${ev.path} was skipped (queue full)`);
             return;
           }
           send({ type: 'delegate', path: ev.path });
           subAgentTasks.push(spawnSubAgent(ev.path, task));
+        } else if (ev.type === 'test') {
+          await runPageTest(send, String(ev.note || ''));
         }
       };
       // apply a queued BATCH group atomically-ish (sequentially, abort on first failure)
@@ -316,6 +368,25 @@ chat.post('/', async (c) => {
         }
       };
       let raw = '';
+
+      // Headless page test: resolve every reference the preview server would,
+      // syntax-check every script, and report failures back to the model.
+      const runPageTest = async (evSend, note) => {
+        try {
+          const files = await store.listFilesWithContent(pid);
+          if (!Array.isArray(files) || !files.length) {
+            evSend({ type: 'test', ok: false, pages: 0, scripts: 0, errors: [], note: 'no files to test yet' });
+            return;
+          }
+          const r = await pageTest({ files });
+          const label = note ? `PAGE TEST (${note})` : 'PAGE TEST';
+          testReports.push(reportToText(r, label));
+          evSend({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, note });
+        } catch (e) {
+          evSend({ type: 'warn', message: `page test failed to run: ${String(e.message || e)}` });
+          diag.push(`page test failed to run: ${String(e.message || e)}`);
+        }
+      };
 
       // Spin off a parallel sub-agent: a focused single-file generator that
       // runs concurrently with the main response and merges its FILE output in.
@@ -443,6 +514,7 @@ chat.post('/', async (c) => {
       const reader = upstream.body.getReader();
       const dec = new TextDecoder();
       let lineBuf = '';
+      let overBudget = false;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -463,21 +535,33 @@ chat.post('/', async (c) => {
           } else {
             // ollama cloud + local ollama both use message.content
             const msg = j?.message ?? {};
-            if (msg.thinking) send({ type: 'think', v: msg.thinking });
+            if (msg.thinking) pacer.think(msg.thinking);
             tok = msg.content ?? '';
           }
           if (!tok) continue;
           raw += tok;
-          send({ type: 'token', v: tok });
+          pacer.token(tok);
           for (const ev of parser.feed(tok)) {
             await handleGen(ev);
           }
+          // Halt the stream gracefully before the platform cuts it off. The
+          // buffered output is flushed, every op applied, and the partial
+          // response recorded with a note so a "continue" finishes the job.
+          if (Date.now() - startedAt > MAX_RUN_MS) {
+            overBudget = true;
+            capped = true;
+            pacer.flush();
+            try { await reader.cancel(); } catch { /* reader already closed */ }
+            send({ type: 'note', message: 'Reached the streaming time limit — finishing up what is here. Say "continue" and I will pick up exactly where I left off.' });
+            break;
+          }
         }
       }
+        pacer.flush();
         for (const ev of parser.flush()) {
           await handleGen(ev);
         }
-        if (subAgentTasks.length) {
+        if (subAgentTasks.length && !capped) {
           const results = await Promise.allSettled(subAgentTasks);
           for (const res of results) {
             if (res.status === 'rejected') {
@@ -489,12 +573,48 @@ chat.post('/', async (c) => {
               send({ type: 'subagent', path: ev.path, model, provider: res.value.provider });
             }
           }
+        } else if (subAgentTasks.length && capped) {
+          // The cap already cancelled the reader; sub-agents may still be
+          // running but we must not wait for them past the platform limit.
+          send({ type: 'warn', message: `${subAgentTasks.length} sub-agent${subAgentTasks.length === 1 ? '' : 's'} left running in the background — their files may appear on a later pass.` });
         }
-        if (raw.trim()) await store.addMessage(pid, 'assistant', raw);
+        // Auto page test: give the model the same "load the page, look at the
+        // console" feedback a human would — every build. It runs BEFORE the
+        // message is recorded so its report is part of the history the AI
+        // reads on the very next turn.
+        if (!capped) {
+          try {
+            const fileList = await store.listFiles(pid);
+            if (Array.isArray(fileList) && fileList.length <= 200 && fileList.length) {
+              const all = await store.listFilesWithContent(pid);
+              const r = await pageTest({ files: all });
+              testReports.push(reportToText(r, 'AUTO PAGE TEST'));
+              send({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, auto: true });
+            }
+          } catch { /* page test is best-effort */ }
+        }
+        if (raw.trim()) {
+          let recorded = raw;
+          const notes = [];
+          if (diag.length) {
+            notes.push('DIAGNOSTICS — these operations FAILED just now, so the app may be incomplete or broken. Fix them in your very next step using the exact errors above:\n' +
+              diag.map((x) => ' - ' + x).join('\n'));
+          }
+          if (testReports.length) {
+            notes.push('PAGE TESTS (a headless pass over the app — navigation-visible reference errors and script syntax errors):\n' +
+              testReports.join('\n\n'));
+          }
+          if (overBudget) {
+            notes.push('PLATFORM NOTE: this generation was cut off by the streaming time limit. Do NOT repeat work that already succeeded — continue exactly from the last step, finish anything ' +
+              (diag.length || testReports.some((t) => t.includes('FAIL')) ? 'that still fails above' : 'left incomplete') + '.');
+          }
+          if (notes.length) recorded += '\n\n' + notes.join('\n\n');
+          await store.addMessage(pid, 'assistant', recorded);
+        }
         // Phase 2: capture a point-in-time snapshot after each generation so
         // the project can be rolled back to any prior state (best-effort).
-        try { await store.takeSnapshot(pid, message.slice(0, 60)); } catch { /* snapshots are best-effort */ }
-        send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, seeds, model });
+        if (!capped) { try { await store.takeSnapshot(pid, message.slice(0, 60)); } catch { /* snapshots are best-effort */ } }
+        send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, seeds, model, capped: Boolean(capped) });
         // co-build: tell everyone else watching this project that it changed
         try {
           const sbUrl = getVar('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co';
@@ -709,10 +829,20 @@ async function workspaceChat(c, body, message, user) {
       const edited = [];
       const deleted = [];
       const renamed = [];
+      const diag = [];
+      const pacer = makePacer(send);
+      const startedAt = Date.now();
+      let capped = false;
       let ops = 0;
+
+      const wsFiles = () => [...ws].map(([path, content]) => ({ path, content }));
 
       const handleGen = async (ev) => {
         if (ev.type === 'file' && ev.path) {
+          if (ev.truncated && capped) {
+            send({ type: 'warn', message: `file ${ev.path} was cut off mid-write and was NOT saved` });
+            return;
+          }
           ws.set(ev.path, ev.content);
           written.push(ev.path);
           ops++;
@@ -721,6 +851,7 @@ async function workspaceChat(c, body, message, user) {
           const existing = ws.get(ev.path);
           if (existing === undefined) {
             send({ type: 'warn', message: `edit failed on ${ev.path}: file not present in workspace` });
+            diag.push(`edit failed on ${ev.path}: file not present in workspace`);
             return;
           }
           let text = existing;
@@ -728,7 +859,9 @@ async function workspaceChat(c, body, message, user) {
           for (const h of (ev.hunks || [])) {
             const i = text.indexOf(h.search);
             if (i === -1) {
-              send({ type: 'warn', message: `edit failed on ${ev.path}: search text not found: ${JSON.stringify(String(h.search).slice(0, 60))}` });
+              const msg = `edit failed on ${ev.path}: search text not found: ${JSON.stringify(String(h.search).slice(0, 60))}`;
+              send({ type: 'warn', message: msg });
+              diag.push(msg);
               ok = false;
               break;
             }
@@ -760,6 +893,13 @@ async function workspaceChat(c, body, message, user) {
           send({ type: 'plan', items: ev.items });
         } else if (ev.type === 'name' && ev.name) {
           send({ type: 'name', name: ev.name });
+        } else if (ev.type === 'test') {
+          try {
+            const r = await pageTest({ files: wsFiles() });
+            send({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, note: String(ev.note || '').slice(0, 200), workspace: true });
+          } catch (e) {
+            send({ type: 'warn', message: `page test failed to run: ${String(e.message || e)}` });
+          }
         } else if (ev.type === 'cmd' && ev.command) {
           // Execute on the project's dedicated cloud terminal when configured;
           // otherwise relay so the client can offer to run it locally.
@@ -778,6 +918,7 @@ async function workspaceChat(c, body, message, user) {
         const reader = upstream.body.getReader();
         const dec = new TextDecoder();
         let lineBuf = '';
+        let overBudget = false;
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -797,16 +938,31 @@ async function workspaceChat(c, body, message, user) {
               tok = j?.choices?.[0]?.delta?.content ?? '';
             } else {
               const msg = j?.message ?? {};
-              if (msg.thinking) send({ type: 'think', v: msg.thinking });
+              if (msg.thinking) pacer.think(msg.thinking);
               tok = msg.content ?? '';
             }
             if (!tok) continue;
-            send({ type: 'token', v: tok });
+            pacer.token(tok);
             for (const ev of parser.feed(tok)) await handleGen(ev);
+            if (Date.now() - startedAt > MAX_RUN_MS) {
+              overBudget = true;
+              capped = true;
+              pacer.flush();
+              try { await reader.cancel(); } catch { /* reader already closed */ }
+              send({ type: 'note', message: 'Reached the streaming time limit — finishing up what is here. Say "continue" and I will pick up exactly where I left off.' });
+              break;
+            }
           }
         }
+        pacer.flush();
         for (const ev of parser.flush()) await handleGen(ev);
-        send({ type: 'done', files: written, edited, deleted, renamed, model, workspace: true });
+        if (!capped) {
+          try {
+            const r = await pageTest({ files: wsFiles() });
+            send({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, auto: true, workspace: true });
+          } catch { /* page test is best-effort */ }
+        }
+        send({ type: 'done', files: written, edited, deleted, renamed, model, workspace: true, capped: Boolean(capped), diagnostics: diag.slice(0, 12) });
       } catch (e) {
         if (!ac.signal.aborted) send({ type: 'error', message: String(e.message || e) });
       }

@@ -60,6 +60,19 @@ Track [x] as you complete steps; when everything is done, emit the final fully-c
 
 Rules:
 - If a change spans multiple related parts, keep each file as a separate block.
+- On follow-up requests, touch ONLY the files that need to change.
+- If your previous turn ended with a DIAGNOSTICS or PAGE TEST block in your recorded history, treat it as authoritative: fix every listed error first, then everything else. A failed edit means your SEARCH text did not match — re-apply it from the actual current file contents shown in "Current state of the workspace".
+- Long generations may be cut off by the platform's streaming limit. If a PLATFORM NOTE says you were cut off, do NOT repeat finished work — continue exactly from the last step and finish only what remained incomplete. plan before you start and write big files first so the core app survives a cutoff.
+
+7. TEST the page (OPTIONAL — a headless pass loads your app and checks the console for script syntax errors and broken resources; failures are reported back to you to fix):
+<<<TEST>>>
+brief note on what to verify (e.g. "check that the new dashboard renders")
+<<<END>>>
+- Every build also gets an automatic page test; you don't need to ask for it.
+- If a test failed, fix the listed errors in your next step — do not ignore them.
+
+Rules:
+- If a change spans multiple related parts, keep each file as a separate block.
 - On follow-up requests, touch ONLY the files that need to change.`;
 }
 

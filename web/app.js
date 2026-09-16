@@ -1178,6 +1178,13 @@ const actCards = {
   plan: () => '<span class="acIco">P</span><span class="acBody"><b>plan</b> updated</span>',
   warn: (m) => '<span class="acIco warn">!</span><span class="acBody">' + escHtml(m) + '</span>',
   summary: (bits) => '<span class="acIco">OK</span><span class="acBody">' + bits + '</span>',
+  test: (r) => {
+    const n = (r.errors || []).length;
+    if (r.ok) return '<span class="acIco">✓</span><span class="acBody"><b>page test passed</b> — ' + r.pages + ' page' + (r.pages === 1 ? '' : 's') + ', ' + r.scripts + ' script' + (r.scripts === 1 ? '' : 's') + ' checked</span>';
+    const rows = (r.errors || []).slice(0, 4).map((e) =>
+      escHtml(e.file) + (e.ref ? ' → ' + escHtml(e.ref) : '') + (e.message ? ' · <em>' + escHtml(e.message) + '</em>' : '')).join('<br>');
+    return '<span class="acIco">✗</span><span class="acBody"><b>page test failed</b> — ' + n + ' issue' + (n === 1 ? '' : 's') + (r.more ? '+' : '') + '<br>' + rows + '</span>';
+  },
 };
 
 /* ---------- chat streaming ---------- */
@@ -1342,6 +1349,12 @@ async function send() {
         } else if (ev.type === 'warn') {
           notify('Generator warning', ev.message);
           if (aiMsg) aiMsg.card('', actCards.warn(ev.message || ''));
+        } else if (ev.type === 'test') {
+          if (aiMsg) aiMsg.card('test' + (ev.ok ? '' : ' fail'), actCards.test(ev));
+          if (!ev.auto) activityText.textContent = ev.ok ? 'Page test passed' : 'Page test failed — see card';
+          if (!ev.ok) notify('Page test failed', (ev.errors || []).slice(0, 3).map((e) => `${e.file}${e.ref ? ' → ' + e.ref : ''}${e.message ? ' · ' + e.message : ''}`).join('\n'));
+        } else if (ev.type === 'note') {
+          notify('Heads up', ev.message);
         } else if (ev.type === 'error') {
           if (aiMsg) aiMsg.setStatus('error');
           addAiBubble(`⚠ ${ev.message}`);

@@ -22,6 +22,7 @@
 //   <<<NAME:App title>>>                           (no body needed)
 //   <<<DELEGATE:css/t.min.css>>> task description  <<<END>>>
 //   <<<CMD>>>              shell command           <<<END>>>  (or <<<CMD:ls -la>>> one-liner)
+//   <<<TEST>>>             page-test instructions  <<<END>>>
 //   <<<BATCH>>> ... any blocks above ... <<<BATCHEND>>>
 //
 // EDIT bodies use:
@@ -39,8 +40,8 @@ const S_MARK = '<<<<<<< SEARCH';
 const R_MARK = '>>>>>>> REPLACE';
 const M_MARK = '=======';
 
-const KINDS = ['FILE', 'EDIT', 'DELETE', 'PLAN', 'NAME', 'DELEGATE', 'RENAME', 'ASSET', 'SEED', 'BATCH', 'CMD'];
-const BODY_KINDS = ['FILE', 'EDIT', 'PLAN', 'DELEGATE', 'ASSET', 'SEED', 'CMD'];
+const KINDS = ['FILE', 'EDIT', 'DELETE', 'PLAN', 'NAME', 'DELEGATE', 'RENAME', 'ASSET', 'SEED', 'BATCH', 'CMD', 'TEST'];
+const BODY_KINDS = ['FILE', 'EDIT', 'PLAN', 'DELEGATE', 'ASSET', 'SEED', 'CMD', 'TEST'];
 const PASS_THROUGH_KINDS = ['DELETE', 'NAME', 'RENAME'];
 
 function parsePlan(body) {
@@ -249,6 +250,8 @@ export class FileStreamer {
       }
       case 'CMD':
         return { type: 'cmd', command: stripFences(frame.body.trim()), truncated };
+      case 'TEST':
+        return { type: 'test', note: stripFences(frame.body.trim()).slice(0, 400), truncated };
       default:
         return null;
     }

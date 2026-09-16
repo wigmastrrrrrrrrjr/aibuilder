@@ -1715,6 +1715,18 @@ iframe {
  background: rgba(245, 158, 11, 0.14); color: #fbbf24; 
 }
 
+.actCard.test .acIco {
+ background: rgba(16, 185, 129, 0.14); color: #34d399; 
+}
+
+.actCard.test.fail .acIco {
+ background: rgba(239, 68, 68, 0.14); color: #f87171; 
+}
+
+.actCard.test.fail {
+ border-color: rgba(239, 68, 68, 0.35); 
+}
+
 .acIco.warn {
  background: rgba(251, 191, 36, 0.14); color: #fbbf24; 
 }
