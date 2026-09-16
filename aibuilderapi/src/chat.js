@@ -33,38 +33,6 @@ const PROVIDER_CAPS = { mistral: 4, ollama: 4, local: 4, openrouter: 4 };
 const active = { mistral: 0, ollama: 0, local: 0, openrouter: 0 };
 let subRound = 0;
 
-// Cloudflare drops streaming responses when the request runs too long or the
-// worker's CPU budget is exceeded by emitting thousands of tiny events. We
-// coalesce tokens/thinking into a handful of larger frames (pacing) and hard
-// cap the whole generation well under the platform's wall-clock ceiling so a
-// long run ends gracefully instead of being cut off mid-stream.
-const MAX_RUN_MS = 490000;        // 490s — leaves headroom under CF's 550s cap
-const PACER_BURST_MS = 60;        // flush accumulated output at least this often
-const PACER_CHUNK_CHARS = 200;    // flush a frame once this much text is buffered
-const PACER_THINK_MS = 1500;      // thinking events throttle to ~this cadence
-
-function makePacer(send) {
-  let text = '';
-  let timer = null;
-  let lastThink = 0;
-  const flush = () => {
-    if (timer) { clearTimeout(timer); timer = null; }
-    if (text) { send({ type: 'token', v: text }); text = ''; }
-  };
-  return {
-    token(v) {
-      text += v;
-      if (text.length >= PACER_CHUNK_CHARS) flush();
-      else if (!timer) timer = setTimeout(flush, PACER_BURST_MS);
-    },
-    think(v) {
-      const now = Date.now();
-      if (now - lastThink >= PACER_THINK_MS) { lastThink = now; send({ type: 'think', v }); }
-    },
-    flush() { flush(); },
-  };
-}
-
 export const chat = new Hono();
 
 // Charge the user's credit balance for paid effort tiers (Deep/Deepest).
@@ -181,15 +149,7 @@ chat.post('/', async (c) => {
     if (chargeErr) return c.json(chargeErr, 402);
   }
 
-  const [history, fileCtx] = await Promise.all([
-    store.history(pid).then(ms => ms.map(m => ({ role: m.role, content: m.content }))),
-    buildFileContext(pid),
-  ]);
-  const messages = [
-    { role: 'system', content: systemPrompt() + fileCtx },
-    ...history,
-    { role: 'user', content: message },
-  ];
+  const fileCtx = await buildFileContext(pid);
   await store.addMessage(pid, 'user', message, user.name);
 
   // Client-cancel propagates to the upstream request.
@@ -211,31 +171,18 @@ chat.post('/', async (c) => {
       const mistralKey = getVar('MISTRAL_API_KEY') || '';
       const localUrl = await localOllamaUrl();
 
-      let upstream;
       let provider = 'ollama';
       const emit = (ev) => send(ev);
-      try {
-        ({ upstream, provider } = await openUpstream(model, messages, key, ac.signal, emit, EFFORT[effort]));
-      } catch (e) {
-        send({ type: 'error', message: e.message });
-        try { controller.close(); } catch {}
-        return;
-      }
-      active[provider]++;
 
-      const parser = new FileStreamer();
       const written = [];
       const edited = [];
       const deleted = [];
       const renamed = [];
       const assets = [];
       const seeds = [];
-      const subAgentTasks = [];
       const diag = [];          // operations that failed to apply — fed back to the model next turn
-      const testReports = [];   // page-test reports — appended to the recorded message
-      const pacer = makePacer(send);
-      const startedAt = Date.now();
-      let capped = false;
+      const testReports = [];   // page-test reports — appended to each recorded round
+      const subAgentTasks = []; // reused each round — cleared at round start
       let ops = 0;
       let refactorSent = false;
       let inBatch = false;
@@ -253,11 +200,6 @@ chat.post('/', async (c) => {
         if (ev.type === 'endbatch') { inBatch = false; await flushBatch(); return; }
         if (ev.batch && inBatch) { batchOps.push(ev); return; }
         if (ev.type === 'file' && ev.path) {
-          if (ev.truncated && capped) {
-            send({ type: 'warn', message: `file ${ev.path} was cut off mid-write and was NOT saved` });
-            diag.push(`file ${ev.path} was cut off mid-write and was not saved`);
-            return;
-          }
           await store.saveFile(pid, ev.path, ev.content);
           written.push(ev.path);
           ops++;
@@ -379,7 +321,6 @@ chat.post('/', async (c) => {
           }
         }
       };
-      let raw = '';
 
       // Headless page test: resolve every reference the preview server would,
       // syntax-check every script, and report failures back to the model.
@@ -551,112 +492,152 @@ chat.post('/', async (c) => {
         }
       };
 
-      try {
-      const reader = upstream.body.getReader();
-      const dec = new TextDecoder();
-      let lineBuf = '';
-      let overBudget = false;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        lineBuf += dec.decode(value, { stream: true });
-        let nl;
-        while ((nl = lineBuf.indexOf('\n')) !== -1) {
-          const line = lineBuf.slice(0, nl).trim();
-          lineBuf = lineBuf.slice(nl + 1);
-          if (!line || line === 'data: [DONE]') continue;
-          let j;
-          try {
-            const payload = line.startsWith('data: ') ? line.slice(6) : line;
-            j = JSON.parse(payload);
-          } catch { continue; }
-          let tok = '';
-          if (provider === 'mistral' || provider === 'openrouter') {
-            tok = j?.choices?.[0]?.delta?.content ?? '';
-          } else {
-            // ollama cloud + local ollama both use message.content
-            const msg = j?.message ?? {};
-            if (msg.thinking) pacer.think(msg.thinking);
-            tok = msg.content ?? '';
+      // One "round" = one model generation plus its post-build checks. If the
+      // build still has errors (failed page test, freeze risk, failed ops) the
+      // session keeps going and the AI is asked to fix everything IN PLACE.
+      // Every error is logged into history first, so the AI always sees each
+      // failure before the stream stops and can repair its own build without
+      // waiting for another prompt.
+      const MAX_REPAIR_ROUNDS = 3;
+      const buildGenMessages = async () => {
+        const hist = await store.history(pid).then(ms => ms.map(m => ({ role: m.role, content: m.content })));
+        return [{ role: 'system', content: systemPrompt() + fileCtx }, ...hist];
+      };
+      const repairPrompt = () => {
+        const parts = [];
+        if (diag.length) parts.push('FAILED OPERATIONS (exact errors — fix every one):\n' + diag.map((x) => ' - ' + x).join('\n'));
+        if (testReports.length) parts.push('AUTO PAGE TEST reports:\n' + testReports.join('\n\n'));
+        return 'The page test just ran and the build still has errors. Do NOT stop and do NOT restate the problem — apply the exact fixes below, then keep building the app.\n\n' +
+          (parts.join('\n\n') || 'No specific errors were captured, but the page did not pass. Re-check the page and fix whatever is wrong.');
+      };
+
+      let attempt = 0;
+      let wantRepair = true;
+      while (wantRepair && attempt < MAX_REPAIR_ROUNDS && !ac.signal.aborted) {
+        attempt++;
+        wantRepair = false;
+        const diagAtStart = diag.length;
+        const trAtStart = testReports.length;
+        subAgentTasks.length = 0;
+        const parser = new FileStreamer();
+
+        let upstream;
+        let providerUsed = null;
+        try {
+          ({ upstream, provider } = await openUpstream(model, await buildGenMessages(), key, ac.signal, emit, EFFORT[effort]));
+        } catch (e) {
+          if (!ac.signal.aborted) send({ type: 'error', message: e.message });
+          break;
+        }
+        providerUsed = provider;
+        active[provider]++;
+        try {
+          const reader = upstream.body.getReader();
+          const dec = new TextDecoder();
+          let lineBuf = '';
+          let raw = '';
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            lineBuf += dec.decode(value, { stream: true });
+            let nl;
+            while ((nl = lineBuf.indexOf('\n')) !== -1) {
+              const line = lineBuf.slice(0, nl).trim();
+              lineBuf = lineBuf.slice(nl + 1);
+              if (!line || line === 'data: [DONE]') continue;
+              let j;
+              try {
+                const payload = line.startsWith('data: ') ? line.slice(6) : line;
+                j = JSON.parse(payload);
+              } catch { continue; }
+              let tok = '';
+              if (provider === 'mistral' || provider === 'openrouter') {
+                tok = j?.choices?.[0]?.delta?.content ?? '';
+              } else {
+                // ollama cloud + local ollama both use message.content
+                const msg = j?.message ?? {};
+                if (msg.thinking) send({ type: 'think', v: msg.thinking });
+                tok = msg.content ?? '';
+              }
+              if (!tok) continue;
+              raw += tok;
+              send({ type: 'token', v: tok });
+              for (const ev of parser.feed(tok)) {
+                await handleGen(ev);
+              }
+            }
           }
-          if (!tok) continue;
-          raw += tok;
-          pacer.token(tok);
-          for (const ev of parser.feed(tok)) {
+          for (const ev of parser.flush()) {
             await handleGen(ev);
           }
-          // Halt the stream gracefully before the platform cuts it off. The
-          // buffered output is flushed, every op applied, and the partial
-          // response recorded with a note so a "continue" finishes the job.
-          if (Date.now() - startedAt > MAX_RUN_MS) {
-            overBudget = true;
-            capped = true;
-            pacer.flush();
-            try { await reader.cancel(); } catch { /* reader already closed */ }
-            send({ type: 'note', message: 'Reached the streaming time limit — finishing up what is here. Say "continue" and I will pick up exactly where I left off.' });
-            break;
-          }
-        }
-      }
-        pacer.flush();
-        for (const ev of parser.flush()) {
-          await handleGen(ev);
-        }
-        if (subAgentTasks.length && !capped) {
-          const results = await Promise.allSettled(subAgentTasks);
-          for (const res of results) {
-            if (res.status === 'rejected') {
-              send({ type: 'warn', message: `sub-agent failed: ${String(res.reason?.message || res.reason).slice(0, 200)}` });
-              continue;
-            }
-            for (const ev of res.value.evs) {
-              await handleGen(ev);
-              send({ type: 'subagent', path: ev.path, model, provider: res.value.provider });
+          // Sub-agents merged in before judging this round's health.
+          if (subAgentTasks.length) {
+            const results = await Promise.allSettled(subAgentTasks);
+            for (const res of results) {
+              if (res.status === 'rejected') {
+                send({ type: 'warn', message: `sub-agent failed: ${String(res.reason?.message || res.reason).slice(0, 200)}` });
+                continue;
+              }
+              for (const ev of res.value.evs) {
+                await handleGen(ev);
+                send({ type: 'subagent', path: ev.path, model, provider: res.value.provider });
+              }
             }
           }
-        } else if (subAgentTasks.length && capped) {
-          // The cap already cancelled the reader; sub-agents may still be
-          // running but we must not wait for them past the platform limit.
-          send({ type: 'warn', message: `${subAgentTasks.length} sub-agent${subAgentTasks.length === 1 ? '' : 's'} left running in the background — their files may appear on a later pass.` });
-        }
-        // Auto page test: give the model the same "load the page, look at the
-        // console" feedback a human would — every build. It runs BEFORE the
-        // message is recorded so its report is part of the history the AI
-        // reads on the very next turn.
-        if (!capped) {
+          // Auto page test: give the model the same "load the page, look at the
+          // console" feedback a human would — every round. It runs BEFORE the
+          // round is recorded so its report is part of the history the AI reads
+          // when it continues.
+          let autoResult = null;
           try {
             const fileList = await store.listFiles(pid);
             if (Array.isArray(fileList) && fileList.length <= 200 && fileList.length) {
               const all = await store.listFilesWithContent(pid);
               const r = await pageTest({ files: all });
+              autoResult = r;
               testReports.push(reportToText(r, 'AUTO PAGE TEST'));
               send({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, auto: true });
               await quarantineFromReport(r, send);
+            } else if (!Array.isArray(fileList) || !fileList.length) {
+              send({ type: 'test', ok: true, pages: 0, scripts: 0, errors: [], auto: true, note: 'no files yet — nothing to test' });
             }
           } catch { /* page test is best-effort */ }
+          // Decide whether the AI must keep fixing within this session, then
+          // record the round WITH every new error so it reaches the AI before
+          // the stream stops.
+          if (autoResult && !autoResult.ok) wantRepair = true;
+          if (diag.length > diagAtStart) wantRepair = true;
+          if (wantRepair) send({ type: 'note', message: 'The build still has errors — continuing in this session so the AI can fix them right now.' });
+          if (raw.trim()) {
+            let recorded = raw;
+            const notes = [];
+            const roundDiag = diag.slice(diagAtStart);
+            const roundTests = testReports.slice(trAtStart);
+            if (roundDiag.length) {
+              notes.push('DIAGNOSTICS — these operations FAILED just now, so the app may be incomplete or broken. Fix them in your very next step using the exact errors above:\n' +
+                roundDiag.map((x) => ' - ' + x).join('\n'));
+            }
+            if (roundTests.length) {
+              notes.push('PAGE TESTS (a headless pass over the app — navigation-visible reference errors and script syntax errors):\n' +
+                roundTests.join('\n\n'));
+            }
+            if (wantRepair) {
+              notes.push('REPAIR REQUIRED — the checks above still fail. Your next turn starts from this exact message and must fix every error listed here.');
+            }
+            if (notes.length) recorded += '\n\n' + notes.join('\n\n');
+            await store.addMessage(pid, 'assistant', recorded);
+          }
+          if (wantRepair) await store.addMessage(pid, 'user', repairPrompt());
+          // Point-in-time snapshot after each round for rollback (best-effort).
+          try { await store.takeSnapshot(pid, message.slice(0, 60)); } catch { /* snapshots are best-effort */ }
+        } catch (e) {
+          if (!ac.signal.aborted) send({ type: 'error', message: String(e.message || e) });
+          wantRepair = false;
+        } finally {
+          if (providerUsed) { try { active[providerUsed]--; } catch {} }
         }
-        if (raw.trim()) {
-          let recorded = raw;
-          const notes = [];
-          if (diag.length) {
-            notes.push('DIAGNOSTICS — these operations FAILED just now, so the app may be incomplete or broken. Fix them in your very next step using the exact errors above:\n' +
-              diag.map((x) => ' - ' + x).join('\n'));
-          }
-          if (testReports.length) {
-            notes.push('PAGE TESTS (a headless pass over the app — navigation-visible reference errors and script syntax errors):\n' +
-              testReports.join('\n\n'));
-          }
-          if (overBudget) {
-            notes.push('PLATFORM NOTE: this generation was cut off by the streaming time limit. Do NOT repeat work that already succeeded — continue exactly from the last step, finish anything ' +
-              (diag.length || testReports.some((t) => t.includes('FAIL')) ? 'that still fails above' : 'left incomplete') + '.');
-          }
-          if (notes.length) recorded += '\n\n' + notes.join('\n\n');
-          await store.addMessage(pid, 'assistant', recorded);
-        }
-        // Phase 2: capture a point-in-time snapshot after each generation so
-        // the project can be rolled back to any prior state (best-effort).
-        if (!capped) { try { await store.takeSnapshot(pid, message.slice(0, 60)); } catch { /* snapshots are best-effort */ } }
-        send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, seeds, model, capped: Boolean(capped) });
+      }
+      send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, seeds, model });
         // co-build: tell everyone else watching this project that it changed
         try {
           const sbUrl = getVar('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co';
@@ -668,13 +649,6 @@ chat.post('/', async (c) => {
             setTimeout(() => { try { sb.removeChannel(ch); } catch {} }, 100);
           }
         } catch { /* live layer is best-effort */ }
-      } catch (e) {
-        if (!ac.signal.aborted) {
-          send({ type: 'error', message: String(e.message || e) });
-        }
-      } finally {
-        active[provider]--;
-      }
       try { controller.close(); } catch { /* already closed */ }
     },
     cancel() { ac.abort(); },
@@ -833,11 +807,6 @@ async function workspaceChat(c, body, message, user) {
   }
 
   const history = Array.isArray(body.history) ? body.history.slice(-40) : [];
-  const messages = [
-    { role: 'system', content: workspaceSystemPrompt() + buildWorkspaceContext(cleaned) },
-    ...history,
-    { role: 'user', content: message },
-  ];
 
   const ac = new AbortController();
   c.req.raw.signal.addEventListener('abort', () => ac.abort());
@@ -854,16 +823,8 @@ async function workspaceChat(c, body, message, user) {
       };
       send({ type: 'meta', workspace: true, model, effort: EFFORT[effort].label });
 
-      let upstream;
       let provider = 'ollama';
       const emit = (ev) => send(ev);
-      try {
-        ({ upstream, provider } = await openUpstream(model, messages, key, ac.signal, emit, EFFORT[effort]));
-      } catch (e) {
-        send({ type: 'error', message: e.message });
-        try { controller.close(); } catch {}
-        return;
-      }
 
       // in-memory copy of the workspace for applying surgical edits
       const ws = new Map(cleaned.map((f) => [f.path, f.content]));
@@ -872,19 +833,13 @@ async function workspaceChat(c, body, message, user) {
       const deleted = [];
       const renamed = [];
       const diag = [];
-      const pacer = makePacer(send);
-      const startedAt = Date.now();
-      let capped = false;
+      const testReports = [];
       let ops = 0;
 
       const wsFiles = () => [...ws].map(([path, content]) => ({ path, content }));
 
       const handleGen = async (ev) => {
         if (ev.type === 'file' && ev.path) {
-          if (ev.truncated && capped) {
-            send({ type: 'warn', message: `file ${ev.path} was cut off mid-write and was NOT saved` });
-            return;
-          }
           ws.set(ev.path, ev.content);
           written.push(ev.path);
           ops++;
@@ -938,9 +893,11 @@ async function workspaceChat(c, body, message, user) {
         } else if (ev.type === 'test') {
           try {
             const r = await pageTest({ files: wsFiles() });
+            testReports.push(reportToText(r, String(ev.note || '').slice(0, 200) ? `PAGE TEST (${String(ev.note).slice(0, 200)})` : 'PAGE TEST'));
             send({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, note: String(ev.note || '').slice(0, 200), workspace: true });
           } catch (e) {
             send({ type: 'warn', message: `page test failed to run: ${String(e.message || e)}` });
+            diag.push(`page test failed to run: ${String(e.message || e)}`);
           }
         } else if (ev.type === 'cmd' && ev.command) {
           // Execute on the project's dedicated cloud terminal when configured;
@@ -955,59 +912,105 @@ async function workspaceChat(c, body, message, user) {
         }
       };
 
-      const parser = new FileStreamer();
-      try {
-        const reader = upstream.body.getReader();
-        const dec = new TextDecoder();
-        let lineBuf = '';
-        let overBudget = false;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          lineBuf += dec.decode(value, { stream: true });
-          let nl;
-          while ((nl = lineBuf.indexOf('\n')) !== -1) {
-            const line = lineBuf.slice(0, nl).trim();
-            lineBuf = lineBuf.slice(nl + 1);
-            if (!line || line === 'data: [DONE]') continue;
-            let j;
-            try {
-              const payload = line.startsWith('data: ') ? line.slice(6) : line;
-              j = JSON.parse(payload);
-            } catch { continue; }
-            let tok = '';
-            if (provider === 'mistral' || provider === 'openrouter') {
-              tok = j?.choices?.[0]?.delta?.content ?? '';
-            } else {
-              const msg = j?.message ?? {};
-              if (msg.thinking) pacer.think(msg.thinking);
-              tok = msg.content ?? '';
-            }
-            if (!tok) continue;
-            pacer.token(tok);
-            for (const ev of parser.feed(tok)) await handleGen(ev);
-            if (Date.now() - startedAt > MAX_RUN_MS) {
-              overBudget = true;
-              capped = true;
-              pacer.flush();
-              try { await reader.cancel(); } catch { /* reader already closed */ }
-              send({ type: 'note', message: 'Reached the streaming time limit — finishing up what is here. Say "continue" and I will pick up exactly where I left off.' });
-              break;
+      // Repair rounds: if the build is still failing, keep the session alive
+      // and have the AI fix every logged error before we stop.
+      const MAX_REPAIR_ROUNDS = 3;
+      const buildWsMessages = (transcript, userContent) => [
+        { role: 'system', content: workspaceSystemPrompt() + buildWorkspaceContext(cleaned) },
+        ...transcript,
+        { role: 'user', content: userContent },
+      ];
+      const wsRepairPrompt = () => {
+        const parts = [];
+        if (diag.length) parts.push('FAILED OPERATIONS (exact errors — fix every one):\n' + diag.map((x) => ' - ' + x).join('\n'));
+        if (testReports.length) parts.push('PAGE TEST reports:\n' + testReports.join('\n\n'));
+        return 'The page test just ran and the build still has errors. Do NOT stop and do NOT restate the problem — apply the exact fixes below, then keep building.\n\n' +
+          (parts.join('\n\n') || 'No specific errors were captured, but the page did not pass. Re-check the page and fix whatever is wrong.');
+      };
+
+      let attempt = 0;
+      let wantRepair = true;
+      const transcript = history.slice(); // live transcript fed to the model each round
+      while (wantRepair && attempt < MAX_REPAIR_ROUNDS && !ac.signal.aborted) {
+        attempt++;
+        wantRepair = false;
+        const diagAtStart = diag.length;
+        const trAtStart = testReports.length;
+        const parser = new FileStreamer();
+        let raw = '';
+        let upstream;
+        let providerUsed = null;
+        try {
+          ({ upstream, provider } = await openUpstream(model, buildWsMessages(transcript, attempt === 1 ? message : wsRepairPrompt()), key, ac.signal, emit, EFFORT[effort]));
+        } catch (e) {
+          if (!ac.signal.aborted) send({ type: 'error', message: e.message });
+          break;
+        }
+        providerUsed = provider;
+        active[provider]++;
+        try {
+          const reader = upstream.body.getReader();
+          const dec = new TextDecoder();
+          let lineBuf = '';
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            lineBuf += dec.decode(value, { stream: true });
+            let nl;
+            while ((nl = lineBuf.indexOf('\n')) !== -1) {
+              const line = lineBuf.slice(0, nl).trim();
+              lineBuf = lineBuf.slice(nl + 1);
+              if (!line || line === 'data: [DONE]') continue;
+              let j;
+              try {
+                const payload = line.startsWith('data: ') ? line.slice(6) : line;
+                j = JSON.parse(payload);
+              } catch { continue; }
+              let tok = '';
+              if (provider === 'mistral' || provider === 'openrouter') {
+                tok = j?.choices?.[0]?.delta?.content ?? '';
+              } else {
+                const msg = j?.message ?? {};
+                if (msg.thinking) send({ type: 'think', v: msg.thinking });
+                tok = msg.content ?? '';
+              }
+              if (!tok) continue;
+              raw += tok;
+              send({ type: 'token', v: tok });
+              for (const ev of parser.feed(tok)) await handleGen(ev);
             }
           }
-        }
-        pacer.flush();
-        for (const ev of parser.flush()) await handleGen(ev);
-        if (!capped) {
+          for (const ev of parser.flush()) await handleGen(ev);
+          let autoResult = null;
           try {
             const r = await pageTest({ files: wsFiles() });
+            autoResult = r;
+            testReports.push(reportToText(r, 'AUTO PAGE TEST'));
             send({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, auto: true, workspace: true });
           } catch { /* page test is best-effort */ }
+          if (autoResult && !autoResult.ok && autoResult.pages > 0) wantRepair = true;
+          if (diag.length > diagAtStart) wantRepair = true;
+          if (wantRepair) send({ type: 'note', message: 'The build still has errors — continuing in this session so the AI can fix them right now.' });
+          if (raw.trim()) {
+            let recorded = raw;
+            const notes = [];
+            const roundDiag = diag.slice(diagAtStart);
+            const roundTests = testReports.slice(trAtStart);
+            if (roundDiag.length) notes.push('DIAGNOSTICS — these operations FAILED just now:\n' + roundDiag.map((x) => ' - ' + x).join('\n'));
+            if (roundTests.length) notes.push('PAGE TESTS:\n' + roundTests.join('\n\n'));
+            if (wantRepair) notes.push('REPAIR REQUIRED — the checks above still fail. Fix every error listed here.');
+            if (notes.length) recorded += '\n\n' + notes.join('\n\n');
+            transcript.push({ role: 'assistant', content: recorded });
+          }
+          if (wantRepair) transcript.push({ role: 'user', content: wsRepairPrompt() });
+        } catch (e) {
+          if (!ac.signal.aborted) send({ type: 'error', message: String(e.message || e) });
+          wantRepair = false;
+        } finally {
+          if (providerUsed) { try { active[providerUsed]--; } catch {} }
         }
-        send({ type: 'done', files: written, edited, deleted, renamed, model, workspace: true, capped: Boolean(capped), diagnostics: diag.slice(0, 12) });
-      } catch (e) {
-        if (!ac.signal.aborted) send({ type: 'error', message: String(e.message || e) });
       }
+      send({ type: 'done', files: written, edited, deleted, renamed, model, workspace: true, diagnostics: diag.slice(0, 12) });
       try { controller.close(); } catch {}
     },
     cancel() { ac.abort(); },
