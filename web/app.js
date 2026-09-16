@@ -1126,28 +1126,6 @@ document.addEventListener('mousemove', (() => {
 function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-function mdHtml(src) {
-  let s = escHtml(src);
-  s = s.replace(/```[a-zA-Z0-9]*\n?([\s\S]+?)\n?```/g, '<pre class="fence"><code>$1</code></pre>');
-  s = s.replace(/(^|[^\w`])`([^`\n]{1,160})`/g, '$1<code>$2</code>');
-  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-  s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-  s = s.replace(/^#{1,3}\s*(.*)$/gm, '<h4>$1</h4>');
-  const lines = s.split('\n');
-  let html = '', inUl = false;
-  for (const ln of lines) {
-    const l = ln.trim();
-    if (/^[-*]\s+/.test(l)) {
-      if (!inUl) { html += '<ul>'; inUl = true; }
-      html += '<li>' + l.replace(/^[-*]\s+/, '') + '</li>';
-    } else {
-      if (inUl) { html += '</ul>'; inUl = false; }
-      html += (l ? l : '<br>');
-    }
-  }
-  if (inUl) html += '</ul>';
-  return html;
-}
 function makeAiMsg(model) {
   const el = document.createElement('div');
   el.className = 'msg ai wrap';
@@ -1177,7 +1155,7 @@ function makeAiMsg(model) {
     },
     append(txt) {
       this.full += txt;
-      prose.innerHTML = mdHtml(this.full);
+      prose.textContent = this.full; // plain-text output — no markdown re-render
       scrollBottom();
     },
     card(kind, html) {
@@ -1228,6 +1206,7 @@ async function send() {
   }
 
   displayText = ''; rawStream.textContent = ''; rawStream.hidden = true;
+  const log = $('activityLog'); if (log) log.innerHTML = '';
   const filter = new BlockFilter();
   let aiMsg = null;
   dots = 0;
@@ -1240,9 +1219,21 @@ async function send() {
   let chipFiles = [];
   let doneReceived = false;
   let previewTimer = null;
+  // Live preview: refresh on every build event (tiny debounce only coalesces
+  // the same-instant burst). `done` refreshes once more at the end.
   const schedulePreview = () => {
     clearTimeout(previewTimer);
-    previewTimer = setTimeout(() => refreshPreview(true), 500);
+    previewTimer = setTimeout(() => refreshPreview(true), 40);
+  };
+  // Terminal-style build log: one timestamped line per build event.
+  const termLog = (text, cls) => {
+    const log = $('activityLog'); if (!log) return;
+    const d = document.createElement('div');
+    d.className = 'tl ' + (cls || '');
+    const t = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    d.textContent = '[' + t + '] ' + text;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
   };
 
   try {
@@ -1314,6 +1305,7 @@ async function send() {
           flashChip(ev.path);
           if (aiMsg) aiMsg.card('', actCards.w(ev.path));
           activityText.textContent = `Generated ${ev.path}`;
+          termLog('wrote ' + ev.path, 'w');
           schedulePreview();
         } else if (ev.type === 'edit') {
           chipFiles.push(ev.path);
@@ -1321,12 +1313,14 @@ async function send() {
           flashChip(ev.path);
           if (aiMsg) aiMsg.card('', actCards.e(ev.path));
           activityText.textContent = `Updated ${ev.path}`;
+          termLog('edited ' + ev.path, 'e');
           schedulePreview();
         } else if (ev.type === 'delete') {
           chipFiles = chipFiles.filter((p) => p !== ev.path);
           setChips(chipFiles);
           if (aiMsg) aiMsg.card('d', actCards.d(ev.path));
           activityText.textContent = `Removed ${ev.path}`;
+          termLog('removed ' + ev.path, 'd');
           schedulePreview();
         } else if (ev.type === 'rename') {
           if (aiMsg) aiMsg.card('', actCards.r(ev.from, ev.to, ev.refs || 0));
@@ -1334,14 +1328,17 @@ async function send() {
           if (!chipFiles.includes(ev.to)) chipFiles.push(ev.to);
           setChips(chipFiles, [ev.to]);
           activityText.textContent = `Renamed ${ev.from} → ${ev.to}`;
+          termLog('renamed ' + ev.from + ' -> ' + ev.to, 'r');
           schedulePreview();
         } else if (ev.type === 'asset') {
           if (aiMsg) aiMsg.card('a', actCards.a(ev.path));
           activityText.textContent = `Saved asset ${ev.path}`;
+          termLog('asset ' + ev.path, 'a');
           schedulePreview();
         } else if (ev.type === 'seed') {
           if (aiMsg) aiMsg.card('seed', actCards.seed(ev.collection, ev.count || 0));
           activityText.textContent = `Seeded ${ev.collection} (${ev.count || 0} rows)`;
+          termLog('seeded ' + ev.collection + ' (' + (ev.count || 0) + ' rows)', 's');
           schedulePreview();
         } else if (ev.type === 'cmd') {
           if (window.__termLine) {
@@ -1366,6 +1363,7 @@ async function send() {
           flashChip(ev.path);
           if (aiMsg) aiMsg.card('', actCards.sub(ev.path));
           activityText.textContent = `Sub-agent completed ${ev.path}`;
+          termLog('sub-agent finished ' + ev.path, 's');
           schedulePreview();
         } else if (ev.type === 'refactor') {
           $('refactorBar').hidden = false;
@@ -1397,6 +1395,15 @@ async function send() {
         } else if (ev.type === 'done') {
           doneReceived = true;
           $('refactorBar').hidden = true;
+          const bitsEnd = [];
+          if (ev.files?.length) bitsEnd.push(`${ev.files.length} file${ev.files.length === 1 ? '' : 's'} written`);
+          if (ev.edited?.length) bitsEnd.push(`${ev.edited.length} edited`);
+          if (ev.deleted?.length) bitsEnd.push(`${ev.deleted.length} removed`);
+          if (ev.renamed?.length) bitsEnd.push(`${ev.renamed.length} renamed`);
+          if (ev.seeds?.length) bitsEnd.push(`${ev.seeds.length} seeded`);
+          if (ev.assets?.length) bitsEnd.push(`${ev.assets.length} asset${ev.assets.length === 1 ? '' : 's'}`);
+          termLog('build complete — ' + (bitsEnd.join(', ') || 'no changes'), 'done');
+          schedulePreview(); // live preview refreshes once more now the build ended
           if (aiMsg) {
             aiMsg.setStatus('done');
             const rest = filter.drain();
