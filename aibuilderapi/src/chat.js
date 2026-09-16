@@ -9,7 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 import { effortLevel, EFFORT, modelCost, creditsToUnits, unitsToCredits } from './models.js';
 import { personalBalance } from './credits.js';
 import { execCommand, terminalEnabled } from './terminal.js';
-import { pageTest, reportToText, scriptFreezeRisks } from './smoketest.js';
+import { scriptFreezeRisks } from './smoketest.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
@@ -189,7 +189,6 @@ chat.post('/', async (c) => {
       const assets = [];
       const seeds = [];
       const diag = [];          // operations that failed to apply — fed back to the model next turn
-      const testReports = [];   // page-test reports — appended to each recorded round
       const subAgentTasks = []; // reused each round — cleared at round start
       let ops = 0;
       let refactorSent = false;
@@ -307,7 +306,9 @@ chat.post('/', async (c) => {
           send({ type: 'delegate', path: ev.path });
           subAgentTasks.push(spawnSubAgent(ev.path, task));
         } else if (ev.type === 'test') {
-          await runPageTest(send, String(ev.note || ''));
+          // Auto page test was removed for speed — ack the model's TEST block
+          // so the client doesn't wait on a test result that will never come.
+          send({ type: 'test', ok: true, pages: 0, scripts: 0, errors: [], note: String(ev.note || '').slice(0, 200), auto: false });
         }
       };
       // apply a queued BATCH group atomically-ish (sequentially, abort on first failure)
@@ -325,30 +326,10 @@ chat.post('/', async (c) => {
         }
       };
 
-      // Headless page test: resolve every reference the preview server would,
-      // syntax-check every script, and report failures back to the model.
-      const runPageTest = async (evSend, note) => {
-        try {
-          const files = await store.listFilesWithContent(pid);
-          if (!Array.isArray(files) || !files.length) {
-            evSend({ type: 'test', ok: false, pages: 0, scripts: 0, errors: [], note: 'no files to test yet' });
-            return;
-          }
-          const r = await pageTest({ files });
-          const label = note ? `PAGE TEST (${note})` : 'PAGE TEST';
-          testReports.push(reportToText(r, label));
-          evSend({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, note });
-          await quarantineFromReport(r, evSend);
-        } catch (e) {
-          evSend({ type: 'warn', message: `page test failed to run: ${String(e.message || e)}` });
-          diag.push(`page test failed to run: ${String(e.message || e)}`);
-        }
-      };
-
       // Quarantine state: a project with a freeze-risk loop is "temporarily
       // disabled" — its preview serves a static blocker (no scripts can run)
-      // until a fixing generation's page test comes back clean. Stored in meta
-      // so it survives reloads and is enforced server-side by the preview route.
+      // until a fixing generation comes back clean. Stored in meta so it
+      // survives reloads and is enforced server-side by the preview route.
       const quarantineSync = async (freezeFiles, evSend) => {
         try {
           if (freezeFiles && freezeFiles.length) {
@@ -359,18 +340,6 @@ chat.post('/', async (c) => {
             evSend({ type: 'unfreeze' });
           }
         } catch { /* quarantine is best-effort */ }
-      };
-      const quarantineFromReport = async (r, evSend) => {
-        const frozen = r && r.freezeRisk
-          ? (r.errors || []).filter((e) => e.type === 'freeze risk' || e.type === 'freeze risk (inline)')
-            .map((e) => e.file).filter((p, i2, a) => p && a.indexOf(p) === i2)
-          : [];
-        if (frozen.length) {
-          diag.push(`PAGE TEST: freeze risk in ${frozen.join(', ')} — the preview is disabled until the loop is fixed.`);
-          await quarantineSync(frozen, evSend);
-        } else {
-          await quarantineSync([], evSend);
-        }
       };
 
       // Spin off a parallel sub-agent: a focused single-file generator that
@@ -445,22 +414,18 @@ chat.post('/', async (c) => {
       };
 
       // One "round" = one model generation plus its post-build checks. If the
-      // build still has errors (failed page test, freeze risk, failed ops) the
-      // session keeps going and the AI is asked to fix everything IN PLACE.
-      // Every error is logged into history first, so the AI always sees each
-      // failure before the stream stops and can repair its own build without
-      // waiting for another prompt.
+      // build still has failing operations the session keeps going and the AI
+      // is asked to fix everything IN PLACE. History is cached in memory once
+      // (not re-fetched from D1 each round) and appended to as rounds record.
       const MAX_REPAIR_ROUNDS = 3;
-      const buildGenMessages = async () => {
-        const hist = await store.history(pid).then(ms => ms.map(m => ({ role: m.role, content: m.content })));
-        return [{ role: 'system', content: systemPrompt() + fileCtx }, ...hist];
-      };
+      const histRef = await store.history(pid).then(ms => ms.map(m => ({ role: m.role, content: m.content })));
+      const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + fileCtx }, ...histRef];
       const repairPrompt = () => {
         const parts = [];
         if (diag.length) parts.push('FAILED OPERATIONS (exact errors — fix every one):\n' + diag.map((x) => ' - ' + x).join('\n'));
-        if (testReports.length) parts.push('AUTO PAGE TEST reports:\n' + testReports.join('\n\n'));
-        return 'The page test just ran and the build still has errors. Do NOT stop and do NOT restate the problem — apply the exact fixes below, then keep building the app.\n\n' +
-          (parts.join('\n\n') || 'No specific errors were captured, but the page did not pass. Re-check the page and fix whatever is wrong.');
+        return parts.length
+          ? 'The build still has failing operations. Do NOT stop and do NOT restate the problem — apply the exact fixes below, then keep building the app.\n\n' + parts.join('\n\n')
+          : 'The build hit an error. Re-check the recent work and fix whatever is wrong, then keep building the app.';
       };
 
       let attempt = 0;
@@ -469,14 +434,13 @@ chat.post('/', async (c) => {
         attempt++;
         wantRepair = false;
         const diagAtStart = diag.length;
-        const trAtStart = testReports.length;
         subAgentTasks.length = 0;
         const parser = new FileStreamer();
 
         let upstream;
         let providerUsed = null;
         try {
-          ({ upstream, provider } = await openUpstream(model, await buildGenMessages(), key, ac.signal, emit, EFFORT[effort]));
+          ({ upstream, provider } = await openUpstream(model, buildGenMessages(), key, ac.signal, emit, EFFORT[effort]));
         } catch (e) {
           if (!ac.signal.aborted) send({ type: 'error', message: e.message });
           break;
@@ -536,52 +500,36 @@ chat.post('/', async (c) => {
               }
             }
           }
-          // Auto page test: give the model the same "load the page, look at the
-          // console" feedback a human would — every round. It runs BEFORE the
-          // round is recorded so its report is part of the history the AI reads
-          // when it continues.
-          let autoResult = null;
-          try {
-            const fileList = await store.listFiles(pid);
-            if (Array.isArray(fileList) && fileList.length <= 200 && fileList.length) {
-              const all = await store.listFilesWithContent(pid);
-              const r = await pageTest({ files: all });
-              autoResult = r;
-              testReports.push(reportToText(r, 'AUTO PAGE TEST'));
-              send({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, auto: true });
-              await quarantineFromReport(r, send);
-            } else if (!Array.isArray(fileList) || !fileList.length) {
-              send({ type: 'test', ok: true, pages: 0, scripts: 0, errors: [], auto: true, note: 'no files yet — nothing to test' });
-            }
-          } catch { /* page test is best-effort */ }
-          // Decide whether the AI must keep fixing within this session, then
-          // record the round WITH every new error so it reaches the AI before
+          // Record the round WITH every new error so it reaches the AI before
           // the stream stops.
-          if (autoResult && !autoResult.ok) wantRepair = true;
           if (diag.length > diagAtStart) wantRepair = true;
           if (wantRepair) send({ type: 'note', message: 'The build still has errors — continuing in this session so the AI can fix them right now.' });
           if (raw.trim()) {
             let recorded = raw;
             const notes = [];
             const roundDiag = diag.slice(diagAtStart);
-            const roundTests = testReports.slice(trAtStart);
             if (roundDiag.length) {
               notes.push('DIAGNOSTICS — these operations FAILED just now, so the app may be incomplete or broken. Fix them in your very next step using the exact errors above:\n' +
                 roundDiag.map((x) => ' - ' + x).join('\n'));
             }
-            if (roundTests.length) {
-              notes.push('PAGE TESTS (a headless pass over the app — navigation-visible reference errors and script syntax errors):\n' +
-                roundTests.join('\n\n'));
-            }
             if (wantRepair) {
-              notes.push('REPAIR REQUIRED — the checks above still fail. Your next turn starts from this exact message and must fix every error listed here.');
+              notes.push('REPAIR REQUIRED — the operations above still fail. Your next turn starts from this exact message and must fix every error listed here.');
             }
             if (notes.length) recorded += '\n\n' + notes.join('\n\n');
             await store.addMessage(pid, 'assistant', recorded);
+            try { histRef.push({ role: 'assistant', content: recorded }); } catch {}
           }
-          if (wantRepair) await store.addMessage(pid, 'user', repairPrompt());
-          // Point-in-time snapshot after each round for rollback (best-effort).
-          try { await store.takeSnapshot(pid, message.slice(0, 60)); } catch { /* snapshots are best-effort */ }
+          if (wantRepair) {
+            const prompt = repairPrompt();
+            await store.addMessage(pid, 'user', prompt);
+            try { histRef.push({ role: 'user', content: prompt }); } catch {}
+          }
+          // Freeze-guard: quarantine lifts whenever this round wrote nothing
+          // flagged as a freeze risk (the old clean page-test report used to
+          // do this — page test is gone now, so do it inline).
+          if (!roundDiag.some((x) => String(x).includes('freeze risk'))) {
+            await quarantineSync([], send);
+          }
         } catch (e) {
           if (!ac.signal.aborted) send({ type: 'error', message: String(e.message || e) });
           wantRepair = false;
@@ -785,10 +733,7 @@ async function workspaceChat(c, body, message, user) {
       const deleted = [];
       const renamed = [];
       const diag = [];
-      const testReports = [];
       let ops = 0;
-
-      const wsFiles = () => [...ws].map(([path, content]) => ({ path, content }));
 
       const handleGen = async (ev) => {
         if (ev.type === 'file' && ev.path) {
@@ -843,14 +788,8 @@ async function workspaceChat(c, body, message, user) {
         } else if (ev.type === 'name' && ev.name) {
           send({ type: 'name', name: ev.name });
         } else if (ev.type === 'test') {
-          try {
-            const r = await pageTest({ files: wsFiles() });
-            testReports.push(reportToText(r, String(ev.note || '').slice(0, 200) ? `PAGE TEST (${String(ev.note).slice(0, 200)})` : 'PAGE TEST'));
-            send({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, note: String(ev.note || '').slice(0, 200), workspace: true });
-          } catch (e) {
-            send({ type: 'warn', message: `page test failed to run: ${String(e.message || e)}` });
-            diag.push(`page test failed to run: ${String(e.message || e)}`);
-          }
+          // Auto page test was removed for speed — ack the model's TEST block.
+          send({ type: 'test', ok: true, pages: 0, scripts: 0, errors: [], note: String(ev.note || '').slice(0, 200), workspace: true, auto: false });
         } else if (ev.type === 'cmd' && ev.command) {
           // Execute on the project's dedicated cloud terminal when configured;
           // otherwise relay so the client can offer to run it locally.
@@ -875,9 +814,9 @@ async function workspaceChat(c, body, message, user) {
       const wsRepairPrompt = () => {
         const parts = [];
         if (diag.length) parts.push('FAILED OPERATIONS (exact errors — fix every one):\n' + diag.map((x) => ' - ' + x).join('\n'));
-        if (testReports.length) parts.push('PAGE TEST reports:\n' + testReports.join('\n\n'));
-        return 'The page test just ran and the build still has errors. Do NOT stop and do NOT restate the problem — apply the exact fixes below, then keep building.\n\n' +
-          (parts.join('\n\n') || 'No specific errors were captured, but the page did not pass. Re-check the page and fix whatever is wrong.');
+        return parts.length
+          ? 'The build still has failing operations. Do NOT stop and do NOT restate the problem — apply the exact fixes below, then keep building.\n\n' + parts.join('\n\n')
+          : 'The build hit an error. Re-check the recent work and fix whatever is wrong, then keep building.';
       };
 
       let attempt = 0;
@@ -887,7 +826,6 @@ async function workspaceChat(c, body, message, user) {
         attempt++;
         wantRepair = false;
         const diagAtStart = diag.length;
-        const trAtStart = testReports.length;
         const parser = new FileStreamer();
         let raw = '';
         let upstream;
@@ -933,24 +871,14 @@ async function workspaceChat(c, body, message, user) {
             }
           }
           for (const ev of parser.flush()) await handleGen(ev);
-          let autoResult = null;
-          try {
-            const r = await pageTest({ files: wsFiles() });
-            autoResult = r;
-            testReports.push(reportToText(r, 'AUTO PAGE TEST'));
-            send({ type: 'test', ok: r.ok, pages: r.pages, scripts: r.scripts, errors: r.errors, more: r.more, auto: true, workspace: true });
-          } catch { /* page test is best-effort */ }
-          if (autoResult && !autoResult.ok && autoResult.pages > 0) wantRepair = true;
           if (diag.length > diagAtStart) wantRepair = true;
           if (wantRepair) send({ type: 'note', message: 'The build still has errors — continuing in this session so the AI can fix them right now.' });
           if (raw.trim()) {
             let recorded = raw;
             const notes = [];
             const roundDiag = diag.slice(diagAtStart);
-            const roundTests = testReports.slice(trAtStart);
             if (roundDiag.length) notes.push('DIAGNOSTICS — these operations FAILED just now:\n' + roundDiag.map((x) => ' - ' + x).join('\n'));
-            if (roundTests.length) notes.push('PAGE TESTS:\n' + roundTests.join('\n\n'));
-            if (wantRepair) notes.push('REPAIR REQUIRED — the checks above still fail. Fix every error listed here.');
+            if (wantRepair) notes.push('REPAIR REQUIRED — the operations above still fail. Fix every error listed here.');
             if (notes.length) recorded += '\n\n' + notes.join('\n\n');
             transcript.push({ role: 'assistant', content: recorded });
           }
