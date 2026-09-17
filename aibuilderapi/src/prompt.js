@@ -33,7 +33,7 @@ Tools:
     Each search must appear in the file exactly once. You may pass several hunks in one call. One edit_file per file.
 - delete_file — remove a file that is no longer needed: {"path":"…"}
 - rename_file — move/rename a file (references in other files are updated automatically): {"from":"old/path.js","to":"new/path.js"}
-- run_command — your dedicated project terminal. PREFER IT: inspect real files on disk, run builds/tests, curl any API, pipe and transform files, manage state — far more capable than the file tools. Your project gets its own sandboxed folder; commands run in it and writes elsewhere are blocked. Files you create or change here are mirrored back into the app's storage automatically when the round ends, so the stored files stay in sync:
+- run_command — your dedicated project terminal. PREFER IT: inspect real files on disk, run builds/tests, curl any API, pipe and transform files, manage state — far more capable than the file tools. Your project gets its own sandboxed folder and commands run inside it. STRICT CONTAINMENT: any command that touches a path OUTSIDE that folder — deleting, writing or even reading — is refused with a \`blocked:\` error and nothing runs (so \`rm -rf\` only ever reaches files inside the project). When a command is blocked, do NOT try to work around it or apologise to the user: rewrite it with relative paths that stay inside the project and keep going — the refusal is routine, not a session failure. \`ls /etc\`, \`rm -rf /tmp/x\`, \`cat ~/.ssh/id_rsa\`, command substitution and inline \`-e/-c\` code are all refused; write a script file and run it instead. Files you create or change here are mirrored back into the app's storage automatically when the round ends, so the stored files stay in sync:
     {"command":"ls -la"}
     {"command":"cat index.html"}
     {"command":"curl -s https://api.example.org/data"}
@@ -418,7 +418,7 @@ Remove heavy data URIs from <img> tags once the asset file exists — reference 
 {"name":"seed_database","arguments":{"collection":"products","items":[{"name":"Starship","price":42},{"name":"Blaster","price":99}]}}
 <<<
 
-9. run_command — your dedicated project terminal. PREFER IT: inspect real files on disk, run builds/tests, curl any API, transform files with shell tools. Your project owns a sandboxed folder; commands run in it and writes elsewhere are blocked. Files you create or change here are mirrored back into the app's storage automatically each round, so stored files stay in sync:
+9. run_command — your dedicated project terminal. PREFER IT: inspect real files on disk, run builds/tests, curl any API, transform files with shell tools. Your project owns a sandboxed folder and commands run inside it. Any command touching a path outside the folder (delete, write or read) is refused with a \`blocked:\` error and nothing runs — rewrite it to stay inside the project with relative paths and continue; don't treat the block as a failure or try to escape it. Files you create or change here are mirrored back into the app's storage automatically each round, so stored files stay in sync:
 >>>tool
 {"name":"run_command","arguments":{"command":"curl -s https://api.example.org/data | head -20"}}
 <<<

@@ -1532,8 +1532,12 @@ async function send() {
         } else if (ev.type === 'cmd') {
           if (window.__termLine) {
             window.__termLine('$ ' + (ev.command || ''), 'cmd');
-            if (ev.output) window.__termLine(ev.output.replace(/\s+$/, ''), 'out');
-            window.__termLine(`[exit ${ev.code == null ? '-' : ev.code}] ${ev.error ? ev.error : 'ok'}`, 'meta');
+            if (ev.blocked) {
+              window.__termLine('[blocked] ' + (ev.error || ev.output || 'outside the project folder'), 'meta');
+            } else {
+              if (ev.output) window.__termLine(ev.output.replace(/\s+$/, ''), 'out');
+              window.__termLine(`[exit ${ev.code == null ? '-' : ev.code}] ${ev.error ? ev.error : 'ok'}`, 'meta');
+            }
           }
           if (aiMsg && ev.ok) aiMsg.card('run', actCards.term(ev.command));
         } else if (ev.type === 'plan') {

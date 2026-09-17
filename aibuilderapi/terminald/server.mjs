@@ -12,7 +12,7 @@
 import http, { request as httpRequest } from 'node:http';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { mkdirSync, statSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, statSync, readdirSync, readFileSync, unlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 
 const PORT = Number(process.env.PORT || process.argv[2] || 3000);
@@ -41,40 +41,110 @@ function safeSubPath(dir, rel) {
   return abs;
 }
 
-// Same write-jail policy as the worker (src/terminal.js:jailError).
-function jailError(cmd, cwd) {
-  const tokens = cmd.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[12]>>?|>>?|[&|;()<>]|[^\s;"'|&()<>]+/g) || [];
-  const ALLOW = new Set(['/dev/null', '/dev/stdout', '/dev/stderr', '/dev/zero', '/dev/urandom', '/dev/full']);
-  for (let i = 0; i < tokens.length; i++) {
-    const tok = tokens[i];
-    if (!/^[12]?>>?$/.test(tok)) continue;
-    let j = i + 1;
-    while (j < tokens.length && (tokens[j] === '&' || /^&\d+$/.test(tokens[j]))) j++;
-    if (j >= tokens.length) continue;
-    const dest = tokens[j].replace(/^["']|["']$/g, '');
-    if (!dest || dest.startsWith('&')) continue;
-    if (ALLOW.has(dest)) continue;
-    const base = cwd.endsWith('/') ? cwd.slice(0, -1) : cwd;
-    const raw = dest.startsWith('/') ? dest : dest.startsWith('~/') ? base + '/' + dest.slice(2) : base + '/' + dest;
-    const stack = [];
-    for (const s2 of raw.split('/')) {
-      if (!s2 || s2 === '.') continue;
-      if (s2 === '..') { if (stack.length) stack.pop(); else stack.push('..'); }
-      else stack.push(s2);
-    }
-    const norm = '/' + stack.join('/');
-    if (norm !== base && !norm.startsWith(base + '/')) return `write outside the project sandbox blocked: > ${dest}`;
+// Same containment policy as the worker (src/terminal.js:jailError). Every path
+// a command mentions must resolve inside the project folder — deletes, writes
+// and reads alike. Constructs that cannot be statically verified are blocked.
+// Best-effort (POSIX shells are not fully analyzable), so it fails closed.
+const JAIL_DEV = new Set([
+  '/dev/null', '/dev/stdout', '/dev/stderr', '/dev/zero',
+  '/dev/urandom', '/dev/random', '/dev/full', '/dev/tty',
+]);
+
+function resolveJailPath(raw, base) {
+  let p;
+  if (raw === '~' || raw.startsWith('~/')) p = base + raw.slice(1);
+  else if (raw.startsWith('/')) p = raw;
+  else p = base + '/' + raw;
+  const stack = [];
+  for (const seg of p.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') { if (stack.length) stack.pop(); else return null; }
+    else stack.push(seg);
   }
-  if (/\brm\s+(-[A-Za-z0-9]+[ ]+)*\/([^ ]|$)/.test(cmd)) return 'destructive rm on an absolute path blocked';
-  if (/^chmod\s+[0-7]+\s*\/[^ ]/.test(cmd)) return 'chmod on an absolute path blocked';
-  if (/\b(mkfs|fdisk|dd\s+if=[^ ]+of=[^ ]+)\b/i.test(cmd)) return 'destructive disk-level command blocked';
+  return '/' + stack.join('/');
+}
+
+function jailError(cmd, cwd) {
+  const base = String(cwd || '/').replace(/\/+$/, '') || '/';
+  const src = String(cmd || '');
+  const deny = (why) =>
+    `blocked: ${why}. Nothing was executed. Every command must stay inside the project folder (your current directory) — use relative paths.`;
+
+  if (/\$\(|`|<\(|>\(/.test(src)) return deny('command/process substitution is not allowed');
+  if (/(^|[;&|({]|\b(?:then|do|else)\b)\s*(eval|exec|source)\b/.test(src)) return deny('eval/exec/source is not allowed');
+  if (/(^|[;&|({]|\b(?:then|do|else)\b)\s*\.\s+\S/.test(src)) return deny('sourcing a script is not allowed');
+  if (/(^|[^\w.])(system|popen|child_process|subprocess|os\.system)\s*\(/.test(src)) return deny('spawning a subprocess from inline code is not allowed');
+  if (/(^|[;&|({]|\b(?:then|do|else)\b)\s*(sudo|doas|su|chroot|unshare|nsenter|mount|umount|pivot_root|setpriv)\b/.test(src)) return deny('privilege/escalation commands are not allowed');
+  if (/\b(mkfs|mke2fs|fdisk|parted|wipefs|shred)\b/i.test(src)) return deny('disk-level commands are not allowed');
+  if (/\bdd\b[^\n]*\bof=/.test(src)) return deny('dd writes are not allowed');
+  const inlineEval = [
+    /\b(node|bun|deno)\b[^\n]*\s(?:-e|--eval|-p|--print)(?:\s|=)/,
+    /\bpython[0-9.]*\b[^\n]*\s-c(?:\s|$)/,
+    /\b(perl|ruby)\b[^\n]*\s-[eE](?:\s|$)/,
+    /\bphp\b[^\n]*\s-r(?:\s|$)/,
+    /\b(sh|bash|zsh|dash|ksh)\b[^\n]*\s-c(?:\s|$)/,
+  ];
+  if (inlineEval.some((re) => re.test(src))) return deny('inline interpreter code cannot be verified (write a file and run it instead)');
+
+  const tokens = src.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+/g) || [];
+  for (let tok of tokens) {
+    let quoted = false;
+    if ((tok.startsWith('"') && tok.endsWith('"')) || (tok.startsWith("'") && tok.endsWith("'"))) {
+      quoted = true; tok = tok.slice(1, -1);
+    }
+    if (!tok) continue;
+    const asg = tok.match(/^[A-Za-z_][A-Za-z0-9_]*=(.*)$/);
+    if (asg) tok = asg[1];
+    if (!tok) continue;
+    if (tok.startsWith('-') && tok !== '-') {
+      const eq = tok.indexOf('=');
+      if (eq === -1) continue;
+      tok = tok.slice(eq + 1);
+      if (!tok) continue;
+    }
+    if (tok === '-' || tok === '.') continue;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(tok)) continue;
+    if (JAIL_DEV.has(tok)) continue;
+    if (tok.startsWith('~') && tok !== '~' && !tok.startsWith('~/')) {
+      return deny(`"${tok}" points outside the project folder`);
+    }
+    const pathish = tok.startsWith('/') || tok.startsWith('~') || tok === '..' || tok.startsWith('../') ||
+                    (!quoted && tok.includes('/'));
+    if (!pathish) continue;
+    const resolved = tok.replace(/\$\{?HOME\}?/g, base).replace(/\$\{?PWD\}?/g, base);
+    if (/[$`\\]/.test(resolved)) return deny(`cannot verify that "${tok}" stays inside the project`);
+    const norm = resolveJailPath(resolved, base);
+    if (!norm || (norm !== base && !norm.startsWith(base + '/'))) {
+      return deny(`"${tok}" is outside the project folder`);
+    }
+  }
   return null;
+}
+
+// Drop symlinks inside the project whose targets escape it, so `rm -rf link/`
+// or a write through a link can't reach outside via an in-project name.
+function stripEscapingLinks(dir, base) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const ent of entries) {
+    const abs = join(dir, ent.name);
+    if (ent.isSymbolicLink()) {
+      let real = null;
+      try { real = realpathSync(abs); } catch { /* dangling */ }
+      if (!real || (real !== base && !real.startsWith(base + '/'))) {
+        try { unlinkSync(abs); } catch { /* ignore */ }
+      }
+    } else if (ent.isDirectory()) {
+      stripEscapingLinks(abs, base);
+    }
+  }
 }
 
 function run(cwd, cmd, timeoutMs) {
   return new Promise((resolvePromise) => {
     const jail = jailError(cmd, cwd);
-    if (jail) return resolvePromise({ code: 1, output: jail, ms: 0 });
+    if (jail) return resolvePromise({ code: 1, output: jail, error: jail, blocked: true, ms: 0 });
+    stripEscapingLinks(cwd, cwd);
     let out = '';
     const started = Date.now();
     const child = spawn('/bin/sh', ['-c', cmd], { cwd, env: { ...process.env, HOME: cwd } });
@@ -215,7 +285,7 @@ const server = http.createServer(async (req, res) => {
     let cwd;
     try { cwd = workspace(body.pid); } catch { return json(res, 400, { error: 'bad pid' }); }
     const r = await run(cwd, cmd, Math.min(120000, Number(body.timeoutMs) || 30000));
-    return json(res, 200, { ok: r.code === 0, code: r.code, output: r.output, ms: r.ms });
+    return json(res, 200, { ok: r.code === 0, code: r.code, output: r.output, error: r.error || null, blocked: !!r.blocked, ms: r.ms });
   }
 
   if (req.method === 'POST' && url.pathname === '/mirror') {

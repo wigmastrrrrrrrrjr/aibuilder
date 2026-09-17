@@ -282,9 +282,9 @@ define({
     const res = await execCommand(ctx.pid, command);
     const error = res.ok ? undefined : (res.error || (res.code != null ? `exit ${res.code}` : 'command failed'));
     return {
-      ok: Boolean(res.ok), command, code: res.code, output: res.output, error,
+      ok: Boolean(res.ok), blocked: Boolean(res.blocked), command, code: res.code, output: res.output, error,
       noWarn: true, noDiag: ctx.cmdDiag === false,
-      event: { type: 'cmd', command, enabled: true, ok: res.ok, code: res.code, output: res.output, error: res.error },
+      event: { type: 'cmd', command, enabled: true, ok: res.ok, blocked: Boolean(res.blocked), code: res.code, output: res.output, error },
       op: true,
     };
   },
