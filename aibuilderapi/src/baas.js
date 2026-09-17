@@ -30,18 +30,18 @@ baas.post('/:pid/:coll', async (c) => {
 baas.get('/:pid/:coll/:id', async (c) => {
   const bad = await guard(c); if (bad) return bad;
   const row = await store.baasGet(c.req.param('pid'), c.req.param('coll'), c.req.param('id'));
-  return row ? c.json(row) : c.json({ error: 'not found' }, 404);
+  return row ? c.json(row) : c.json({ error: 'row not found' }, 404);
 });
 
 baas.put('/:pid/:coll/:id', async (c) => {
   const bad = await guard(c); if (bad) return bad;
   const patch = await c.req.json().catch(() => ({}));
   const row = await store.baasUpdate(c.req.param('pid'), c.req.param('coll'), c.req.param('id'), patch);
-  return row ? c.json(row) : c.json({ error: 'not found' }, 404);
+  return row ? c.json(row) : c.json({ error: 'row not found' }, 404);
 });
 
 baas.delete('/:pid/:coll/:id', async (c) => {
   const bad = await guard(c); if (bad) return bad;
-  const ok = await store.baasRemove(c.req.param('pid'), c.req.param('coll'), c.req.param('id'));
-  return ok ? c.json({ ok: true }) : c.json({ error: 'not found' }, 404);
+  await store.baasRemove(c.req.param('pid'), c.req.param('coll'), c.req.param('id'));
+  return c.json({ ok: true });
 });

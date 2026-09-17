@@ -105,7 +105,9 @@ let BAAS_SDK_RAW = `(function () {
   }
 
   function req(method, parts, body) {
-    return fetch([base].concat(parts.filter(Boolean)).join('/'), {
+    var segs = parts.filter(Boolean);
+    if (!segs.length) return Promise.reject(new Error('creat.db: a collection name is required'));
+    return fetch([base].concat(segs).join('/'), {
       method: method,
       headers: body ? authHeaders({ 'content-type': 'application/json' }) : undefined,
       body: body ? JSON.stringify(body) : undefined
@@ -113,9 +115,15 @@ let BAAS_SDK_RAW = `(function () {
       return r.text().then(function (t) {
         var data = t ? JSON.parse(t) : null;
         if (!r.ok) {
-          var msg = friendlyError(r.status);
-          if (r.status === 404) msg += ' <a href="/" style="color:#7c5cff;text-decoration:underline">Create one here</a>';
-          throw new Error(msg);
+          // Only a 404 whose body says the *project* is unknown means the app
+          // was deleted. A 404 for a missing row is normal (stale/removed id)
+          // and must not be reported as a deleted project.
+          var err = data && data.error;
+          if (r.status === 404 && err === 'unknown project') {
+            throw new Error(friendlyError(404) +
+              ' <a href="/" style="color:#7c5cff;text-decoration:underline">Create one here</a>');
+          }
+          throw new Error(err || friendlyError(r.status));
         }
         return data;
       });
