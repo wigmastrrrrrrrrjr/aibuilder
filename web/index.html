@@ -3,56 +3,106 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aibuilder — AI application studio</title>
-<meta name="description" content="Describe an app, and aibuilder generates and previews it live.">
+<title>aibuilder — an AI application studio</title>
+<meta name="description" content="Describe an app and aibuilder engineers it with you — live, editable, in real time.">
+<meta name="theme-color" content="#e8501a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0&display=block">
-<link rel="stylesheet" href="style.css?v=32">
+<link rel="stylesheet" href="style.css?v=40">
+<script>(function(){try{var t=localStorage.getItem('ab.theme')||((window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light');document.documentElement.dataset.theme=t}catch(e){}})();</script>
 </head>
 <body>
 
-<!-- Enterprise top navigation -->
+<!-- ============================================================
+     Icon sprite — hand-drawn, stroke based. Referenced by name.
+     ============================================================ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5c.7 3.7 2 5 5.7 5.7-3.7.7-5 2-5.7 5.7-.7-3.7-2-5-5.7-5.7 3.7-.7 5-2 5.7-5.7z"/><path d="M18.5 15.5c.3 1.4.8 1.9 2.2 2.2-1.4.3-1.9.8-2.2 2.2-.3-1.4-.8-1.9-2.2-2.2 1.4-.3 1.9-.8 2.2-2.2z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7.5 8.5L12 4l4.5 4.5"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></symbol>
+  <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.6 8.4l-2.1 5.1-5.1 2.1 2.1-5.1z"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 15a2 2 0 01-2 2H9l-5 4V6a2 2 0 012-2h12a2 2 0 012 2z"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c0-3.2 2.6-5.2 5.5-5.2s5.5 2 5.5 5.2"/><path d="M16 5.4a3.2 3.2 0 010 5.6M17.5 14.9c2 .7 3.3 2.3 3.3 5.1"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="14" r="4"/><path d="M11 11l8-8M16 4l3 3M14 6l2 2"/></symbol>
+  <symbol id="i-gift" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="1.6"/><path d="M4 14h16M12 10v10M12 10S11 5 8 5a2 2 0 000 5M12 10s1-5 4-5a2 2 0 010 5"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v2.6M12 19.4V22M2 12h2.6M19.4 12H22M4.9 4.9l1.9 1.9M17.2 17.2l1.9 1.9M19.1 4.9l-1.9 1.9M6.8 17.2l-1.9 1.9"/></symbol>
+  <symbol id="i-person" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></symbol>
+  <symbol id="i-checklist" viewBox="0 0 24 24"><path d="M4 7l1.8 1.8L9 5.5M4 16l1.8 1.8L9 14.5M12 7.5h8M12 16h8"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M5 14c-1.4 1.4-2 5-2 5s3.6-.6 5-2"/><path d="M9.5 18.5l-4-4"/><path d="M12.6 4.4C15 2 19 2 21 4c.6 2.6-.4 6.4-2.8 8.8l-4.4 4.4-6-6z"/><circle cx="15.4" cy="8.6" r="1.5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V5a1 1 0 011-1h3a1 1 0 011 1v2M6.5 7l.9 12.1a1 1 0 001 .9h7.2a1 1 0 001-.9L17.5 7"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12.5" rx="1.6"/><path d="M8 20.5h8M12 16.5v4"/></symbol>
+  <symbol id="i-tablet" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2.2"/><path d="M11 18.2h2"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.6"/><path d="M11 18.4h2"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.2l3.2 2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 10-1.6 5.4"/><path d="M20 5v6h-6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5"/><path d="M5 20h14"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2.2M12 19.8V22M2 12h2.2M19.8 12H22M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M19.1 4.9l-1.6 1.6M6.5 17.5l-1.6 1.6"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.2A8 8 0 019.8 4a8.2 8.2 0 1010.2 10.2z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></symbol>
+  <symbol id="i-wand" viewBox="0 0 24 24"><path d="M3 21l9.5-9.5"/><path d="M14.5 3.2V1.5M14.5 10.2V8.5M10.5 5.5H8.8M20.2 5.5h-1.7M17 2.2l-1.2 1.2M17 8.8l-1.2-1.2M12 2.2l1.2 1.2M12 8.8l1.2-1.2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.3 12.4l2.6 2.6 4.8-5.2"/></symbol>
+  <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
+  <symbol id="i-warning" viewBox="0 0 24 24"><path d="M12 3.5l9 16H3z"/><path d="M12 10v4.2M12 17.4h.01"/></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4.5 13.5H11l-1 8.5L18.5 10H12z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/></symbol>
+  <symbol id="i-command" viewBox="0 0 24 24"><path d="M9 9V6.5A2.5 2.5 0 106.5 9H9zm0 0v6m0-6h6m-6 6H6.5A2.5 2.5 0 109 17.5V15zm6-6V6.5A2.5 2.5 0 1117.5 9H15zm0 0v6m0 0h2.5A2.5 2.5 0 1115 17.5V15z"/></symbol>
+</svg>
+
+<!-- ============================================================
+     Top bar
+     ============================================================ -->
 <header class="topbar">
-  <a class="brand" href="index.html"><div class="logo"><span>aibuilder</span></div></a>
+  <a class="brand" href="index.html" title="aibuilder">
+    <span class="brandMark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><use href="#i-spark"/></svg></span>
+    <span class="logo">ai<b>builder</b></span>
+    <span class="brandTag">studio</span>
+  </a>
   <div class="topbarRight" id="topbarRightWrap">
-    <button id="themeBtn" title="Toggle dark / light mode"><span class="ms">dark_mode</span></button>
+    <button class="cmdK" id="cmdkBtn" title="Command palette"><span class="ms" data-ic="search"></span><span>Jump to…</span><kbd>⌘K</kbd></button>
+    <button id="themeBtn" class="iconBtn" title="Toggle dark / light mode"><span class="ms" data-ic="moon"></span></button>
     <div id="acctMenu" hidden>
       <div class="acctMenuHead">
         <div class="name" id="acctName"></div>
         <div class="sub">Signed in</div>
       </div>
-      <button class="acctMenuRow" id="menuTheme" type="button"><span class="ms">contrast</span> Appearance<span class="state" id="themeState"></span></button>
-      <button class="acctMenuRow danger" id="menuDelete" type="button"><span class="ms">delete</span> Delete account</button>
-      <button class="acctMenuRow danger" id="menuSignout" type="button"><span class="ms">logout</span> Sign out</button>
+      <button class="acctMenuRow" id="menuTheme" type="button"><span class="ms" data-ic="sun"></span> Appearance<span class="state" id="themeState"></span></button>
+      <button class="acctMenuRow danger" id="menuDelete" type="button"><span class="ms" data-ic="trash"></span> Delete account</button>
+      <button class="acctMenuRow danger" id="menuSignout" type="button"><span class="ms" data-ic="external"></span> Sign out</button>
     </div>
-    <button id="whoBtn" title="Account — menu" hidden></button>
+    <button id="whoBtn" title="Account" hidden></button>
   </div>
 </header>
 
 <div id="app">
   <aside id="sidebar">
     <div class="navSection">Workspace</div>
-    <button id="newBtn" class="navItem primary" title="Start a new app"><span class="ms">add</span> New project</button>
-    <label id="uploadBtn" class="navItem" for="uploadInput" title="Upload an existing HTML/JS app"><span class="ms">upload_file</span> Upload app</label>
+    <button id="newBtn" class="navItem primary" title="Start a new app"><span class="ms" data-ic="plus"></span> New project</button>
+    <label id="uploadBtn" class="navItem" for="uploadInput" title="Upload an existing HTML/JS app"><span class="ms" data-ic="upload"></span> Upload app</label>
     <input type="file" id="uploadInput" multiple hidden>
-    <a id="discoverLink" class="navItem" href="discover.html"><span class="ms">explore</span> Discover apps</a>
-    <a id="forumLink" class="navItem" href="forum.html"><span class="ms">forum</span> Forum</a>
+    <a id="discoverLink" class="navItem" href="discover.html"><span class="ms" data-ic="compass"></span> Discover apps</a>
+    <a id="forumLink" class="navItem" href="forum.html"><span class="ms" data-ic="chat"></span> Forum</a>
 
     <div class="navDivider"></div>
     <div class="navSection">Your projects</div>
     <div id="projectList"></div>
 
-    <button id="teamsBtn" class="navItem" title="Teams — share projects, credits and live presence"><span class="ms">groups</span> Teams</button>
-    <button id="keyBtn" class="navItem" title="Use your own Ollama API key"><span class="ms">key</span> <i id="keyLbl" style="font-style:normal">Own API key</i></button>
-    <button id="giftBtn" class="navItem" title="Gift credits to another user"><span class="ms">redeem</span> Gift credits</button>
-    <button id="installBtn" class="navItem" title="Install the aib terminal client on any device"><span class="ms">terminal</span> Install CLI</button>
-    <button id="settingsBtn" class="navItem" title="Appearance, account and more"><span class="ms">settings</span> Settings</button>
+    <div class="navDivider"></div>
+    <button id="teamsBtn" class="navItem" title="Teams — share projects, credits and live presence"><span class="ms" data-ic="users"></span> Teams</button>
+    <button id="keyBtn" class="navItem" title="Use your own Ollama API key"><span class="ms" data-ic="key"></span> <i id="keyLbl" style="font-style:normal">Own API key</i></button>
+    <button id="giftBtn" class="navItem" title="Gift credits to another user"><span class="ms" data-ic="gift"></span> Gift credits</button>
+    <button id="installBtn" class="navItem" title="Install the aib terminal client on any device"><span class="ms" data-ic="terminal"></span> Install CLI</button>
+    <button id="settingsBtn" class="navItem" title="Appearance, account and more"><span class="ms" data-ic="gear"></span> Settings</button>
     <div id="metaBar"></div>
     <div id="accountFoot" hidden>
-      <button id="footWho" title="Account menu" type="button"><span class="ms">person</span>
+      <button id="footWho" title="Account menu" type="button"><span class="ms" data-ic="person"></span>
         <span class="afBody"><b id="footName">Account</b><em>Signed in</em></span>
       </button>
     </div>
@@ -63,28 +113,27 @@
       <div id="cursorLayer"></div>
       <header id="chatHeader">
         <span class="headerBtns">
-          <button id="menuBtn" title="Show history"><span class="ms">menu</span></button>
+          <button id="menuBtn" title="Show history"><span class="ms" data-ic="menu"></span></button>
         </span>
         <span id="headerTitle">
           <span id="projName" title="Click to rename">New app</span>
           <span id="statusDot" class="status" title="Generation status"><i></i><em id="statusTxt">Ready</em></span>
           <span id="liveBadge" hidden></span>
-          <button id="renameBtn" class="iconBtn" title="Rename project" hidden><span class="ms">edit</span></button>
+          <button id="renameBtn" class="iconBtn" title="Rename project" hidden><span class="ms" data-ic="code"></span></button>
         </span>
         <span class="headerBtns">
-          <button id="saveBtn" class="iconBtn" title="Save project" disabled><span class="ms">save</span><i id="saveLbl" style="font-style:normal">Save</i></button>
-          <button id="planBtn" class="iconBtn" title="Plan" hidden><span class="ms">checklist</span><em id="planCount"></em></button>
-          <button id="publishBtn" title="Publish to the discovery feed" disabled><span class="ms">publish</span><i id="pubLbl" style="font-style:normal">Publish</i></button>
-          <button id="delBtn" class="iconBtn" title="Delete project" hidden><span class="ms">delete</span></button>
+          <button id="saveBtn" class="iconBtn" title="Save project" disabled><span class="ms" data-ic="bookmark"></span><i id="saveLbl" style="font-style:normal">Save</i></button>
+          <button id="planBtn" class="iconBtn" title="Build plan" hidden><span class="ms" data-ic="checklist"></span><em id="planCount"></em></button>
+          <button id="publishBtn" title="Publish to the discovery feed" disabled><span class="ms" data-ic="rocket"></span><i id="pubLbl" style="font-style:normal">Publish</i></button>
+          <button id="delBtn" class="iconBtn" title="Delete project" hidden><span class="ms" data-ic="trash"></span></button>
         </span>
       </header>
-      <div id="refactorBar" hidden><span class="ms">autorenew</span> Refactoring code structure…</div>
+      <div id="refactorBar" hidden><span class="ms" data-ic="refresh"></span> Restructuring the code for you…</div>
       <div id="messages">
         <div class="empty">
-          <div class="emptyMark"><span class="ms">auto_awesome</span></div>
-          <h1>Describe it. aibuilder ships it.</h1>
-          <p>Type what you want to build and the platform engineers the full app with you —<br>
-             a live, editable preview on the right the whole way through.</p>
+          <div class="emptyMark"><span class="ms" data-ic="spark"></span></div>
+          <h1>Describe it.<br>Watch it <em>become real.</em></h1>
+          <p>Tell aibuilder what you want to build. It drafts a blueprint, writes the code, and keeps a live, editable preview open the whole way through.</p>
           <div class="emptySteps">
             <div class="step"><div class="n">01</div><div class="t">Describe</div><div class="s">“A billing dashboard with charts and CSV export.”</div></div>
             <div class="step"><div class="n">02</div><div class="t">Iterate</div><div class="s">Refine with follow-up prompts in the same thread.</div></div>
@@ -92,7 +141,7 @@
           </div>
           <div class="emptyQuick">
             <span class="eqLabel">Quick starts</span>
-            <button class="qt" data-prompt="Build a to-do list app. Users can add, edit, check off and delete tasks, and it saves everything to localStorage so it survives refresh. Make it look polished with a nice card layout, dark-mode friendly and fully responsive.">✓ To-do list</button>
+            <button class="qt" data-prompt="Build a to-do list app. Users can add, edit, check off and delete tasks, and it saves everything to the built-in database so it survives refresh. Make it look polished with a nice card layout, dark-mode friendly and fully responsive.">✓ To-do list</button>
             <button class="qt" data-prompt="Build a modern one-page landing page for a fictional startup. Include a hero with a headline and call-to-action, a features grid, a pricing section with three tiers, a testimonials row and a footer. Use clean gradients and make it fully responsive.">🚀 Landing page</button>
             <button class="qt" data-prompt="Build a billing dashboard. Show a KPI header (revenue, MRR, churn, active customers), a line chart of revenue over the last 12 months, a recent transactions table, and export the visible table to CSV. Style it like a professional SaaS admin.">📊 Billing dashboard</button>
             <button class="qt" data-prompt="Build a small quiz game. Show one question at a time with four options, highlight correct/wrong answers, track a score, and show a results screen at the end with a play-again button. Add a clean modern theme.">🧠 Quiz game</button>
@@ -112,11 +161,11 @@
             <button type="button" data-effort="3" title="Deep — 2× credits, works longer">Deep</button>
             <button type="button" data-effort="4" title="Deepest — 4× credits, works hardest">Deepest</button>
           </div>
-          <span class="promptHint">Enter or Ctrl+Enter to send · Shift+Enter for a new line</span>
+          <span class="promptHint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
         </div>
         <div id="composerMain">
           <textarea id="promptBox" rows="3" placeholder="Describe the app you want to build…"></textarea>
-          <button id="sendBtn" title="Generate"><span class="ms">arrow_upward</span></button>
+          <button id="sendBtn" title="Generate"><span class="ms" data-ic="arrow-up"></span></button>
         </div>
       </div>
     </section>
@@ -126,43 +175,40 @@
         <div id="fileChips"></div>
         <div class="headerBtns">
           <div id="devSwitcher" role="group" aria-label="Preview device" title="Preview size">
-            <button id="devDesktop" class="iconBtn" data-dev="desktop" title="Desktop preview"><span class="ms">desktop_windows</span></button>
-            <button id="devTablet" class="iconBtn" data-dev="tablet" title="Tablet preview"><span class="ms">tablet_mac</span></button>
-            <button id="devMobile" class="iconBtn" data-dev="mobile" title="Mobile preview"><span class="ms">phone_iphone</span></button>
+            <button id="devDesktop" class="iconBtn" data-dev="desktop" title="Desktop preview"><span class="ms" data-ic="monitor"></span></button>
+            <button id="devTablet" class="iconBtn" data-dev="tablet" title="Tablet preview"><span class="ms" data-ic="tablet"></span></button>
+            <button id="devMobile" class="iconBtn" data-dev="mobile" title="Mobile preview"><span class="ms" data-ic="phone"></span></button>
           </div>
-          <button id="termBtn" class="iconBtn" title="Cloud terminal (the AI's command workspace)"><span class="ms">terminal</span></button>
-          <button id="snapBtn" class="iconBtn" title="Project snapshots — roll back to any prior state"><span class="ms">history</span></button>
-          <button id="refreshBtn" class="iconBtn" title="Reload preview"><span class="ms">refresh</span></button>
-          <button id="dlBtn" class="iconBtn" title="Download all project files (zip)"><span class="ms">download</span></button>
-          <button id="openBtn" class="iconBtn" title="Open in new tab"><span class="ms">open_in_new</span></button>
+          <button id="termBtn" class="iconBtn" title="Cloud terminal (the AI's command workspace)"><span class="ms" data-ic="terminal"></span></button>
+          <button id="snapBtn" class="iconBtn" title="Project snapshots — roll back to any prior state"><span class="ms" data-ic="clock"></span></button>
+          <button id="refreshBtn" class="iconBtn" title="Reload preview"><span class="ms" data-ic="refresh"></span></button>
+          <button id="dlBtn" class="iconBtn" title="Download all project files"><span class="ms" data-ic="download"></span></button>
+          <button id="openBtn" class="iconBtn" title="Open in new tab"><span class="ms" data-ic="external"></span></button>
         </div>
       </header>
       <div id="previewStage">
-        <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
-                src="about:blank"></iframe>
+        <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals" src="about:blank"></iframe>
         <div id="freezeOverlay" hidden>
           <div class="foIco">!</div>
-          <p class="foTitle">Preview disabled</p>
-          <p class="foBody">The page contains a loop that would freeze the browser, so it is temporarily disabled.</p>
+          <p class="foTitle">Preview paused</p>
+          <p class="foBody">The page contains a loop that would freeze your browser, so it is paused for now.</p>
           <div id="freezeFiles"></div>
-          <p class="foHint">Ask the AI to fix it — the preview returns automatically once the build passes again.</p>
+          <p class="foHint">Ask the AI to fix it — the preview returns automatically once the build is clean.</p>
         </div>
       </div>
 
-      <!-- plan sidebar: docked rail on desktop, slide-over on mobile -->
       <aside id="planPane" hidden>
-        <header><span class="ms">checklist</span> Build plan
-          <button id="planClose" title="Close"><span class="ms">close</span></button>
+        <header><span class="ms" data-ic="checklist"></span> Build plan
+          <button id="planClose" class="chipBtn" title="Close"><span class="ms" data-ic="close"></span></button>
         </header>
         <ul id="planList"></ul>
       </aside>
 
-      <!-- cloud terminal: mirrors the AI's command workspace on the VM -->
       <aside id="termPane" hidden>
         <header>
-          <span class="ms">terminal</span>
+          <span class="ms" data-ic="terminal"></span>
           <span class="fpTitle">Cloud terminal</span>
-          <button id="termClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+          <button id="termClose" class="chipBtn" title="Close"><span class="ms" data-ic="close"></span></button>
         </header>
         <div id="termBody" class="termBody"></div>
         <div id="termBar" class="termBar">
@@ -172,12 +218,11 @@
         </div>
       </aside>
 
-      <!-- file viewer: click a chip in #previewHeader to open (Phase 2) -->
       <aside id="filePane" hidden>
         <header>
-          <span class="ms">description</span>
+          <span class="ms" data-ic="code"></span>
           <span id="fpTitle" class="fpTitle">index.html</span>
-          <button id="fpClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+          <button id="fpClose" class="chipBtn" title="Close"><span class="ms" data-ic="close"></span></button>
         </header>
         <div class="fpToolbar">
           <button id="fpRawBtn" class="chipBtn on" title="Show the file as-is">Raw</button>
@@ -194,20 +239,31 @@
   </main>
 </div>
 
-<!-- error notification tray -->
-<button id="notifBadge" hidden title="Problems"><span class="ms">priority_high</span><em id="notifCount">0</em></button>
+<!-- command palette -->
+<div id="cmdk" hidden>
+  <div class="cmdkCard" role="dialog" aria-modal="true" aria-label="Command palette">
+    <div class="cmdkSearch">
+      <span class="ms" data-ic="search"></span>
+      <input id="cmdkInput" placeholder="Search actions, projects and prompts…" autocomplete="off" spellcheck="false">
+      <kbd style="font-family:var(--font-mono);font-size:10.5px;color:var(--muted);border:1px solid var(--line);border-radius:5px;padding:1px 6px">ESC</kbd>
+    </div>
+    <div class="cmdkList" id="cmdkList"></div>
+    <div class="cmdkFoot"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> run</span><span><kbd>⌘K</kbd> close</span></div>
+  </div>
+</div>
+
+<button id="notifBadge" hidden title="Problems"><span class="ms" data-ic="warning"></span><em id="notifCount">0</em></button>
 <div id="notifPanel" hidden>
-  <header><span class="ms">warning</span> Problems</header>
+  <header><span class="ms" data-ic="warning"></span> Problems</header>
   <div id="notifList"></div>
 </div>
 
 <div id="scrim" hidden></div>
 
-<!-- project snapshots dialog (Phase 2) -->
 <div id="snapModal" hidden>
   <div class="snapCard">
-    <header><span class="ms">history</span> Project snapshots
-      <button id="snapClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+    <header><span class="ms" data-ic="clock"></span> Project snapshots
+      <button id="snapClose" class="chipBtn" title="Close"><span class="ms" data-ic="close"></span></button>
     </header>
     <div id="snapList"></div>
     <div class="snapCorner">
@@ -216,14 +272,12 @@
   </div>
 </div>
 
-<!-- drag-and-drop target overlay (Phase 2) -->
 <div id="dropOverlay" hidden><span>Drop files to add them to this project</span></div>
 
-<!-- teams (teambuild) -->
 <div id="teamModal" hidden>
   <div class="teamCard">
-    <header><span class="ms">groups</span> Teams
-      <button id="teamClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+    <header><span class="ms" data-ic="users"></span> Teams
+      <button id="teamClose" class="chipBtn" title="Close"><span class="ms" data-ic="close"></span></button>
     </header>
     <div id="teamList" class="teamList"><div class="fpEmpty">Loading…</div></div>
     <div class="teamRowIn">
@@ -237,61 +291,49 @@
   </div>
 </div>
 
-<!-- install the terminal client on any device -->
 <div id="installModal" hidden>
   <div class="teamCard installCard">
-    <header><span class="ms">terminal</span> Install the CLI
-      <button id="installClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+    <header><span class="ms" data-ic="terminal"></span> Install the CLI
+      <button id="installClose" class="chipBtn" title="Close"><span class="ms" data-ic="close"></span></button>
     </header>
     <div class="installBody">
       <p class="installLead">Build aibuilder apps right from your terminal — on <b>Linux</b>, <b>macOS</b>, <b>Windows</b> and <b>Android (Termux)</b> — with the same account and credits as the web app.</p>
-
       <div class="osGroup">
-        <div class="osLabel"><span class="ms">computer</span> macOS · Linux · Android (Termux)</div>
+        <div class="osLabel"><span class="ms" data-ic="monitor"></span> macOS · Linux · Android (Termux)</div>
         <div class="cmdBox"><code id="cmdUnix">curl -fsSL https://wigmastrrrrrrrrjr.github.io/aibuilder/install.sh | sh</code>
           <button class="chipBtn copyBtn" data-copy="cmdUnix" title="Copy">Copy</button>
         </div>
       </div>
-
       <div class="osGroup">
-        <div class="osLabel"><span class="ms">windows</span> Windows (PowerShell)</div>
+        <div class="osLabel"><span class="ms" data-ic="monitor"></span> Windows (PowerShell)</div>
         <div class="cmdBox"><code id="cmdWin">irm https://wigmastrrrrrrrrjr.github.io/aibuilder/install.ps1 | iex</code>
           <button class="chipBtn copyBtn" data-copy="cmdWin" title="Copy">Copy</button>
         </div>
       </div>
-
-      <div class="installSteps">
-        <div class="n">1</div><div class="t">Run the command above on any device</div>
-      </div>
-      <div class="installSteps">
-        <div class="n">2</div><div class="t">Run <code>aib login</code> — sign in with your aibuilder account</div>
-      </div>
-      <div class="installSteps">
-        <div class="n">3</div><div class="t">Run <code>aib</code> to start a terminal session. Prompts are sent to the same AI, and every generated file lands in a real folder on your machine.</div>
-      </div>
-
+      <div class="installSteps"><div class="n">1</div><div class="t">Run the command above on any device.</div></div>
+      <div class="installSteps"><div class="n">2</div><div class="t">Run <code>aib login</code> — sign in with your aibuilder account.</div></div>
+      <div class="installSteps"><div class="n">3</div><div class="t">Run <code>aib</code> to start a terminal session. Prompts go to the same AI, and every generated file lands in a real folder on your machine.</div></div>
       <p class="installPw">Building from source? <code>cd tui && cargo build --release</code> (Rust required).</p>
     </div>
   </div>
 </div>
 
-<!-- settings -->
 <div id="settingsModal" hidden>
   <div class="teamCard settingsCard">
-    <header><span class="ms">settings</span> Settings
-      <button id="settingsClose" class="chipBtn" title="Close"><span class="ms">close</span></button>
+    <header><span class="ms" data-ic="gear"></span> Settings
+      <button id="settingsClose" class="chipBtn" title="Close"><span class="ms" data-ic="close"></span></button>
     </header>
     <div class="settingsBody">
       <button class="settingsRow" id="settingsTheme" type="button" title="Toggle dark / light mode">
-        <span class="ms">contrast</span>
+        <span class="ms" data-ic="sun"></span>
         <span class="srBody"><b>Appearance</b><em id="settingsThemeState">Light</em></span>
       </button>
       <button class="settingsRow" id="settingsCli" type="button" title="Install the aib terminal client">
-        <span class="ms">terminal</span>
+        <span class="ms" data-ic="terminal"></span>
         <span class="srBody"><b>Terminal CLI</b><em>Install the aib client on your devices</em></span>
       </button>
       <button class="settingsRow danger" id="settingsSignout" type="button" title="Sign out">
-        <span class="ms">logout</span>
+        <span class="ms" data-ic="external"></span>
         <span class="srBody"><b>Sign out</b><em id="settingsSignoutName">…</em></span>
       </button>
     </div>
@@ -302,22 +344,21 @@
   <div class="authCard">
     <aside class="authBrand">
       <div>
-        <a class="logo" href="index.html" title="aibuilder"><span>aibuilder</span></a>
-        <h1 class="bHead">Build production apps by describing them.</h1>
-        <p class="bSub">aibuilder engineers, iterates, and previews your app in real time — one prompt at a time.</p>
+        <a class="logo" href="index.html" title="aibuilder">ai<b>builder</b></a>
+        <h1 class="bHead">Build production apps <em>by describing them.</em></h1>
+        <p class="bSub">aibuilder drafts a blueprint, engineers the app, and previews it live — one prompt at a time.</p>
         <div class="bPoints">
-          <div class="bPoint"><span class="ms">auto_awesome</span> AI-generated code with a live preview</div>
-          <div class="bPoint"><span class="ms">cache</span> 30 free credits every single day</div>
-          <div class="bPoint"><span class="ms">public</span> Publish to a public Discover feed</div>
-          <div class="bPoint"><span class="ms">lock</span> Bring your own API key for unlimited use</div>
+          <div class="bPoint"><span class="ms" data-ic="spark"></span> AI-generated code with a live preview</div>
+          <div class="bPoint"><span class="ms" data-ic="bolt"></span> 30 free credits every single day</div>
+          <div class="bPoint"><span class="ms" data-ic="compass"></span> Publish to a public Discover feed</div>
+          <div class="bPoint"><span class="ms" data-ic="key"></span> Bring your own API key for unlimited use</div>
         </div>
       </div>
       <div class="bLegal">By continuing you agree to the <a href="tos.html" target="_blank" rel="noopener">Terms of Service</a>, <a href="tou.html" target="_blank" rel="noopener">Terms of Use</a> and <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.
-          <br><br><a href="#" id="authInstallLink" style="color:#e0e7ff">Install the aib terminal client on your devices »</a></div>
+          <br><br><a href="#" id="authInstallLink">Install the aib terminal client on your devices »</a></div>
     </aside>
 
     <div class="authForms">
-      <!-- Step 1: Signup form (username + password + email) -->
       <form id="authForm" class="authFormBox" autocomplete="on">
         <h1 id="authTitle">Create your account</h1>
         <p id="authSub">Sign up free to build apps with AI — it takes 10 seconds.</p>
@@ -331,17 +372,15 @@
         <button id="authGo" type="submit">Sign up</button>
         <button id="authSwitch" type="button">Already have an account? Log in</button>
       </form>
-      <!-- Step 2: Email verification (shown after signup) -->
       <form id="verifyForm" class="authFormBox" hidden>
         <h1 id="authTitle2" class="hShared">Check your email</h1>
         <p id="verifySub">We sent a 6-digit code to verify your email.</p>
         <input id="verifyCode" placeholder="000000" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
         <div id="verifyErr"></div>
-        <button id="verifyGo" type="submit">Verify & create account</button>
+        <button id="verifyGo" type="submit">Verify &amp; create account</button>
         <button id="verifyResend" type="button">Resend code</button>
         <button id="verifyBack" type="button">← Back to signup</button>
       </form>
-      <!-- Step 3: 2FA verification (ai_dev only) -->
       <form id="tfaForm" class="authFormBox" hidden>
         <h1 id="authTitle3" class="hShared">Verification required</h1>
         <p id="tfaSub">A 6-digit code was sent to your email.</p>
@@ -355,7 +394,7 @@
 </div>
 
 <footer class="siteFoot">
-  <a class="logo" href="index.html"><span>aibuilder</span></a>
+  <a class="logo" href="index.html">ai<b>builder</b></a>
   <span class="footSep">·</span>
   <a class="footBtn" href="discover.html">Discover</a>
   <span class="footSep">·</span>
@@ -370,6 +409,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=32"></script>
+    <script src="app.js?v=40"></script>
 </body>
 </html>

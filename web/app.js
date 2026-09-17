@@ -7,6 +7,43 @@ const $ = (id) => document.getElementById(id);
 const WORKER_ORIGIN = 'https://aibuilderapi.csomeone301.workers.dev';
 const API = location.hostname.endsWith('github.io') ? WORKER_ORIGIN : '';
 
+/* ---- icons: a hand-built inline SVG sprite (see index.html <symbol id="i-*">) ---- */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function mountIcon(el) {
+  const name = el && el.dataset && el.dataset.ic;
+  if (!name || el._icName === name) return el;
+  el._icName = name;
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.7');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS(SVG_NS, 'use');
+  use.setAttribute('href', '#i-' + name);
+  svg.appendChild(use);
+  el.textContent = '';
+  el.appendChild(svg);
+  return el;
+}
+function mountIcons(root) {
+  const scope = root && root.querySelectorAll ? root : document;
+  scope.querySelectorAll('.ms[data-ic]').forEach(mountIcon);
+  if (scope.classList && scope.classList.contains('ms')) mountIcon(scope);
+}
+function ic(name, cls) {
+  const el = document.createElement('span');
+  el.className = 'ms' + (cls ? ' ' + cls : '');
+  el.dataset.ic = name;
+  return mountIcon(el);
+}
+const icSvg = (name) =>
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-' + name + '"/></svg>';
+function setIcon(el, name) { if (el) { el.dataset.ic = name; mountIcon(el); } }
+
 /* ---- theme (dark / light) ---- */
 const THEME_KEY = 'ab.theme';
 function applyTheme(theme) {
@@ -14,7 +51,7 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   try { localStorage.setItem(THEME_KEY, theme); } catch (e) { /* ignore */ }
   const tic = $('themeBtn') && $('themeBtn').querySelector('.ms');
-  if (tic) tic.textContent = theme === 'dark' ? 'light_mode' : 'dark_mode';
+  if (tic) setIcon(tic, theme === 'dark' ? 'sun' : 'moon');
   const ts = $('themeState');
   if (ts) ts.textContent = theme === 'dark' ? 'Dark' : 'Light';
 }
@@ -446,8 +483,7 @@ if (!sessTok()) {
    $('authGate').hidden = false;
 } else {
     whoBtn.hidden = false;
-    const ic = document.createElement('span'); ic.className = 'ms'; ic.textContent = 'person';
-    whoBtn.append(ic, document.createTextNode(sessName()));
+    whoBtn.append(ic('person'), document.createTextNode(sessName()));
     const af = $('accountFoot');
     if (af) {
       const fn = $('footName');
@@ -933,10 +969,9 @@ function resetToNew() {
   setStatus('Ready');
   messagesEl.innerHTML = `
     <div class="empty">
-      <div class="emptyMark"><span class="ms">auto_awesome</span></div>
-      <h1>Describe it. aibuilder ships it.</h1>
-      <p>Type what you want to build and the platform engineers the full app with you —<br>
-         a live, editable preview on the right the whole way through.</p>
+      <div class="emptyMark"><span class="ms" data-ic="spark"></span></div>
+      <h1>Describe it.<br>Watch it <em>become real.</em></h1>
+      <p>Tell aibuilder what you want to build. It drafts a blueprint, writes the code, and keeps a live, editable preview open the whole way through.</p>
       <div class="emptySteps">
         <div class="step"><div class="n">01</div><div class="t">Describe</div><div class="s">“A billing dashboard with charts and CSV export.”</div></div>
         <div class="step"><div class="n">02</div><div class="t">Iterate</div><div class="s">Refine with follow-up prompts in the same thread.</div></div>
@@ -944,12 +979,13 @@ function resetToNew() {
       </div>
       <div class="emptyQuick">
         <span class="eqLabel">Quick starts</span>
-        <button class="qt" data-prompt="Build a to-do list app. Users can add, edit, check off and delete tasks, and it saves everything to localStorage so it survives refresh. Make it look polished with a nice card layout, dark-mode friendly and fully responsive.">✓ To-do list</button>
+        <button class="qt" data-prompt="Build a to-do list app. Users can add, edit, check off and delete tasks, and it saves everything to the built-in database so it survives refresh. Make it look polished with a nice card layout, dark-mode friendly and fully responsive.">✓ To-do list</button>
         <button class="qt" data-prompt="Build a modern one-page landing page for a fictional startup. Include a hero with a headline and call-to-action, a features grid, a pricing section with three tiers, a testimonials row and a footer. Use clean gradients and make it fully responsive.">🚀 Landing page</button>
         <button class="qt" data-prompt="Build a billing dashboard. Show a KPI header (revenue, MRR, churn, active customers), a line chart of revenue over the last 12 months, a recent transactions table, and export the visible table to CSV. Style it like a professional SaaS admin.">📊 Billing dashboard</button>
         <button class="qt" data-prompt="Build a small quiz game. Show one question at a time with four options, highlight correct/wrong answers, track a score, and show a results screen at the end with a play-again button. Add a clean modern theme.">🧠 Quiz game</button>
       </div>
     </div>`;
+  mountIcons(messagesEl);
   setChips([]);
   frame.src = 'about:blank';
   clearPreviewQuarantine();
@@ -972,9 +1008,7 @@ function renderPlan(items) {
   list.innerHTML = '';
   for (const it of items || []) {
     const li = document.createElement('li');
-    const mark = document.createElement('span');
-    mark.className = 'ms mark' + (it.done ? ' done' : '');
-    mark.textContent = it.done ? 'check_circle' : 'radio_button_unchecked';
+    const mark = ic(it.done ? 'check-circle' : 'circle', 'mark' + (it.done ? ' done' : ''));
     li.appendChild(mark);
     li.appendChild(document.createTextNode(it.text));
     list.appendChild(li);
@@ -1018,7 +1052,7 @@ function renderNotifs() {
     body.textContent = n.message;
     const send = document.createElement('button');
     send.className = 'nSend';
-    send.innerHTML = '<span class="ms">smart_toy</span> Send to AI';
+    send.append(ic('wand'), document.createTextNode(' Send to AI'));
     send.onclick = () => {
       panel.hidden = true;
       promptBox.value = `Something broke in my app — please fix it.\n\nError (${n.title}): ${n.message}`;
@@ -1222,6 +1256,63 @@ const actCards = {
   },
 };
 
+/* ---------- the blueprint card: the AI's design intent, shown up front ---------- */
+function briefCardHtml(b) {
+  b = b || {};
+  const pal = (b.palette || []).filter(Boolean).map((c) =>
+    '<span class="swatch" style="--c:' + escHtml(c) + '" title="' + escHtml(c) + '"></span>').join('');
+  const chips = (b.components || []).filter(Boolean).map((c) =>
+    '<span class="briefChip">' + escHtml(c) + '</span>').join('');
+  const data = (b.data || []).map((d) => {
+    const col = typeof d === 'string' ? d : (d.collection || d.name || '');
+    const rows = typeof d === 'string' ? '' : (d.rows != null ? ' · ' + escHtml(String(d.rows)) + ' rows' : '');
+    return '<div class="briefDataRow"><code>' + escHtml(col) + '</code>' + rows + '</div>';
+  }).join('');
+  const fields =
+    (pal ? '<div class="briefField"><h5>Palette</h5><div class="swatches">' + pal + '</div></div>' : '') +
+    (chips ? '<div class="briefField"><h5>Key pieces</h5><div class="briefChips">' + chips + '</div></div>' : '') +
+    (data ? '<div class="briefField"><h5>Data</h5><div class="briefData">' + data + '</div></div>' : '');
+  return '<div class="brief">' +
+    '<div class="briefHead">' + icSvg('spark') +
+      '<span class="briefKicker">Blueprint</span>' +
+      '<span class="briefName">' + escHtml(b.name || 'Untitled build') + '</span></div>' +
+    '<div class="briefBody">' +
+      (b.vibe ? '<div class="briefVibe">' + escHtml(b.vibe) + '</div>' : '') +
+      (fields ? '<div class="briefGrid">' + fields + '</div>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+/* ---------- small celebration when a build lands ---------- */
+function celebrate() {
+  try {
+    if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const colors = ['#e8501a', '#f5a623', '#3da9fc', '#2fcb6a', '#a78bfa', '#ec4899'];
+    const layer = document.createElement('div');
+    layer.className = 'confetti';
+    for (let i = 0; i < 28; i++) {
+      const bit = document.createElement('i');
+      bit.style.left = (Math.random() * 100).toFixed(1) + '%';
+      bit.style.background = colors[i % colors.length];
+      bit.style.animationDelay = (Math.random() * 0.25).toFixed(2) + 's';
+      bit.style.animationDuration = (1.05 + Math.random() * 0.7).toFixed(2) + 's';
+      bit.style.setProperty('--x', (Math.random() * 80 - 40).toFixed(0) + 'px');
+      layer.appendChild(bit);
+    }
+    document.body.appendChild(layer);
+    setTimeout(() => layer.remove(), 2200);
+  } catch { /* cosmetic only */ }
+}
+
+/* ---------- witty progress phases while the model works ---------- */
+const ACT_PHASES = [
+  'reading the brief…', 'sketching the layout…', 'choosing a palette…',
+  'writing the markup…', 'styling the details…', 'wiring up state…',
+  'connecting the data…', 'checking the edges…', 'running a quick test…',
+  'sweeping up the loose ends…',
+];
+
+
 /* ---------- chat streaming ---------- */
 async function send() {
   const message = promptBox.value.trim();
@@ -1326,9 +1417,16 @@ async function send() {
           aiMsg = makeAiMsg(ev.model);
           activityText.textContent = `${ev.model} is working…`;
         } else if (ev.type === 'think') {
-          dots = (dots + 1) % 4;
-          if (aiMsg) aiMsg.setStatus('analyzing' + '.'.repeat(1 + dots));
-          activityText.textContent = 'Analyzing' + '.'.repeat(1 + dots);
+          dots = (dots + 1) % ACT_PHASES.length;
+          const phrase = ev.text || ACT_PHASES[dots];
+          if (aiMsg) aiMsg.setStatus(phrase);
+          activityText.textContent = phrase.charAt(0).toUpperCase() + phrase.slice(1);
+        } else if (ev.type === 'brief') {
+          const html = briefCardHtml(ev.brief);
+          if (aiMsg) aiMsg.card('brief', html);
+          else addAiBubble('Here is the blueprint for this build.');
+          activityText.textContent = 'Blueprint ready';
+          termLog('blueprint — ' + ((ev.brief && ev.brief.name) || 'untitled'), 's');
         } else if (ev.type === 'token') {
           displayText += ev.v;
           if (aiMsg) {
@@ -1439,6 +1537,7 @@ async function send() {
           if (ev.seeds?.length) bitsEnd.push(`${ev.seeds.length} seeded`);
           if (ev.assets?.length) bitsEnd.push(`${ev.assets.length} asset${ev.assets.length === 1 ? '' : 's'}`);
           termLog('build complete — ' + (bitsEnd.join(', ') || 'no changes'), 'done');
+          if (bitsEnd.length) celebrate();
           schedulePreview(); // live preview refreshes once more now the build ended
           if (aiMsg) {
             aiMsg.setStatus('done');
@@ -1942,6 +2041,94 @@ promptBox.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 
+/* ---------- command palette (⌘K / Ctrl-K) ---------- */
+const cmdk = $('cmdk'), cmdkInput = $('cmdkInput'), cmdkList = $('cmdkList');
+let cmdkItems = [], cmdkActive = 0;
+function cmdkCommands() {
+  const cmds = [
+    { label: 'New project', hint: 'Start fresh', icon: 'plus', run: () => resetToNew() },
+    { label: 'Toggle dark / light mode', hint: 'Appearance', icon: 'sun', run: () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark') },
+    { label: 'Refresh preview', hint: 'Reload the app on the right', icon: 'refresh', run: () => refreshPreview(true) },
+    { label: 'Open preview in a new tab', hint: 'Full screen', icon: 'external', run: () => { if (projectId) window.open(`${API}/preview/${projectId}/`, '_blank'); } },
+    { label: 'Download project files', hint: 'Export everything', icon: 'download', run: () => { if (projectId) window.open(`${API}/api/projects/${projectId}/export?download=1`, '_blank'); } },
+    { label: 'Snapshots', hint: 'Roll back in time', icon: 'clock', run: () => $('snapBtn').click() },
+    { label: 'Cloud terminal', hint: 'Run commands', icon: 'terminal', run: () => $('termBtn').click() },
+    { label: 'Build plan', hint: 'Toggle the plan panel', icon: 'checklist', run: () => $('planBtn').click() },
+    { label: 'Teams', hint: 'Share and build together', icon: 'users', run: () => $('teamsBtn').click() },
+    { label: 'Install the CLI', hint: 'Build from your terminal', icon: 'terminal', run: () => { installModal.hidden = false; } },
+    { label: 'Settings', hint: 'Appearance and account', icon: 'gear', run: () => { settingsModal.hidden = false; } },
+    { label: 'Discover apps', hint: 'See what others built', icon: 'compass', run: () => { location.href = 'discover.html'; } },
+    { label: 'Forum', hint: 'Discuss and share', icon: 'chat', run: () => { location.href = 'forum.html'; } },
+    { label: 'Sign out', hint: sessName() || 'Account', icon: 'external', run: () => { const so = $('menuSignout'); if (so) so.click(); } },
+  ];
+  if (projectId) {
+    cmds.push({ label: 'Rename this project', hint: projName.textContent, icon: 'code', run: doRename });
+    cmds.push({ label: 'Delete this project', hint: 'Cannot be undone', icon: 'trash', run: () => $('delBtn').click() });
+  }
+  for (const t of PROMPT_TEMPLATES) {
+    cmds.push({ label: 'Start: ' + t.label, hint: 'Prompt template', icon: 'wand', run: () => { cmdkClose(); promptBox.value = t.prompt; promptBox.focus(); } });
+  }
+  document.querySelectorAll('#projectList .proj').forEach((p) => {
+    cmds.push({ label: p.textContent.trim().replace(/\s*·$/, ''), hint: 'Open project', icon: 'folder', run: () => p.click() });
+  });
+  return cmds;
+}
+function renderCmdk() {
+  if (!cmdkItems.length) { cmdkList.innerHTML = '<div class="cmdkEmpty">No matches</div>'; return; }
+  cmdkList.innerHTML = '';
+  cmdkItems.forEach((c, i) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'cmdkItem' + (i === cmdkActive ? ' sel' : '');
+    const label = document.createElement('span');
+    label.textContent = c.label;
+    const hint = document.createElement('span');
+    hint.className = 'hint';
+    hint.textContent = c.hint || '';
+    row.append(ic(c.icon), label, hint);
+    row.onmousedown = (e) => { e.preventDefault(); cmdkActive = i; runCmdk(); };
+    row.onmousemove = () => { if (cmdkActive !== i) { cmdkActive = i; renderCmdk(); } };
+    cmdkList.appendChild(row);
+  });
+}
+function runCmdk() {
+  const c = cmdkItems[cmdkActive];
+  if (!c) return;
+  cmdkClose();
+  try { c.run(); } catch (e) { notify('Command failed', e.message); }
+}
+function cmdkOpen() {
+  if (!cmdk) return;
+  cmdk.hidden = false;
+  cmdkInput.value = '';
+  cmdkItems = cmdkCommands();
+  cmdkActive = 0;
+  renderCmdk();
+  cmdkInput.focus();
+}
+function cmdkClose() { if (cmdk) cmdk.hidden = true; }
+if (cmdk) {
+  $('cmdkBtn').addEventListener('click', cmdkOpen);
+  cmdk.addEventListener('click', (e) => { if (e.target === cmdk) cmdkClose(); });
+  cmdkInput.addEventListener('input', () => {
+    const q = cmdkInput.value.toLowerCase();
+    cmdkItems = cmdkCommands().filter((c) =>
+      !q || c.label.toLowerCase().includes(q) || (c.hint || '').toLowerCase().includes(q));
+    cmdkActive = 0;
+    renderCmdk();
+  });
+  cmdkInput.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); cmdkActive = Math.min(cmdkItems.length - 1, cmdkActive + 1); renderCmdk(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); cmdkActive = Math.max(0, cmdkActive - 1); renderCmdk(); }
+    else if (e.key === 'Enter') { e.preventDefault(); runCmdk(); }
+    else if (e.key === 'Escape') { cmdkClose(); }
+  });
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); cmdk.hidden ? cmdkOpen() : cmdkClose(); }
+  });
+}
+
+mountIcons(document);
 loadMeta();
 loadProjects(true);
 
