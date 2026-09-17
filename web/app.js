@@ -955,6 +955,7 @@ async function selectProject(pid) {
 function resetToNew() {
   projectId = null;
   canEdit = false;
+  hideBuildSplash(true);
   snapModal.hidden = true;
   fpPane.hidden = true;
   stopCursors();
@@ -1313,6 +1314,56 @@ const ACT_PHASES = [
 ];
 
 
+/* ---------- new-project creation splash ---------- */
+const BUILD_STEPS = [
+  'Creating your project',
+  'Creating dedicated folder',
+  'Starting dedicated terminal',
+  'Assembling the preview',
+];
+let splashStep = 0, splashTimer = null, splashActive = false;
+function renderBuildSplash() {
+  const list = $('bsSteps'); if (!list) return;
+  list.innerHTML = '';
+  BUILD_STEPS.forEach((label, i) => {
+    const li = document.createElement('li');
+    if (i < splashStep) li.className = 'done'; else if (i === splashStep) li.className = 'active';
+    const dot = document.createElement('span'); dot.className = 'bsDot';
+    if (i < splashStep) dot.innerHTML = ic('check');
+    const tx = document.createElement('span'); tx.textContent = label;
+    li.appendChild(dot); li.appendChild(tx);
+    list.appendChild(li);
+  });
+  mountIcons(list);
+  const bar = $('bsBar');
+  if (bar) bar.style.width = Math.round(((splashStep + 0.5) / BUILD_STEPS.length) * 100) + '%';
+}
+function showBuildSplash() {
+  const el = $('buildSplash'); if (!el) return;
+  splashActive = true; splashStep = 0;
+  el.hidden = false; el.classList.remove('leaving');
+  renderBuildSplash();
+  clearInterval(splashTimer);
+  splashTimer = setInterval(() => {
+    if (splashStep < BUILD_STEPS.length - 1) { splashStep++; renderBuildSplash(); }
+  }, 1500);
+}
+function advanceBuildSplash() {
+  if (!splashActive || splashStep >= BUILD_STEPS.length - 1) return;
+  splashStep++; renderBuildSplash();
+}
+function hideBuildSplash(instant) {
+  if (!splashActive) return;
+  splashActive = false;
+  clearInterval(splashTimer); splashTimer = null;
+  splashStep = BUILD_STEPS.length; renderBuildSplash();
+  const bar = $('bsBar'); if (bar) bar.style.width = '100%';
+  const el = $('buildSplash'); if (!el) return;
+  if (instant) { el.hidden = true; return; }
+  el.classList.add('leaving');
+  setTimeout(() => { el.hidden = true; el.classList.remove('leaving'); }, 420);
+}
+
 /* ---------- chat streaming ---------- */
 async function send() {
   const message = promptBox.value.trim();
@@ -1320,6 +1371,7 @@ async function send() {
   busy = true; sendBtn.disabled = true;
   promptBox.value = '';
   setStatus('Building');
+  if (!projectId) showBuildSplash();
 
   const emptyHero = messagesEl.querySelector('.empty');
   if (emptyHero) emptyHero.remove();
@@ -1409,6 +1461,7 @@ async function send() {
 
         if (ev.type === 'meta') {
           if (!projectId) {
+            showBuildSplash();
             projectId = ev.projectId; canEdit = true;
             publishBtn.disabled = false;
             if (saveBtn) saveBtn.disabled = false;
@@ -1440,6 +1493,7 @@ async function send() {
           if (aiMsg) aiMsg.card('', actCards.w(ev.path));
           activityText.textContent = `Generated ${ev.path}`;
           termLog('wrote ' + ev.path, 'w');
+          advanceBuildSplash();
           schedulePreview();
         } else if (ev.type === 'edit') {
           chipFiles.push(ev.path);
@@ -1448,6 +1502,7 @@ async function send() {
           if (aiMsg) aiMsg.card('', actCards.e(ev.path));
           activityText.textContent = `Updated ${ev.path}`;
           termLog('edited ' + ev.path, 'e');
+          advanceBuildSplash();
           schedulePreview();
         } else if (ev.type === 'delete') {
           chipFiles = chipFiles.filter((p) => p !== ev.path);
@@ -1528,6 +1583,7 @@ async function send() {
           notify('Generation error', ev.message);
         } else if (ev.type === 'done') {
           doneReceived = true;
+          hideBuildSplash();
           $('refactorBar').hidden = true;
           const bitsEnd = [];
           if (ev.files?.length) bitsEnd.push(`${ev.files.length} file${ev.files.length === 1 ? '' : 's'} written`);
@@ -1572,6 +1628,7 @@ async function send() {
     addAiBubble(`⚠ ${e.message}`);
     notify('Generation failed', e.message);
   } finally {
+    if (splashActive) hideBuildSplash();
     activityEl.hidden = true;
     $('refactorBar').hidden = true;
     busy = false; sendBtn.disabled = false;

@@ -9,7 +9,8 @@
 // Put it behind HTTPS (Caddy/nginx + Public IP, or Cloudflare Tunnel) and set
 // TERMINAL_URL / TERMINAL_TOKEN in the worker's wrangler.toml.
 
-import http from 'node:http';
+import http, { request as httpRequest } from 'node:http';
+import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { mkdirSync, statSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
@@ -22,9 +23,13 @@ const MAX_CMD = 2000;
 const MAX_FILES = 300;   // caps mirrored files per project
 const MAX_SIZE = 2 * 1024 * 1024;
 
+// Every project lives under <SANDBOX>/projects/<pid>/ so the AI's shell cwd is
+// the project folder and `ls -la` only shows that project's files.
+const PROJECTS = join(SANDBOX, 'projects');
+
 function workspace(pid) {
-  const dir = resolve(join(SANDBOX, String(pid || 'default').replace(/[^a-zA-Z0-9._-]/g, '')));
-  if (dir !== SANDBOX && !dir.startsWith(SANDBOX + '/')) throw new Error('bad pid');
+  const dir = resolve(join(PROJECTS, String(pid || 'default').replace(/[^a-zA-Z0-9._-]/g, '')));
+  if (dir !== PROJECTS && !dir.startsWith(PROJECTS + '/')) throw new Error('bad pid');
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -82,6 +87,86 @@ function run(cwd, cmd, timeoutMs) {
     });
     child.on('error', (e) => { clearTimeout(timer); resolvePromise({ code: 1, output: String(e.message), ms: Date.now() - started }); });
   });
+}
+
+// ---- dedicated servers: per-project long-running processes -----------------
+// Generated apps can start their own HTTP server here (Node/Express/Python/…).
+// Each gets a private loopback port; the worker proxies HTTP + WebSocket
+// requests to it via /srv/<pid>/<name>/... . The daemon persists NO server
+// state — apps must save anything durable with the database/multiplayer SDKs.
+
+const SERVERS = new Map();                 // `${pid}\0${name}` -> record
+const USED_PORTS = new Set();
+const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+const SERVE_MIN = 41000, SERVE_MAX = 41999;
+const LOG_RING = 20000;                    // chars of stdout/stderr kept per server
+
+function pickPort() {
+  for (let i = 0; i < 500; i++) {
+    const p = SERVE_MIN + Math.floor(Math.random() * (SERVE_MAX - SERVE_MIN));
+    if (p === PORT || USED_PORTS.has(p)) continue;
+    USED_PORTS.add(p);
+    return p;
+  }
+  throw new Error('no free port');
+}
+
+function serverKey(pid, name) { return `${String(pid)}\0${String(name)}`; }
+
+function startServer(pid, name, cmd) {
+  if (typeof name !== 'string' || !NAME_RE.test(name)) return { ok: false, error: 'bad server name (use a-z0-9_-)' };
+  if (typeof cmd !== 'string' || !cmd.trim()) return { ok: false, error: 'cmd required' };
+  const key = serverKey(pid, name);
+  const prev = SERVERS.get(key);
+  if (prev && prev.child && prev.exit === null) return { ok: false, error: 'server already running', port: prev.port };
+  const cwd = workspace(pid);
+  const port = pickPort();
+  const rec = { pid: String(pid), name, port, child: null, startedAt: Date.now(), log: '', exit: null };
+  SERVERS.set(key, rec);
+  const append = (d) => { rec.log = (rec.log + d.toString()).slice(-LOG_RING); };
+  try {
+    rec.child = spawn('/bin/sh', ['-c', cmd], {
+      cwd,
+      detached: true,                      // own process group → kill the whole tree
+      env: { ...process.env, HOME: cwd, PORT: String(port), PROJECT_ID: String(pid), SERVER_NAME: name },
+    });
+  } catch (e) {
+    rec.exit = -1; rec.log += `\n[spawn error] ${e.message}`;
+    return { ok: false, error: String(e.message) };
+  }
+  rec.child.stdout.on('data', append);
+  rec.child.stderr.on('data', append);
+  rec.child.on('close', (code) => { rec.exit = code; rec.child = null; });
+  rec.child.on('error', (e) => { rec.exit = -1; rec.log += `\n[spawn error] ${e.message}`; rec.child = null; });
+  return { ok: true, name, port };
+}
+
+function stopServer(pid, name) {
+  const rec = SERVERS.get(serverKey(pid, name));
+  if (!rec) return { ok: false, error: 'server not found' };
+  const kill = (sig) => { try { if (rec.child) process.kill(-rec.child.pid, sig); } catch { /* gone */ } };
+  kill('SIGTERM');
+  setTimeout(() => kill('SIGKILL'), 3000);
+  return { ok: true, name };
+}
+
+function serverInfo(rec) {
+  return { name: rec.name, port: rec.port, running: !!rec.child && rec.exit === null, startedAt: rec.startedAt, exit: rec.exit };
+}
+
+function listServers(pid) {
+  const out = [];
+  for (const rec of SERVERS.values()) if (rec.pid === String(pid)) out.push(serverInfo(rec));
+  return out;
+}
+
+// Resolve `/srv/<pid>/<name>/<rest>` to a running server record.
+function matchServer(pathname) {
+  const m = pathname.match(/^\/srv\/([^/]+)\/([^/]+)(\/.*)?$/);
+  if (!m) return null;
+  const rec = SERVERS.get(serverKey(m[1], m[2]));
+  if (!rec || !rec.child || rec.exit !== null) return null;
+  return { rec, rest: (m[3] || '/') };
 }
 
 function ls(dir, base = '') {
@@ -175,7 +260,68 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, count: files.length, files });
   }
 
+  // ---- dedicated servers (start / list / stop / logs) --------------------
+  if (req.method === 'POST' && url.pathname === '/serve') {
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'bad json' }); }
+    if (body.token !== TOKEN) return json(res, 401, { error: 'bad token' });
+    try { workspace(body.pid); } catch { return json(res, 400, { error: 'bad pid' }); }
+    const r = startServer(body.pid, String(body.name || '').toLowerCase(), String(body.cmd || ''));
+    return json(res, r.ok ? 200 : 400, r);
+  }
+
+  if (req.method === 'GET' && url.pathname === '/serve') {
+    if ((url.searchParams.get('token') || '') !== TOKEN) return json(res, 401, { error: 'bad token' });
+    return json(res, 200, { ok: true, servers: listServers(url.searchParams.get('pid') || 'default') });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/serve/stop') {
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'bad json' }); }
+    if (body.token !== TOKEN) return json(res, 401, { error: 'bad token' });
+    const r = stopServer(body.pid, String(body.name || '').toLowerCase());
+    return json(res, r.ok ? 200 : 404, r);
+  }
+
+  if (req.method === 'GET' && url.pathname === '/serve/logs') {
+    if ((url.searchParams.get('token') || '') !== TOKEN) return json(res, 401, { error: 'bad token' });
+    const rec = SERVERS.get(serverKey(url.searchParams.get('pid') || 'default', url.searchParams.get('name') || ''));
+    if (!rec) return json(res, 404, { error: 'server not found' });
+    return json(res, 200, { ok: true, name: rec.name, running: !!rec.child && rec.exit === null, exit: rec.exit, log: rec.log });
+  }
+
+  // ---- HTTP reverse proxy to a running dedicated server ------------------
+  if (url.pathname.startsWith('/srv/')) {
+    const hit = matchServer(url.pathname);
+    if (!hit) return json(res, 502, { error: 'server not running' });
+    const target = httpRequest({
+      host: '127.0.0.1', port: hit.rec.port, method: req.method,
+      path: hit.rest + url.search, headers: { ...req.headers },
+    }, (up) => { res.writeHead(up.statusCode || 502, up.headers); up.pipe(res); });
+    target.on('error', () => { if (!res.headersSent) json(res, 502, { error: 'server unreachable' }); else res.end(); });
+    req.pipe(target);
+    return;
+  }
+
   json(res, 404, { error: 'not found' });
+});
+
+// WebSocket (and other upgrade) proxy to a running dedicated server.
+server.on('upgrade', (req, socket, head) => {
+  const u = new URL(req.url, `http://localhost:${PORT}`);
+  const hit = matchServer(u.pathname);
+  if (!hit) { socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n'); socket.destroy(); return; }
+  const upstream = net.connect(hit.rec.port, '127.0.0.1', () => {
+    const lines = [`${req.method} ${hit.rest + u.search} HTTP/1.1`];
+    for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+    upstream.write(lines.join('\r\n') + '\r\n\r\n');
+    if (head && head.length) upstream.write(head);
+    socket.pipe(upstream);
+    upstream.pipe(socket);
+  });
+  upstream.on('error', () => { try { socket.destroy(); } catch { /* gone */ } });
+  socket.on('error', () => { try { upstream.destroy(); } catch { /* gone */ } });
+  socket.on('close', () => { try { upstream.destroy(); } catch { /* gone */ } });
 });
 
 server.listen(PORT, () => {

@@ -10,7 +10,7 @@ import { getVar } from './env.js';
 import { builtinKey } from './keys.js';
 import { toBase64 } from './base64.js';
 import { live } from './live.js';
-import { terminal } from './terminal.js';
+import { terminal, serverApi } from './terminal.js';
 import { auth, requireUser, canWrite } from './auth.js';
 import { teams } from './teams.js';
 import { features } from './features.js';
@@ -584,6 +584,7 @@ app.route('/', teams);
 app.route('/', features);
 app.route('/api/forum', forum);
 app.route('/api/terminal', terminal);
+app.route('/api/server', serverApi);
 app.route('/preview', preview);
 
 // 404s: API callers get a JSON error, browsers get a simple page

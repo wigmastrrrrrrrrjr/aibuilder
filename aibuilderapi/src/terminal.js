@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { getVar } from './env.js';
 import { requireUser } from './auth.js';
+import { store } from './store.js';
 
 // Dedicated cloud terminal for the AI. The worker proxies shell commands to a
 // small daemon running on an always-free VM (GCP e2-micro / Oracle Always Free),
@@ -12,7 +13,9 @@ import { requireUser } from './auth.js';
 // instead of the cloud daemon — useful for local development and testing.
 //
 // Every project is sandboxed to its own dedicated folder on the terminal:
-//   sandbox root/<pid>/  — commands run here, writes are jailed here.
+//   sandbox root/projects/<pid>/  — commands run here, writes are jailed here.
+// Keeping them under a shared `projects/` root means the AI's shell cwd is the
+// project folder itself, so `ls -la` only ever shows the current project.
 // Files are mirrored DB -> terminal before a build and synchronized back
 // terminal -> DB after it (see mirrorToTerminal / syncTerminal).
 
@@ -47,9 +50,10 @@ async function nodeTools() {
 async function sandboxDir(pid) {
   const { path } = await nodeTools();
   const SANDBOX = path.resolve(LOCAL_SANDBOX());
+  const PROJECTS = path.join(SANDBOX, 'projects');
   const safePid = String(pid || 'default').replace(/[^a-zA-Z0-9._-]/g, '');
-  const dir = path.resolve(path.join(SANDBOX, safePid));
-  if (dir !== SANDBOX && !dir.startsWith(SANDBOX + '/')) return null;
+  const dir = path.resolve(path.join(PROJECTS, safePid));
+  if (dir !== PROJECTS && !dir.startsWith(PROJECTS + '/')) return null;
   return dir;
 }
 
@@ -316,7 +320,99 @@ terminal.post('/exec', requireUser, async (c) => {
   if (!terminalEnabled()) return c.json({ error: 'terminal not configured', enabled: false }, 503);
   if (!cmd || typeof cmd !== 'string') return c.json({ error: 'cmd (string) is required' }, 400);
   if (!pid || typeof pid !== 'string') return c.json({ error: 'pid (string) is required' }, 400);
+  // Mirror the project's stored files into its sandbox so the shell sees exactly
+  // the current project, run the command, then reconcile the DB with anything it
+  // created/changed/deleted (so in-app terminal edits persist like the AI's do).
+  let snapshot = null;
+  try { snapshot = await mirrorToTerminal(pid, await store.listFilesWithContent(pid)); } catch { snapshot = null; }
   const res = await execCommand(pid, cmd, { cwd, timeoutMs });
-  if (!res.ok) return c.json(res, 502);
-  return c.json(res);
+  let sync = null;
+  if (snapshot) {
+    try {
+      const blobs = await readTerminalFiles(pid, snapshot);
+      if (blobs) {
+        const d = diffTerminal(blobs, snapshot);
+        for (const f of d.created) await store.saveFile(pid, f.path, f.content).catch(() => {});
+        for (const f of d.updated) await store.saveFile(pid, f.path, f.content).catch(() => {});
+        for (const p of d.deleted) await store.deleteFile(pid, p).catch(() => {});
+        sync = { created: d.created.map((f) => f.path), updated: d.updated.map((f) => f.path), deleted: d.deleted };
+      }
+    } catch { sync = null; }
+  }
+  const out = sync ? { ...res, sync } : res;
+  return c.json(out, res.ok ? 200 : 502);
+});
+
+// ---- generated-app dedicated servers -------------------------------------
+// Generated apps call creat.serve(...). Every request carries the signed-in
+// user's session (requireUser), then proxies to the terminal daemon: /serve
+// manages long-running processes and /srv reverse-proxies HTTP + WebSocket
+// traffic to the chosen server's loopback port. Server processes are
+// ephemeral — apps must persist state with the database/multiplayer SDKs.
+
+async function daemonServe(method, path, { body, query } = {}) {
+  if (!terminalEnabled()) return { status: 503, json: { error: 'terminal not configured', enabled: false } };
+  let url = `${URL()}${path}`;
+  let init;
+  if (method === 'GET') {
+    url += `?${new URLSearchParams({ token: TOKEN(), ...(query || {}) })}`;
+    init = { method };
+  } else {
+    init = { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: TOKEN(), ...(body || {}) }) };
+  }
+  try {
+    const r = await fetch(url, init);
+    const txt = (await r.text()) || '';
+    let j = null;
+    try { j = JSON.parse(txt); } catch { /* not json */ }
+    return { status: r.status, json: j || { error: txt.slice(0, 300) } };
+  } catch (e) {
+    return { status: 502, json: { error: `terminal unreachable: ${String(e?.message || e)}` } };
+  }
+}
+
+export const serverApi = new Hono();
+serverApi.use('*', requireUser);
+
+serverApi.get('/:pid', async (c) => {
+  const r = await daemonServe('GET', '/serve', { query: { pid: c.req.param('pid') } });
+  return c.json(r.json, r.status);
+});
+
+serverApi.post('/:pid/start', async (c) => {
+  const b = await c.req.json().catch(() => ({}));
+  const r = await daemonServe('POST', '/serve', {
+    body: { pid: c.req.param('pid'), name: String(b.name || '').toLowerCase(), cmd: b.command || b.cmd || '' },
+  });
+  return c.json(r.json, r.status);
+});
+
+serverApi.post('/:pid/stop', async (c) => {
+  const b = await c.req.json().catch(() => ({}));
+  const r = await daemonServe('POST', '/serve/stop', { body: { pid: c.req.param('pid'), name: String(b.name || '').toLowerCase() } });
+  return c.json(r.json, r.status);
+});
+
+serverApi.get('/:pid/:name/logs', async (c) => {
+  const r = await daemonServe('GET', '/serve/logs', { query: { pid: c.req.param('pid'), name: c.req.param('name') } });
+  return c.json(r.json, r.status);
+});
+
+// Catch-all HTTP + WebSocket reverse proxy. `new Request(target, c.req.raw)`
+// forwards method, headers and body; for an Upgrade request Cloudflare passes
+// the 101 handshake straight through to the daemon.
+serverApi.all('/*', async (c) => {
+  if (!terminalEnabled()) return c.json({ error: 'terminal not configured', enabled: false }, 503);
+  const m = c.req.path.match(/^\/api\/server\/([^/]+)\/([^/]+)(\/.*)?$/);
+  if (!m) return c.json({ error: 'bad path' }, 400);
+  const pid = m[1];
+  const name = m[2].toLowerCase();
+  const rest = m[3] || '/';
+  const qs = new URL(c.req.url).search;
+  const target = `${URL()}/srv/${encodeURIComponent(pid)}/${encodeURIComponent(name)}${rest}${qs}`;
+  try {
+    return await fetch(new Request(target, c.req.raw));
+  } catch (e) {
+    return c.json({ error: `server unreachable: ${String(e?.message || e)}` }, 502);
+  }
 });

@@ -360,6 +360,127 @@ let BAAS_SDK_RAW = `(function () {
         }
       };
     },
+    terminal: {
+      // Run a shell command inside THIS project's dedicated sandbox and get its
+      // output back. Files the command creates/changes/deletes are synced into
+      // the project automatically. Requires a signed-in visitor (x-ab-sess).
+      //   var r = await creat.terminal.run('ls -la');
+      //   r.output, r.code, r.ok, r.sync
+      run: function (cmd, opts) {
+        opts = opts || {};
+        return fetch('/api/terminal/exec', {
+          method: 'POST',
+          headers: authHeaders({ 'content-type': 'application/json' }),
+          body: JSON.stringify({ pid: pid, cmd: String(cmd || ''), timeoutMs: opts.timeoutMs })
+        }).then(function (r) {
+          return r.json().catch(function () { return {}; }).then(function (j) {
+            j = j || {};
+            if (j.enabled === false) j.error = j.error || 'terminal not configured';
+            return j;
+          });
+        });
+      },
+      // Drop-in terminal panel: creat.terminal.mount('#term') builds scrollback
+      // + an input so the app's own users can run commands. Returns a handle.
+      mount: function (el, opts) {
+        el = typeof el === 'string' ? document.querySelector(el) : el;
+        if (!el) throw new Error('terminal.mount: element not found');
+        opts = opts || {};
+        if (!document.getElementById('__ab_term_css')) {
+          var st = document.createElement('style');
+          st.id = '__ab_term_css';
+          st.textContent = '.__ab_term{font-family:ui-monospace,Menlo,Consolas,monospace;background:#0b0c0e;color:#e6edf3;border:1px solid #26292e;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;height:100%;min-height:180px}'
+            + '.__ab_term_out{flex:1;margin:0;padding:10px 12px;overflow:auto;white-space:pre-wrap;font-size:12.5px;line-height:1.5}'
+            + '.__ab_term form{display:flex;gap:8px;padding:8px;border-top:1px solid #26292e;background:#111317}'
+            + '.__ab_term_status{color:#e8501a;font-size:12.5px;min-width:10px}'
+            + '.__ab_term input{flex:1;background:transparent;border:0;outline:0;color:inherit;font:inherit}';
+          document.head.appendChild(st);
+        }
+        var root = document.createElement('div'); root.className = '__ab_term';
+        var out = document.createElement('pre'); out.className = '__ab_term_out';
+        var form = document.createElement('form');
+        var status = document.createElement('span'); status.className = '__ab_term_status';
+        var input = document.createElement('input');
+        input.type = 'text'; input.placeholder = opts.placeholder || 'type a command…';
+        form.appendChild(status); form.appendChild(input);
+        root.appendChild(out); root.appendChild(form);
+        el.innerHTML = ''; el.appendChild(root);
+        var hist = [], hp = -1;
+        function line(text, color) {
+          var d = document.createElement('div');
+          if (color) d.style.color = color;
+          d.textContent = text;
+          out.appendChild(d); out.scrollTop = out.scrollHeight;
+        }
+        form.onsubmit = function (e) {
+          e.preventDefault();
+          var cmd = input.value; input.value = '';
+          if (!cmd.trim()) return;
+          hist.push(cmd); hp = hist.length;
+          line('$ ' + cmd, '#8b949e'); status.textContent = '…';
+          creat.terminal.run(cmd, opts).then(function (j) {
+            status.textContent = '';
+            if (j.output) line(String(j.output).replace(/\s+$/, ''), null);
+            if (j.error) line(String(j.error), '#ff6f6f');
+            if (j.sync) {
+              var bits = [];
+              if (j.sync.created && j.sync.created.length) bits.push('+' + j.sync.created.join(' +'));
+              if (j.sync.updated && j.sync.updated.length) bits.push('~' + j.sync.updated.join(' ~'));
+              if (j.sync.deleted && j.sync.deleted.length) bits.push('-' + j.sync.deleted.join(' -'));
+              if (bits.length) line('[synced] ' + bits.join(' '), '#e8501a');
+            }
+          }).catch(function (err) { status.textContent = ''; line('error: ' + err.message, '#ff6f6f'); });
+        };
+        input.onkeydown = function (e) {
+          if (e.key === 'ArrowUp' && hp > 0) { input.value = hist[--hp] || ''; e.preventDefault(); }
+          if (e.key === 'ArrowDown') { hp = Math.min(hist.length, hp + 1); input.value = hist[hp] || ''; e.preventDefault(); }
+        };
+        line('# ' + (opts.banner || 'project terminal — file changes sync back automatically'), '#8b949e');
+        return { run: creat.terminal.run, el: root, clear: function () { out.innerHTML = ''; } };
+      }
+    },
+    serve: {
+      // Dedicated HTTP server for this project (Node/Express/Python/…). Start it
+      // from the app, then call it through the authenticated proxy:
+      //   await creat.serve.start('api', 'node server.js');
+      //   var res = await creat.serve.fetch('api', '/items');
+      //   var ws  = creat.serve.ws('api', '/ws');
+      // Servers are EPHEMERAL. Nothing the process holds survives a restart —
+      // save durable state with creat.db / creat.rt / creat.live.
+      start: function (name, command) {
+        return fetch('/api/server/' + pid + '/start', {
+          method: 'POST',
+          headers: authHeaders({ 'content-type': 'application/json' }),
+          body: JSON.stringify({ name: String(name || '').toLowerCase(), command: String(command || '') })
+        }).then(function (r) { return r.json(); });
+      },
+      stop: function (name) {
+        return fetch('/api/server/' + pid + '/stop', {
+          method: 'POST',
+          headers: authHeaders({ 'content-type': 'application/json' }),
+          body: JSON.stringify({ name: String(name || '').toLowerCase() })
+        }).then(function (r) { return r.json(); });
+      },
+      list: function () {
+        return fetch('/api/server/' + pid, authHeaders()).then(function (r) { return r.json(); });
+      },
+      logs: function (name) {
+        return fetch('/api/server/' + pid + '/' + encodeURIComponent(name) + '/logs', authHeaders())
+          .then(function (r) { return r.json(); });
+      },
+      url: function (name, path) {
+        return '/api/server/' + pid + '/' + encodeURIComponent(String(name || '').toLowerCase()) + (path || '/');
+      },
+      fetch: function (name, path, init) {
+        init = init || {};
+        init.headers = authHeaders(init.headers || {});
+        return fetch(creat.serve.url(name, path), init);
+      },
+      ws: function (name, path) {
+        var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        return new WebSocket(proto + location.host + creat.serve.url(name, path));
+      }
+    },
     chat: {
       // Persistent per-project chat with history, realtime delivery,
       // and anon identities — the jsccOS chat engine, back in the SDK.
