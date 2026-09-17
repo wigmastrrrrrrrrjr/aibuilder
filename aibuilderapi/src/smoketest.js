@@ -89,8 +89,13 @@ function lexStats(src) {
 
 function jsError(src) {
   const stats = lexStats(src);
-  if (!stats.balanced) return new Error('unbalanced braces/parens/brackets');
-  if (stats.moduleish) return null; // module syntax — balance scan only
+  if (stats.moduleish) {
+    // ES module syntax (import/export) can't go through new Function, so fall
+    // back to the brace/paren balance scan. The scan is naive about regex
+    // literals, so use it ONLY here — never for classic scripts, where the real
+    // parser below is authoritative and regex-aware.
+    return stats.balanced ? null : new Error('unbalanced braces/parens/brackets');
+  }
   try { new Function(src); return null; } catch (e) { return e; }
 }
 
@@ -288,6 +293,7 @@ export async function pageTest({ files }) {
     for (const m of html.matchAll(refRe)) {
       const ref = (m[1] || m[2] || '').trim();
       if (!ref) continue;
+      if (ref === '/' || ref === '.' || ref === './') continue; // site root = index.html, always served
       if (m[1] !== undefined && /^#/.test(ref)) continue;      // #hash handlers / ids
       if (HTTP_RE.test(ref) || DIRECT_RE.test(ref)) continue;
       if (/\.css$/i.test(ref)) {
