@@ -386,7 +386,7 @@ define({
       name: String(a.name || '').trim().slice(0, 60) || undefined,
       vibe: String(a.vibe || '').trim().slice(0, 280) || undefined,
       palette: (Array.isArray(a.palette) ? a.palette : [])
-        .map(hex).filter((c) => /^#?[0-9a-fA-F]{3,8}$/.test(c))
+        .map(hex).filter((c) => /^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(c))
         .map((c) => (c.startsWith('#') ? c : '#' + c)).slice(0, 6),
       components: (Array.isArray(a.components) ? a.components : [])
         .map((c) => String(c == null ? '' : c).trim().slice(0, 40)).filter(Boolean).slice(0, 10),
