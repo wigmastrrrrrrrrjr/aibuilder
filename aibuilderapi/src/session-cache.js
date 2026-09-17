@@ -1,5 +1,5 @@
 // In-memory session->user cache. getSession hits the DB twice per call
-// (session row + user row); rate-limit, vpn-block, and auth all resolve the
+// (session row + user row); rate-limit and auth both resolve the
 // same token on every request, so cache the resolved user briefly.
 // Only non-null users are cached so a brand-new session works immediately.
 

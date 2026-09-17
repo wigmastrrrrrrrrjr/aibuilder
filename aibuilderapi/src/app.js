@@ -18,7 +18,6 @@ import { forum } from './forum.js';
 import { teamPool, personalBalance } from './credits.js';
 import { v2 } from './v2.js';
 import { rateLimit } from './rate-limit.js';
-import { blockDatacenterIps } from './vpn-block.js';
 import {
   CORS_OPTIONS, DEFAULT_ALLOWED_ORIGINS, GITHUB_URL, blockForeignOrigins,
 } from './web-origin.js';
@@ -48,14 +47,6 @@ app.use('*', async (c, next) => {
   if (!c.res || c.res.headers.has('content-encoding')) return;
   c.res.headers.set('content-encoding', 'identity');
   c.res.headers.set('cache-control', 'no-store');
-});
-
-// ---- VPN / datacenter IP block -----------------------------------------------
-// Auth endpoints stay reachable from VPN/mobile/datacenter IPs so users can
-// always log in / sign up; the block protects the remaining API surface.
-app.use('/api/*', async (c, next) => {
-  if (c.req.path.startsWith('/api/auth') || c.req.path.startsWith('/api/credits')) return next();
-  return blockDatacenterIps()(c, next);
 });
 
 // ---- rate limits ------------------------------------------------------------
