@@ -1,0 +1,80 @@
+name: Supabase admin (manual only)
+
+# Manually-triggered PostgREST tool for the chat/multiplayer DB.
+# Never runs on push. Requires confirm=RUN.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'count | clear (clear truncates chat + multiplayer tables)'
+        required: true
+        default: 'count'
+      table:
+        description: 'optional single table for mode=count/clear-one'
+        required: false
+        default: ''
+      confirm:
+        description: 'Type RUN to execute, or anything else to abort'
+        required: true
+        default: 'ABORT'
+
+permissions:
+  contents: read
+
+jobs:
+  supabase:
+    if: github.event.inputs.confirm == 'RUN'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run
+        env:
+          SUPA_URL: https://trwxpgmkpaddnyktbleg.supabase.co
+          SUPA_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          MODE: ${{ github.event.inputs.mode }}
+          TABLE: ${{ github.event.inputs.table }}
+        run: |
+          set -euo pipefail
+          hdr=(-H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY")
+
+          count_one() {
+            local t="$1"
+            local cr
+            cr=$(curl -s -D - -o /dev/null "${hdr[@]}" \
+              -H "Prefer: count=exact" -H "Range: 0-0" \
+              "$SUPA_URL/rest/v1/$t?select=*" | tr -d '\r' | grep -i '^content-range:' || true)
+            printf '%-16s %s\n' "$t" "$cr"
+          }
+
+          if [ "$MODE" = "count" ]; then
+            if [ -n "$TABLE" ]; then
+              count_one "$TABLE"
+            else
+              for t in messages events presence a1_baas v2_messages v2_events forum_posts forum_threads; do count_one "$t"; done
+            fi
+            exit 0
+          fi
+
+          if [ "$MODE" = "clear-one" ]; then
+            [ -n "$TABLE" ] || { echo "clear-one needs table"; exit 1; }
+            echo "deleting all rows from $TABLE"
+            curl -s -o /dev/null -w "%{http_code}\n" -X DELETE "${hdr[@]}" "$SUPA_URL/rest/v1/$TABLE?select=*"
+            exit 0
+          fi
+
+          if [ "$MODE" = "clear" ]; then
+            # PostgREST needs a match-all filter; use each table's monotonic key.
+            echo "clearing chat + multiplayer tables"
+            delete_all() {
+              local t="$1" filt="$2" code
+              code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "${hdr[@]}" "$SUPA_URL/rest/v1/$t?$filt")
+              printf '%-16s delete -> %s\n' "$t" "$code"
+            }
+            delete_all v2_messages "id=gt.0"
+            delete_all v2_events   "id=gt.0"
+            delete_all messages    "created_at=gte.0"
+            delete_all events      "seq=gt.0"
+            delete_all presence    "seen_at=gte.0"
+            exit 0
+          fi
+
+          echo "unknown mode: $MODE"; exit 1
