@@ -77,6 +77,19 @@ create table if not exists public.v2_events (
 );
 create index if not exists v2_events_room_idx on public.v2_events(room, ts);
 
+-- Retention helper: keep the newest _keep events for a room, delete the rest.
+create or replace function public.a1_prune_v2_events(_room text, _keep int)
+returns int language plpgsql volatile as $$
+declare deleted int;
+begin
+  delete from public.v2_events
+   where room = _room
+     and id <= coalesce((select max(id) from public.v2_events where room = _room), 0)
+               - greatest(_keep, 0);
+  get diagnostics deleted = row_count;
+  return deleted;
+end $$;
+
 create table if not exists public.v2_credit_ledger (
   id bigint generated always as identity primary key,
   name text not null,

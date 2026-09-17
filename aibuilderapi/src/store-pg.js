@@ -34,6 +34,24 @@ function client() {
 // Anti-abuse: allow a small number of signups per network before locking.
 const MAX_ACCOUNTS_PER_IP = 3;
 
+// Event-log retention. The live event log is append-only and there is no cron
+// or queue in this deployment, so we prune opportunistically on append: each
+// room counts its appends in this isolate and triggers a server-side prune of
+// the oldest rows every EVENT_PRUNE_AFTER inserts. Bound per room is roughly
+// EVENT_KEEP + EVENT_PRUNE_AFTER (times the number of worker isolates).
+const EVENT_KEEP = 500;
+const EVENT_PRUNE_AFTER = 250;
+const _evAppends = new Map();
+
+function maybePruneEvents(pid, room) {
+  const key = pid + '\u0000' + room;
+  const n = (_evAppends.get(key) || 0) + 1;
+  if (n < EVENT_PRUNE_AFTER) { _evAppends.set(key, n); return; }
+  _evAppends.set(key, 0);
+  // Best-effort: a failed prune must never fail or delay the append.
+  client().rpc('a1_prune_events', { _pid: pid, _room: room, _keep: EVENT_KEEP }).then(() => {}, () => {});
+}
+
 function slugify(name) {
   const s = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   return (s || 'app').slice(0, 40);
@@ -587,7 +605,9 @@ export function createPgStore() {
       const { data: row, error } = await client().from('events')
         .insert({ pid, room, data: JSON.stringify(data ?? {}) }).select('seq').single();
       if (error) throw new Error(`db append event: ${error.message}`);
-      return Number(row.seq);
+      const seq = Number(row.seq);
+      maybePruneEvents(pid, room);
+      return seq;
     },
     async currentSeq(pid, room) {
       const { data, error } = await client().from('events')

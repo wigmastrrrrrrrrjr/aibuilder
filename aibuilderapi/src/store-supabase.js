@@ -24,6 +24,18 @@ function client() {
 export const now = () => Date.now();
 export const DAY = () => new Date().toISOString().slice(0, 10);
 
+// v2 live-event retention — same opportunistic scheme as store-pg.events.
+const V2_EVENT_KEEP = 500;
+const V2_EVENT_PRUNE_AFTER = 250;
+const _v2EvAppends = new Map();
+
+function maybePruneV2Events(room) {
+  const n = (_v2EvAppends.get(room) || 0) + 1;
+  if (n < V2_EVENT_PRUNE_AFTER) { _v2EvAppends.set(room, n); return; }
+  _v2EvAppends.set(room, 0);
+  client().rpc('a1_prune_v2_events', { _room: room, _keep: V2_EVENT_KEEP }).then(() => {}, () => {});
+}
+
 export const v2Users = {
   async create(name, phash, emailSha, ipTag) {
     const { data, error } = await client()
@@ -205,6 +217,7 @@ export const v2Events = {
     const row = { room, type: type || 'message', sender: sender || 'anon', data: payload || {}, ts: now() };
     const { data, error } = await client().from('v2_events').insert(row).select('*').single();
     if (error) throw error;
+    maybePruneV2Events(room);
     return data;
   },
   async list(room, limit, since) {

@@ -103,6 +103,21 @@ create table if not exists public.events (
 );
 create index if not exists idx_events_room on public.events (pid, room, seq);
 
+-- Retention helper: keep the newest _keep events for a room, delete the rest.
+-- Called opportunistically by the app on append (no cron in this deployment),
+-- so the live event log cannot grow without bound.
+create or replace function public.a1_prune_events(_pid text, _room text, _keep int)
+returns int language plpgsql volatile as $$
+declare deleted int;
+begin
+  delete from public.events
+   where pid = _pid and room = _room
+     and seq <= coalesce((select max(seq) from public.events where pid = _pid and room = _room), 0)
+                - greatest(_keep, 0);
+  get diagnostics deleted = row_count;
+  return deleted;
+end $$;
+
 -- ---- per-file revision history ---------------------------------------------
 create table if not exists public.file_versions (
   project_id text not null references public.projects(id) on delete cascade,
