@@ -9,6 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 import { effortLevel, EFFORT, modelCost, creditsToUnits, unitsToCredits } from './models.js';
 import { personalBalance } from './credits.js';
 import { executeTool, createMemoryStore } from './tools.js';
+import { terminalEnabled, mirrorToTerminal, readTerminalFiles, diffTerminal } from './terminal.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
@@ -39,6 +40,43 @@ const OR_SUB_MODELS = [
 ];
 const active = { mistral: 0, ollama: 0, local: 0, openrouter: 0 };
 let subRound = 0;
+
+// Format a run_command result so the model can see what it ran AND what came
+// back. The browser gets the `cmd` SSE event, but the transcript only ever
+// recorded the model's own text — command outputs were invisible to the AI on
+// the next round/turn. Cap each entry to keep context small.
+const TERM_LOG_BUDGET = 2500;
+function cmdTranscript(c) {
+  const out = String(c.output ?? '').slice(0, TERM_LOG_BUDGET);
+  const tail = out.length === TERM_LOG_BUDGET ? '\n…(output truncated)' : '';
+  const code = c.code != null ? ` (exit ${c.code})` : '';
+  const err = c.error ? `\nERROR: ${String(c.error).slice(0, 300)}` : '';
+  return `$ ${c.command}${code}\n${out}${tail}${err}`;
+}
+
+// Mirror the DB's files into the terminal sandbox before a build round and
+// return the snapshot { path -> content } used to reconcile afterwards.
+// Returns null when the terminal is disabled (built-in tools are the fallback).
+async function termMirror(store, pid) {
+  if (!terminalEnabled()) return null;
+  let files = [];
+  try { files = await store.listFilesWithContent(pid); } catch { files = []; }
+  return mirrorToTerminal(pid, Array.isArray(files) ? files : []);
+}
+
+// Read the sandbox back after a round, diff against the snapshot, and write any
+// terminal-made changes into the DB. Returns { created, updated, deleted }.
+async function termSyncToStore(store, pid, snapshot) {
+  if (!snapshot) return { created: [], updated: [], deleted: [], changed: 0 };
+  let blobs = null;
+  try { blobs = await readTerminalFiles(pid, snapshot); } catch { blobs = null; }
+  if (!blobs) return { created: [], updated: [], deleted: [], changed: 0 };
+  const d = diffTerminal(blobs, snapshot);
+  for (const f of d.created) await store.saveFile(pid, f.path, f.content).catch(() => {});
+  for (const f of d.updated) await store.saveFile(pid, f.path, f.content).catch(() => {});
+  for (const p of d.deleted) await store.deleteFile(pid, p).catch(() => {});
+  return d;
+}
 
 export const chat = new Hono();
 
@@ -188,6 +226,7 @@ chat.post('/', async (c) => {
       const assets = [];
       const seeds = [];
       const diag = [];          // operations that failed to apply — fed back to the model next turn
+      const cmdLog = [];        // run_command results — fed back to the model next turn
       const subAgentTasks = []; // reused each round — cleared at round start
       let ops = 0;
       let refactorSent = false;
@@ -232,6 +271,7 @@ chat.post('/', async (c) => {
         }
         if (res.op) { ops += res.ops || 1; maybeRefactor(); }
         if (res.event) send(res.event);
+        if (name === 'run_command' && typeof res.command === 'string') cmdLog.push(res);
         if (res.ok) return true;
         if (res.skipped) {
           if (!res.noWarn) send({ type: 'warn', message: res.error });
@@ -348,6 +388,9 @@ chat.post('/', async (c) => {
         wantRepair = false;
         const diagAtStart = diag.length;
         subAgentTasks.length = 0;
+        cmdLog.length = 0;
+        let termSnap = null;
+        termSnap = await termMirror(store, pid);
         const parser = new FileStreamer();
 
         let upstream;
@@ -413,6 +456,19 @@ chat.post('/', async (c) => {
               }
             }
           }
+          // Two-way terminal sync: anything the AI created/changed/deleted with
+          // shell commands (curl -o, git clone, sed -i, ...) is mirrored back
+          // into the database so built-in tools + the preview see it too.
+          if (termSnap) {
+            const synced = await termSyncToStore(store, pid, termSnap);
+            if (synced && synced.changed) {
+              for (const f of synced.created) written.push(f.path);
+              for (const f of synced.updated) edited.push(f.path);
+              for (const p of synced.deleted) deleted.push(p);
+              ops += synced.changed;
+              send({ type: 'sync', created: synced.created.map((f) => f.path), updated: synced.updated.map((f) => f.path), deleted: synced.deleted });
+            }
+          }
           // Record the round WITH every new error so it reaches the AI before
           // the stream stops.
           if (diag.length > diagAtStart) wantRepair = true;
@@ -429,6 +485,7 @@ chat.post('/', async (c) => {
               notes.push('REPAIR REQUIRED — the operations above still fail. Your next turn starts from this exact message and must fix every error listed here.');
             }
             if (notes.length) recorded += '\n\n' + notes.join('\n\n');
+            if (cmdLog.length) recorded += '\n\nTERMINAL — output of the commands you just ran:\n' + cmdLog.map(cmdTranscript).join('\n\n');
             await store.addMessage(pid, 'assistant', recorded);
             try { histRef.push({ role: 'assistant', content: recorded }); } catch {}
           }
@@ -646,6 +703,7 @@ async function workspaceChat(c, body, message, user) {
       const deleted = [];
       const renamed = [];
       const diag = [];
+      const cmdLog = [];        // run_command results — fed back to the model next turn
       let ops = 0;
 
       const handleGen = async (call) => {
@@ -675,6 +733,7 @@ async function workspaceChat(c, body, message, user) {
         }
         if (res.op) ops++;
         if (res.event) send(res.event);
+        if (name === 'run_command' && typeof res.command === 'string') cmdLog.push(res);
         if (res.ok || res.skipped) return true;
         const err = String(res.error || 'unknown error');
         if (!res.noWarn) send({ type: 'warn', message: `${name}: ${err}` });
@@ -700,10 +759,14 @@ async function workspaceChat(c, body, message, user) {
 
       let attempt = 0;
       let wantRepair = true;
+      const termPid = String(body.pid || 'default').slice(0, 40);
       const transcript = history.slice(); // live transcript fed to the model each round
       while (wantRepair && attempt < MAX_REPAIR_ROUNDS && !ac.signal.aborted) {
         attempt++;
         wantRepair = false;
+        cmdLog.length = 0;
+        let termSnap = null;
+        termSnap = await mirrorToTerminal(termPid, cleaned.map((f) => ({ path: f.path, content: f.content })));
         const diagAtStart = diag.length;
         const parser = new FileStreamer();
         let raw = '';
@@ -750,6 +813,35 @@ async function workspaceChat(c, body, message, user) {
             }
           }
           for (const ev of parser.flush()) await handleGen(ev);
+          if (termSnap) {
+            let blobs = null;
+            try { blobs = await readTerminalFiles(termPid, termSnap); } catch { blobs = null; }
+            if (blobs) {
+              const synced = diffTerminal(blobs, termSnap);
+              if (synced.changed) {
+                for (const f of synced.created) {
+                  await ws.saveFile(termPid, f.path, f.content).catch(() => {});
+                  const i = cleaned.findIndex((x) => x.path === f.path);
+                  if (i >= 0) cleaned[i] = { path: f.path, content: f.content }; else cleaned.push({ path: f.path, content: f.content });
+                  written.push(f.path);
+                }
+                for (const f of synced.updated) {
+                  await ws.saveFile(termPid, f.path, f.content).catch(() => {});
+                  const i = cleaned.findIndex((x) => x.path === f.path);
+                  if (i >= 0) cleaned[i] = { path: f.path, content: f.content };
+                  edited.push(f.path);
+                }
+                for (const p of synced.deleted) {
+                  await ws.deleteFile(termPid, p).catch(() => {});
+                  const i = cleaned.findIndex((x) => x.path === p);
+                  if (i >= 0) cleaned.splice(i, 1);
+                  deleted.push(p);
+                }
+                ops += synced.changed;
+                send({ type: 'sync', created: synced.created.map((f) => f.path), updated: synced.updated.map((f) => f.path), deleted: synced.deleted });
+              }
+            }
+          }
           if (diag.length > diagAtStart) wantRepair = true;
           if (wantRepair) send({ type: 'note', message: 'The build still has errors — continuing in this session so the AI can fix them right now.' });
           if (raw.trim()) {
@@ -759,6 +851,7 @@ async function workspaceChat(c, body, message, user) {
             if (roundDiag.length) notes.push('DIAGNOSTICS — these operations FAILED just now:\n' + roundDiag.map((x) => ' - ' + x).join('\n'));
             if (wantRepair) notes.push('REPAIR REQUIRED — the operations above still fail. Fix every error listed here.');
             if (notes.length) recorded += '\n\n' + notes.join('\n\n');
+            if (cmdLog.length) recorded += '\n\nTERMINAL — output of the commands you just ran:\n' + cmdLog.map(cmdTranscript).join('\n\n');
             transcript.push({ role: 'assistant', content: recorded });
           }
           if (wantRepair) transcript.push({ role: 'user', content: wsRepairPrompt() });

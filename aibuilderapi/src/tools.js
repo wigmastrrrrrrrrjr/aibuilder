@@ -268,7 +268,7 @@ define({
 
 define({
   name: 'run_command',
-  description: 'Run a shell command in the project terminal and return its output.',
+  description: 'Run a shell command in your dedicated project terminal and get its output back (files you touch are synced back to the app).',
   arguments: { command: { type: 'string', required: true, desc: 'shell command' } },
   async run(ctx, a) {
     const command = String(a.command).slice(0, 2000);

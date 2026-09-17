@@ -44,8 +44,6 @@ FORUM_ADMIN_KEY = "99ba2a73255d85f2181778ee7457ce65"
 # Cloud terminal daemon (always-free VM): set the public URL + shared token to
 # enable the AI's dedicated terminal. Use `wrangler secret put TERMINAL_TOKEN`
 # instead of committing it here if you prefer.
-TERMINAL_URL = ""
-TERMINAL_TOKEN = ""
 
 [observability]
 enabled = true

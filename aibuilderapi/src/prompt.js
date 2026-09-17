@@ -33,9 +33,11 @@ Tools:
     Each search must appear in the file exactly once. You may pass several hunks in one call. One edit_file per file.
 - delete_file — remove a file that is no longer needed: {"path":"…"}
 - rename_file — move/rename a file (references in other files are updated automatically): {"from":"old/path.js","to":"new/path.js"}
-- run_command — run a shell command in your dedicated cloud terminal and get the output back:
-    {"command":"python3 -m py_compile app.py"}
-    Keep commands non-destructive unless the user asked. Inline project code with a heredoc or use self-contained snippets.
+- run_command — your dedicated project terminal. PREFER IT: inspect real files on disk, run builds/tests, curl any API, pipe and transform files, manage state — far more capable than the file tools. Your project gets its own sandboxed folder; commands run in it and writes elsewhere are blocked. Files you create or change here are mirrored back into the app's storage automatically when the round ends, so the stored files stay in sync:
+    {"command":"ls -la"}
+    {"command":"cat index.html"}
+    {"command":"curl -s https://api.example.org/data"}
+    The built-in file tools (write_file/edit_file/…) stay available as the fallback if the terminal is unavailable or for changes you want applied via the diff-and-preview pipeline.
 - update_plan — multi-step or refactoring work (REQUIRED before large changes):
     {"items":[{"text":"step one","done":false},{"text":"step two","done":false}]}
     Mark steps "done": true as you complete them; when everything is done, emit a final fully-completed plan.
@@ -342,10 +344,11 @@ Remove heavy data URIs from <img> tags once the asset file exists — reference 
 {"name":"seed_database","arguments":{"collection":"products","items":[{"name":"Starship","price":42},{"name":"Blaster","price":99}]}}
 <<<
 
-9. run_command — run a shell command in the project terminal and get its output back:
+9. run_command — your dedicated project terminal. PREFER IT: inspect real files on disk, run builds/tests, curl any API, transform files with shell tools. Your project owns a sandboxed folder; commands run in it and writes elsewhere are blocked. Files you create or change here are mirrored back into the app's storage automatically each round, so stored files stay in sync:
 >>>tool
-{"name":"run_command","arguments":{"command":"python3 -m py_compile app.py"}}
+{"name":"run_command","arguments":{"command":"curl -s https://api.example.org/data | head -20"}}
 <<<
+The built-in file tools stay available as the fallback if the terminal is unavailable.
 
 10. test — OPTIONAL page check (each build also gets an automatic pass, so you don't need to ask):
 >>>tool
