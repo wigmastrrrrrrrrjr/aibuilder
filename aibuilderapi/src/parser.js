@@ -55,12 +55,43 @@ function parseEditHunks(body) {
   return hunks;
 }
 
-function parseJsonOr(body, fallback) {
-  try {
-    return JSON.parse(body.trim());
-  } catch {
-    return fallback;
+// JSON.parse that also accepts the very common malformed shape models emit:
+// raw newlines/tabs/control characters inside string values. That is invalid
+// JSON (multi-line file contents almost always contain it), so we repair the
+// string literals before parsing. Returns `fallback` when it still won't parse.
+export function parseLooseJson(text, fallback = undefined) {
+  const s = String(text == null ? '' : text);
+  try { return JSON.parse(s); } catch { /* repair below */ }
+  let out = '';
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) { out += ch; esc = false; continue; }
+      if (ch === '\\') { out += ch; esc = true; continue; }
+      if (ch === '"') { out += ch; inStr = false; continue; }
+      const code = ch.charCodeAt(0);
+      if (code < 0x20) {
+        if (ch === '\n') out += '\\n';
+        else if (ch === '\r') out += '\\r';
+        else if (ch === '\t') out += '\\t';
+        else out += '\\u' + code.toString(16).padStart(4, '0');
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    out += ch;
   }
+  try { return JSON.parse(out); } catch { /* trailing commas */ }
+  try { return JSON.parse(out.replace(/,\s*([}\]])/g, '$1')); } catch { /* give up */ }
+  return fallback;
+}
+
+function parseJsonOr(body, fallback) {
+  return parseLooseJson(String(body == null ? '' : body).trim(), fallback);
 }
 
 function assetPayload(body) {
@@ -112,7 +143,7 @@ function normalizeTool(obj) {
     name = name.name;
   }
   if (typeof args === 'string') {
-    try { args = JSON.parse(args); } catch { args = {}; }
+    args = parseLooseJson(args, {});
   }
   if (!name || typeof name !== 'string') return null;
   if (args === undefined || args === null) {
@@ -264,8 +295,7 @@ export class FileStreamer {
   }
 
   _pushTool(json, hintName, events) {
-    let obj = null;
-    try { obj = JSON.parse(json); } catch { obj = null; }
+    const obj = parseLooseJson(json, null);
     let ev = obj ? normalizeTool(obj) : null;
     // `>>>tool name {…}` form: the JSON value IS the arguments object.
     if (!ev && hintName && obj && typeof obj === 'object' && !Array.isArray(obj)) {
