@@ -499,8 +499,8 @@ let BAAS_SDK_RAW = `(function () {
     me: function () {
       return fetch('/api/auth/me', authHeaders())
         .then(function (r) {
-          if (r.status === 401) return null;
-          return r.json().then(function (j) { return { username: j.username }; });
+          if (r.status !== 200) return null;
+          return r.json().then(function (j) { return (j && j.username) ? { username: j.username } : null; });
         })
         .catch(function () { return null; });
     }

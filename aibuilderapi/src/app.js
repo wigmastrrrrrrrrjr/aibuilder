@@ -72,7 +72,17 @@ const termLimit   = rateLimit({ windowMs: MIN, max: 30 });    // 30 terminal cmd
 
 // Limiters MUST be registered before any matching route: Hono skips app.use()
 // middleware for a path once a route for that exact path already exists.
-app.use('/api/auth/*', authLimit);
+// Brute-force protection applies ONLY to credential-verifying POST endpoints.
+// Identity reads (GET /api/auth/me — the creat.me() call every generated app
+// makes on page load, plus creat.push/creat.live identity lookups) must NOT
+// count against the 3-attempt budget: they'd 429 within seconds and make
+// creat.me() resolve to null for signed-in users.
+app.use('/api/auth/*', async (c, next) => {
+  const ATTEMPT = new Set(['/api/auth/login', '/api/auth/signup', '/api/auth/verify-email',
+    '/api/auth/verify-tfa', '/api/auth/reset', '/api/auth/resend-code']);
+  if (!ATTEMPT.has(c.req.path)) return next();
+  return authLimit(c, next);
+});
 app.use('/api/chat', chatLimit);
 app.use('/api/projects/*/upload', uploadLimit);
 app.use('/api/credits/gift', giftLimit);
