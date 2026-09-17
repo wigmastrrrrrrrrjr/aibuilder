@@ -50,6 +50,10 @@ create table if not exists public.messages (
   created_at bigint not null
 );
 create index if not exists idx_messages_project on public.messages (project_id, created_at);
+-- No primary key, but the table is in the realtime publication: without a
+-- replica identity Postgres refuses DELETEs ("publishes deletes"), which also
+-- breaks project deletion via the ON DELETE CASCADE above.
+alter table public.messages replica identity full;
 
 -- ---- users & sessions ------------------------------------------------------
 create table if not exists public.users (
