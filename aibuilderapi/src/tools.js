@@ -371,6 +371,37 @@ define({
 });
 
 define({
+  name: 'set_brief',
+  description: 'Publish the design blueprint for this build (name, vibe, palette, components, data) so the user sees the direction while you build.',
+  arguments: {
+    name: { type: 'string', desc: 'short product name' },
+    vibe: { type: 'string', desc: 'one or two sentences on the look, feel and audience' },
+    palette: { type: 'array', desc: '3-5 hex colour tokens' },
+    components: { type: 'array', desc: 'the main UI pieces you will build' },
+    data: { type: 'array', desc: 'collections you will use, e.g. ["tasks"] or [{collection, rows}]' },
+  },
+  async run(ctx, a) {
+    const hex = (c) => String(c == null ? '' : c).trim();
+    const brief = {
+      name: String(a.name || '').trim().slice(0, 60) || undefined,
+      vibe: String(a.vibe || '').trim().slice(0, 280) || undefined,
+      palette: (Array.isArray(a.palette) ? a.palette : [])
+        .map(hex).filter((c) => /^#?[0-9a-fA-F]{3,8}$/.test(c))
+        .map((c) => (c.startsWith('#') ? c : '#' + c)).slice(0, 6),
+      components: (Array.isArray(a.components) ? a.components : [])
+        .map((c) => String(c == null ? '' : c).trim().slice(0, 40)).filter(Boolean).slice(0, 10),
+      data: (Array.isArray(a.data) ? a.data : [])
+        .map((d) => (typeof d === 'string'
+          ? { collection: d.trim().slice(0, 40) }
+          : { collection: String((d && (d.collection || d.name)) || '').trim().slice(0, 40), rows: Number.isFinite(d && d.rows) ? d.rows : undefined }))
+        .filter((d) => d.collection).slice(0, 6),
+    };
+    if (ctx.store && ctx.store.setBrief) { try { await ctx.store.setBrief(ctx.pid, brief); } catch { /* cosmetic */ } }
+    return { ok: true, brief, event: { type: 'brief', brief } };
+  },
+});
+
+define({
   name: 'set_name',
   description: 'Set the project title (once, near the start).',
   arguments: { name: { type: 'string', required: true } },
