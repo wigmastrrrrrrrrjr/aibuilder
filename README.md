@@ -8,7 +8,7 @@ HTML/CSS/JS app with a built-in backend (`creat.db`), live-previewed instantly.
 │  Chat UI     │────▶│ POST /api/chat (SSE)                  │
 │  (web/)      │     │   ├─ streams from Ollama Cloud        │
 │              │◀────│   │  └─ fallback to Mistral            │
-│ [preview]────┤─ifr─│   ├─ parses <<<FILE>>> blocks         │
+│ [preview]────┤─ifr─│   ├─ parses >>>tool calls             │
 └──────────────┘     │   └─ persists files (SQLite/D1)       │
                      │ GET /preview/:project/*  generated app │
                      │ /api/baas/:proj/:coll    CRUD backend  │
@@ -93,7 +93,8 @@ locally. Files are written with path-traversal protection.
 aibuilderapi/  the API — deployable standalone to Cloudflare Workers (wrangler.toml inside)
   src/app.js       all routes: chat, projects, models, publish, discover, remix, upload
   src/chat.js      SSE chat proxy with Ollama/Mistral failover (per-project model selection)
-  src/parser.js    streaming <<<FILE:path>>> block parser
+  src/parser.js    streaming >>>tool call parser (legacy blocks normalized)
+  src/tools.js     tool registry: names, argument validation, execution, results
   src/prompt.js    system prompt for the generator model
   src/models.js    model catalogue proxy (/api/models)
   src/preview.js   serves published/generated apps + injects BaaS SDK

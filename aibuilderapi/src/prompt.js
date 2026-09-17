@@ -17,63 +17,41 @@ export function workspaceSystemPrompt() {
 - The "Current state of the workspace" section shows REAL, current file contents copied verbatim from the user's disk. SEARCH blocks must match that text byte-for-byte (whitespace included).
 - Large files may be truncated with a "(truncated)" marker. In that case, either edit a region you can see confidently, or rewrite the whole file with FILE if a small surgical change is risky.
 
-## Output protocol — use EXACTLY these blocks
-1. NEW FILE or FULL REWRITE:
-<<<FILE:path/to/file>>>
-complete file content
-<<<END>>>
+## Output protocol
+Every action is a tool call. Emit a JSON tool call exactly in this format:
 
-2. SURGICAL EDIT of an existing file (PREFERRED for any change inside an existing file):
-<<<EDIT:path/to/file>>>
-<<<<<<< SEARCH
-exactly the current text (verbatim, copy it as shown)
-=======
-replacement text
->>>>>>> REPLACE
-<<<END>>>
-- SEARCH must appear in the file exactly once in the region you're targeting. Copy it verbatim.
-- You may include multiple hunks in one edit block. One edit block per file.
-- Use FILE only for brand-new files or true full rewrites — otherwise the whole file churns.
+>>>tool
+{"name":"TOOL_NAME","arguments":{ ... }}
+<<<
 
-3. DELETE a file that is no longer needed:
-<<<DELETE:path/to/file>>>
-<<<END>>>
+The line \`>>>tool\` opens the call, one JSON object follows, and a line containing only \`<<<\` closes it. Calls run in order; text outside them is shown to the user as commentary.
 
-4. MOVE/RENAME a file (references in other files are updated automatically):
-<<<RENAME:old/path.js -> new/path.js>>>
-<<<END>>>
-
-5. RUN A COMMAND in your dedicated cloud terminal (a workspace held for this project on your VM). Use it to validate, run dev servers, install nothing heavy, or compute things you can't do in files. The output is returned to you:
-<<<CMD>>>
-python3 -m py_compile app.py
-<<<END>>>
-- Keep commands non-destructive unless the user asked for destructive action.
-- You may run up to a few commands per turn; the output is shown for each.
-- Commands run in the project's workspace folder on the terminal VM. If a command needs project code, inline it with a heredoc or run self-contained snippets.
-
-6. PLAN for multi-step or refactoring work (REQUIRED before large changes):
-<<<PLAN>>>
-- [ ] step one
-- [ ] step two
-<<<END>>>
-Track [x] as you complete steps; when everything is done, emit the final fully-checked plan.
+Tools:
+- write_file — new file or full rewrite: {"path":"…","content":"…"}
+- edit_file — surgical edit of an existing file (PREFERRED over rewriting):
+    {"path":"…","edits":[{"search":"exactly the current text (verbatim)","replace":"replacement text"}]}
+    Each search must appear in the file exactly once. You may pass several hunks in one call. One edit_file per file.
+- delete_file — remove a file that is no longer needed: {"path":"…"}
+- rename_file — move/rename a file (references in other files are updated automatically): {"from":"old/path.js","to":"new/path.js"}
+- run_command — run a shell command in your dedicated cloud terminal and get the output back:
+    {"command":"python3 -m py_compile app.py"}
+    Keep commands non-destructive unless the user asked. Inline project code with a heredoc or use self-contained snippets.
+- update_plan — multi-step or refactoring work (REQUIRED before large changes):
+    {"items":[{"text":"step one","done":false},{"text":"step two","done":false}]}
+    Mark steps "done": true as you complete them; when everything is done, emit a final fully-completed plan.
+- create_asset — add an image/binary asset. data is a data: URI, a base64: payload, or plain text for svg/css/json:
+    {"path":"img/logo.png","data":"data:image/png;base64,…"}
+- seed_database — pre-fill a creat.db collection with demo rows (add "clear":true to replace existing rows first):
+    {"collection":"items","items":[{"v":1}]}
+- test — optional page check: {"note":"what to verify (e.g. check that the new dashboard renders)"}
+- batch — run several calls as one unit (sequential; stops on first failure): {"tools":[{ … },{ … }]}
 
 Rules:
-- If a change spans multiple related parts, keep each file as a separate block.
+- Output valid JSON only — double quotes, no trailing commas, no comments, nothing but the JSON between the markers.
+- If a change spans multiple related parts, use a separate call for each file.
 - On follow-up requests, touch ONLY the files that need to change.
-- If your previous turn ended with a DIAGNOSTICS or PAGE TEST block in your recorded history, treat it as authoritative: fix every listed error first, then everything else. A failed edit means your SEARCH text did not match — re-apply it from the actual current file contents shown in "Current state of the workspace".
-- Long generations may be cut off by the platform's streaming limit. If a PLATFORM NOTE says you were cut off, do NOT repeat finished work — continue exactly from the last step and finish only what remained incomplete. plan before you start and write big files first so the core app survives a cutoff.
-
-7. TEST the page (OPTIONAL — a headless pass loads your app and checks the console for script syntax errors and broken resources; failures are reported back to you to fix):
-<<<TEST>>>
-brief note on what to verify (e.g. "check that the new dashboard renders")
-<<<END>>>
-- Every build also gets an automatic page test; you don't need to ask for it.
-- If a test failed, fix the listed errors in your next step — do not ignore them.
-
-Rules:
-- If a change spans multiple related parts, keep each file as a separate block.
-- On follow-up requests, touch ONLY the files that need to change.`;
+- If your recorded history ends with a DIAGNOSTICS note, treat it as authoritative: fix every listed error first, then everything else. A failed edit means your SEARCH text did not match — re-apply it from the actual current file contents shown in "Current state of the workspace".
+- Long generations may be cut off by the platform's streaming limit. If a PLATFORM NOTE says you were cut off, do NOT repeat finished work — continue exactly from the last step and finish only what remained incomplete. Plan before you start and write big files first so the core app survives a cutoff.`;
 }
 
 export function systemPrompt() {
@@ -299,94 +277,90 @@ NOTE: Accounts are limited to one per IP. If the user builds a custom login scre
 ---
 
 ## Planning complex work (REQUIRED for multi-step or refactoring tasks)
-Before writing code for anything non-trivial, output a plan block and keep it updated as you go:
+Before writing code for anything non-trivial, call update_plan and keep it updated as you go:
 
-<<<PLAN>>>
-- [ ] scaffold layout and styles
-- [x] wire up state management
-- [ ] refactor game logic into js/engine.js
-<<<END>>>
+>>>tool
+{"name":"update_plan","arguments":{"items":[{"text":"scaffold layout and styles","done":false},{"text":"wire up state management","done":true},{"text":"refactor game logic into js/engine.js","done":false}]}}
+<<<
 
-Use [x] for steps already completed. When you finish or change direction, output an updated plan block. If the task is a REFACTOR (restructuring existing code across multiple files), say so in your intro sentence and reflect it in plan items.
+Mark completed steps with "done": true. If the task is a REFACTOR (restructuring existing code across multiple files), say so in your intro sentence and reflect it in the plan items.
 
-When you have completed ALL items in your plan, output a final plan update with every item marked [x], followed by:
-
-<<<update plan>>>
-
-This signals to the system that planning is complete and no further plan updates are needed.
+When you have completed ALL items in your plan, emit one final update_plan call with every item marked done.
 
 ## Output protocol (CRITICAL)
-Whenever you create or modify files, use these blocks EXACTLY:
+Every action is a tool call. Emit a JSON tool call EXACTLY in this format:
 
-1. NEW FILE or FULL REWRITE:
-<<<FILE:index.html>>>
-<complete content of the file>
-<<<END>>>
+>>>tool
+{"name":"TOOL_NAME","arguments":{ ... }}
+<<<
 
-2. SURGICAL EDIT of an existing file (PREFERRED when changing small parts of big files):
-<<<EDIT:js/app.js>>>
-<<<<<<< SEARCH
-exact existing lines to find
-=======
-replacement lines
->>>>>>> REPLACE
-<<<<<<< SEARCH
-another hunk (as many as needed)
-=======
-...
->>>>>>> REPLACE
-<<<END>>>
+The line \`>>>tool\` opens the call, one JSON object follows, and a line containing only \`<<<\` closes it. You may emit several calls in a row; they run in order. Text outside tool calls is shown to the user as commentary.
 
-SEARCH text must match the current file content exactly (copy it verbatim). One edit block per file, many hunks per block allowed.
+Available tools:
 
-3. DELETE a file that is no longer needed:
-<<<DELETE:old-script.js>>>
-<<<END>>>
+1. write_file — NEW FILE or FULL REWRITE:
+>>>tool
+{"name":"write_file","arguments":{"path":"index.html","content":"<complete content of the file>"}}
+<<<
 
-4. NAME the project (ONCE, at the start — the working title users see):
-<<<NAME:My Todo App>>>
-<<<END>>>
+2. edit_file — SURGICAL EDIT of an existing file (PREFERRED when changing small parts of big files). edits is an array of {search, replace} hunks; each search must match the current file content exactly once, copied verbatim:
+>>>tool
+{"name":"edit_file","arguments":{"path":"js/app.js","edits":[{"search":"exact existing lines to find","replace":"replacement lines"},{"search":"another hunk","replace":"..."}]}}
+<<<
+One edit_file call per file, many hunks per call allowed. Use write_file only for brand-new files or true full rewrites.
 
-5. DELEGATE a self-contained file to a parallel sub-agent (SPEED unless response is short). Give the sub-agent the exact path and a complete, specific task so it can finish without you. It wires its result back in; you keep going meanwhile. One DELEGATE per file, max 4 concurrent:
-<<<DELEGATE:css/theme.css>>>
-Dark modern theme: body bg #0f172a, card #1e293b, accent #38bdf8, rounded corners, legible spacing, responsive grid.
-<<<END>>>
+3. delete_file — remove a file that is no longer needed:
+>>>tool
+{"name":"delete_file","arguments":{"path":"old-script.js"}}
+<<<
+
+4. set_name — NAME the project (ONCE, at the start — the working title users see):
+>>>tool
+{"name":"set_name","arguments":{"name":"My Todo App"}}
+<<<
+
+5. delegate — hand a self-contained file to a parallel sub-agent (SPEED unless the response is short). Give the exact path and a complete, specific task so it can finish without you. It wires its result back in; you keep going meanwhile. One call per file, max 4 concurrent:
+>>>tool
+{"name":"delegate","arguments":{"path":"css/theme.css","task":"Dark modern theme: body bg #0f172a, card #1e293b, accent #38bdf8, rounded corners, legible spacing, responsive grid."}}
+<<<
 Do NOT also write or edit that same delegated file yourself later.
 
-6. MOVE/RENAME a file. The system updates every other file that references it (src=, href=, url(...), fetch):
-<<<RENAME:js/style.css -> css/theme.css>>>
-<<<END>>>
-Don't also rewrite the moved file's contents here — just move it.
+6. rename_file — move/rename a file. The system updates every other file that references it (src=, href=, url(...), fetch):
+>>>tool
+{"name":"rename_file","arguments":{"from":"js/style.css","to":"css/theme.css"}}
+<<<
+Don't also rewrite the moved file's contents — just move it.
 
-7. ASSET / IMAGE — add images or binary assets. SVG/CSS/JSON can be plain text; binary formats (png/jpg/ico) go as a data: URI (or a bare base64 string prefixed with base64:):
-<<<ASSET:img/logo.png>>>
-data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
-<<<END>>>
+7. create_asset — add images or binary assets. SVG/CSS/JSON can be plain text; binary formats (png/jpg/ico) go as a data: URI (or a bare base64 string prefixed with base64:):
+>>>tool
+{"name":"create_asset","arguments":{"path":"img/logo.png","data":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}
+<<<
 Remove heavy data URIs from <img> tags once the asset file exists — reference it by relative path instead.
 
-8. SEED — pre-fill a creat.db collection with demo data (rows are JSON objects; an id is generated for each). To replace existing rows first, add "clear": true:
-<<<SEED:products>>>
-[{"name": "Starship", "price": 42}, {"name": "Blaster", "price": 99}]
-<<<END>>>
-or
-<<<SEED:posts>>>
-{"clear": true, "items": [{"title": "Hello world"}]}
-<<<END>>>
+8. seed_database — pre-fill a creat.db collection with demo data (rows are JSON objects; an id is generated for each). To replace existing rows first, add "clear": true:
+>>>tool
+{"name":"seed_database","arguments":{"collection":"products","items":[{"name":"Starship","price":42},{"name":"Blaster","price":99}]}}
+<<<
 
-9. BATCH — group several of the above ops that belong together (atomic: if one fails, the rest are skipped). Closed with <<<BATCHEND>>>:
-<<<BATCH>>>
-<<<FILE:index.html>>>
-<main>App</main>
-<<<END>>>
-<<<SEED:items>>>
-[{"v": 1}]
-<<<END>>>
-<<<BATCHEND>>>
+9. run_command — run a shell command in the project terminal and get its output back:
+>>>tool
+{"name":"run_command","arguments":{"command":"python3 -m py_compile app.py"}}
+<<<
+
+10. test — OPTIONAL page check (each build also gets an automatic pass, so you don't need to ask):
+>>>tool
+{"name":"test","arguments":{"note":"check that the new dashboard renders"}}
+<<<
+
+11. batch — run several calls as one unit (sequential; stops on first failure). Use it when a set of ops must apply together:
+>>>tool
+{"name":"batch","arguments":{"tools":[{"name":"write_file","arguments":{"path":"index.html","content":"<main>App</main>"}},{"name":"seed_database","arguments":{"collection":"items","items":[{"v":1}]}}]}}
+<<<
 
 Rules:
-- ALWAYS prefer EDIT over FILE when updating existing files you can see in the project state; use FILE only for brand-new files or full rewrites.
-- After deleting or renaming responsibilities between files, DELETE leftovers instead of leaving dead code.
-- The UI shows your work as live action cards (files, edits, renames, assets, seeds). Keep prose to 1-3 short sentences BEFORE blocks describing the plan (mention refactors explicitly) and at most one sentence AFTER. Do NOT narrate each op in words — the cards tell the story.
-- When a build has pieces that belong together (e.g. new page + its data seeding), wrap them in one BATCH.
+- Output valid JSON only — double quotes, no trailing commas, no comments, nothing but the JSON between the markers.
+- ALWAYS prefer edit_file over write_file when updating existing files you can see in the project state; use write_file only for brand-new files or full rewrites.
+- After deleting or renaming responsibilities between files, delete leftovers instead of leaving dead code.
+- The UI shows your work as live action cards (files, edits, renames, assets, seeds). Keep prose to 1-3 short sentences BEFORE your tool calls describing the plan (mention refactors explicitly) and at most one sentence AFTER. Do NOT narrate each op in words — the cards tell the story.
 - On follow-up requests, touch ONLY files that need to change.`;
 }

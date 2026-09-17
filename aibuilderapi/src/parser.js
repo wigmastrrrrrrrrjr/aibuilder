@@ -1,37 +1,21 @@
-// Streaming parser for the generator protocol. Feed chunks via feed(); each
-// call yields an array of events:
-//   text                               plain prose outside any block
-//   file/asset   -> wrote a full file (utf8 or base64/data-URI content)
-//   edit         -> SEARCH/REPLACE hunks for an existing file
-//   delete       -> remove a file
-//   rename       -> move a file and refactor references elsewhere
-//   plan/name    -> plan checklist / project title
-//   delegate     -> hand a file to a parallel sub-agent
-//   cmd          -> a shell command for the project's terminal
-//   seed         -> insert demo rows into a creat.db collection
-//   batch/endbatch -> group of ops applied atomically (BATCH ... BATCHEND)
+// Streaming parser for the unified generator protocol.
 //
-// Block syntax:
-//   <<<FILE:index.html>>>   content              <<<END>>>
-//   <<<EDIT:js/app.js>>>    SEARCH/REPLACE hunks <<<END>>>
-//   <<<DELETE:old.js>>>                            (no body needed)
-//   <<<RENAME:old.js -> js/app.js>>>              (no body needed)
-//   <<<ASSET:img/logo.png>>> data URI or base64   <<<END>>>
-//   <<<SEED:products>>>      JSON rows             <<<END>>>
-//   <<<PLAN>>>              checklist lines        <<<END>>>
-//   <<<NAME:App title>>>                           (no body needed)
-//   <<<DELEGATE:css/t.min.css>>> task description  <<<END>>>
-//   <<<CMD>>>              shell command           <<<END>>>  (or <<<CMD:ls -la>>> one-liner)
-//   <<<TEST>>>             page-test instructions  <<<END>>>
-//   <<<BATCH>>> ... any blocks above ... <<<BATCHEND>>>
+// The model drives every build through ONE syntax:
 //
-// EDIT bodies use:
-//   <<<<<<< SEARCH
-//   old text
-//   =======
-//   new text
-//   >>>>>>> REPLACE
+//   >>>tool
+//   { "name": "write_file", "arguments": { "path": "index.html", "content": "…" } }
+//   <<<
+//
+// Feed chunks via feed(); each call yields an array of events:
+//   text -> plain prose outside any tool call
+//   tool -> { type:'tool', name, arguments } — a validated-shaped tool call
+//
+// The registry in tools.js declares the valid names and arguments; the parser
+// only extracts the call. As a compatibility layer it also still understands
+// the legacy `<<<FILE:…>>>` blocks (old history lives in every project) and
+// normalizes them into the same `tool` events, so callers have a single shape.
 
+const TOOL_OPEN = '>>>tool';
 const TAG_OPEN = '<<<';
 const TAG_CLOSE = '>>>';
 const END_TAG = '<<<END>>>';
@@ -42,7 +26,8 @@ const M_MARK = '=======';
 
 const KINDS = ['FILE', 'EDIT', 'DELETE', 'PLAN', 'NAME', 'DELEGATE', 'RENAME', 'ASSET', 'SEED', 'BATCH', 'CMD', 'TEST'];
 const BODY_KINDS = ['FILE', 'EDIT', 'PLAN', 'DELEGATE', 'ASSET', 'SEED', 'CMD', 'TEST'];
-const PASS_THROUGH_KINDS = ['DELETE', 'NAME', 'RENAME'];
+
+/* ---- legacy body helpers (kept so old blocks still parse) ------------------ */
 
 function parsePlan(body) {
   const items = [];
@@ -98,95 +83,252 @@ function seedPayload(body) {
   return { clear: false, items: [] };
 }
 
+// Map a legacy parser event to the unified tool-call shape.
+function toTool(ev) {
+  switch (ev.type) {
+    case 'file': return { type: 'tool', name: 'write_file', arguments: { path: ev.path, content: ev.content } };
+    case 'edit': return { type: 'tool', name: 'edit_file', arguments: { path: ev.path, edits: ev.hunks || [] } };
+    case 'delete': return { type: 'tool', name: 'delete_file', arguments: { path: ev.path } };
+    case 'rename': return { type: 'tool', name: 'rename_file', arguments: { from: ev.from, to: ev.to } };
+    case 'asset': return { type: 'tool', name: 'create_asset', arguments: { path: ev.path, data: ev.data, encoding: ev.encoding } };
+    case 'seed': return { type: 'tool', name: 'seed_database', arguments: { collection: ev.collection, items: ev.items || [], clear: ev.clear } };
+    case 'plan': return { type: 'tool', name: 'update_plan', arguments: { items: ev.items || [] } };
+    case 'name': return { type: 'tool', name: 'set_name', arguments: { name: ev.name } };
+    case 'delegate': return { type: 'tool', name: 'delegate', arguments: { path: ev.path, task: ev.task } };
+    case 'cmd': return { type: 'tool', name: 'run_command', arguments: { command: ev.command } };
+    case 'test': return { type: 'tool', name: 'test', arguments: { note: ev.note } };
+    default: return null;
+  }
+}
+
+// Normalize a parsed JSON object into a tool-call event. Tolerates a few common
+// shapes (name/arguments, tool/args, or inline arguments).
+function normalizeTool(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  let name = obj.name ?? obj.tool ?? obj.tool_name ?? obj.function;
+  let args = obj.arguments ?? obj.args ?? obj.parameters ?? obj.input;
+  if (name && typeof name === 'object') {
+    args = args ?? name.arguments ?? name.parameters;
+    name = name.name;
+  }
+  if (typeof args === 'string') {
+    try { args = JSON.parse(args); } catch { args = {}; }
+  }
+  if (!name || typeof name !== 'string') return null;
+  if (args === undefined || args === null) {
+    const rest = { ...obj };
+    delete rest.name; delete rest.tool; delete rest.tool_name; delete rest.function;
+    delete rest.arguments; delete rest.args; delete rest.parameters; delete rest.input;
+    args = rest;
+  }
+  return { type: 'tool', name, arguments: args && typeof args === 'object' ? args : {} };
+}
+
+function mergeText(events) {
+  const merged = [];
+  for (const ev of events) {
+    const last = merged[merged.length - 1];
+    if (ev.type === 'text' && last && last.type === 'text') last.v += ev.v;
+    else merged.push(ev);
+  }
+  return merged;
+}
+
 export class FileStreamer {
   constructor() {
     this.buf = '';
-    this.frames = []; // stack of {kind, path, body}; stack top is the open block
+    this.frames = []; // legacy body/batch frame stack
+    this.tool = null; // in-progress >>>tool call
   }
 
   feed(chunk) {
     const events = [];
     this.buf += chunk;
     for (;;) {
+      if (this.tool) {
+        if (!this._drainTool(events)) break;
+        continue;
+      }
       const top = this.frames[this.frames.length - 1];
-
       if (top && top.kind === 'BATCH') {
-        // Inside a batch: wait for a nested block to open or BATCHEND.
-        const be = this.buf.indexOf(BATCH_END);
-        const to = this.buf.indexOf(TAG_OPEN);
-        if (be !== -1 && (to === -1 || be <= to)) {
-          this.buf = this.buf.slice(be + BATCH_END.length);
-          this.frames.pop();
-          events.push(this.stamp({ type: 'endbatch' }));
-          continue;
-        }
-        if (to === -1) {
-          const keep = Math.max(0, this.buf.length - Math.max(BATCH_END.length - 1, TAG_OPEN.length - 1));
-          if (keep > 0) this.buf = this.buf.slice(keep);
-          break;
-        }
-        const j = this.buf.indexOf(TAG_CLOSE, to);
-        if (j === -1) break; // header not complete yet
-        const raw = this.buf.slice(to + TAG_OPEN.length, j).trim();
-        this.buf = this.buf.slice(j + TAG_CLOSE.length);
-        this._openHeader(raw, events);
+        if (!this._drainBatch(events)) break;
         continue;
       }
-
       if (top) {
-        // Inside a real block: accumulate until END_TAG.
-        const k = this.buf.indexOf(END_TAG);
-        if (k === -1) {
-          const keep = Math.max(0, this.buf.length - (END_TAG.length - 1));
-          if (keep > 0) { top.body += this.buf.slice(0, keep); this.buf = this.buf.slice(keep); }
-          break;
-        }
-        top.body += this.buf.slice(0, k);
-        this.buf = this.buf.slice(k + END_TAG.length);
-        this.frames.pop();
-        const ev = this._closeFrame(top, false);
-        if (ev) events.push(this.stamp(ev));
+        if (!this._drainBody(events)) break;
         continue;
       }
-
-      // Top level: outside any block.
-      const i = this.buf.indexOf(TAG_OPEN);
-      if (i === -1) {
-        const keep = Math.max(0, this.buf.length - (TAG_OPEN.length - 1));
-        if (keep > 0) {
-          events.push({ type: 'text', v: this.buf.slice(0, keep) });
-          this.buf = this.buf.slice(keep);
-        }
-        break;
-      }
-      if (i > 0) events.push({ type: 'text', v: this.buf.slice(0, i) });
-      const j = this.buf.indexOf(TAG_CLOSE, i);
-      if (j === -1) {
-        this.buf = this.buf.slice(i);
-        break; // tag header incomplete — wait for more input
-      }
-      const raw = this.buf.slice(i + TAG_OPEN.length, j).trim();
-      this.buf = this.buf.slice(j + TAG_CLOSE.length);
-      this._openHeader(raw, events);
+      if (!this._drainText(events)) break;
     }
-    const merged = [];
-    for (const ev of events) {
-      const last = merged[merged.length - 1];
-      if (ev.type === 'text' && last && last.type === 'text') last.v += ev.v;
-      else merged.push(ev);
-    }
-    return merged;
+    return mergeText(events);
   }
 
-  stamp(ev) {
-    if (this.frames.some((f) => f.kind === 'BATCH')) ev.batch = true;
-    return ev;
+  /* ---- unified >>>tool protocol -------------------------------------------- */
+
+  _drainText(events) {
+    const ti = this.buf.indexOf(TOOL_OPEN);
+    const li = this.buf.indexOf(TAG_OPEN);
+    let idx = -1;
+    let kind = '';
+    if (ti !== -1 && (li === -1 || ti < li)) { idx = ti; kind = 'tool'; }
+    else if (li !== -1) { idx = li; kind = 'legacy'; }
+
+    if (idx === -1) {
+      // Hold back a possible split of the open marker; flush everything else.
+      const keep = Math.min(TOOL_OPEN.length - 1, this.buf.length);
+      if (this.buf.length > keep) {
+        events.push({ type: 'text', v: this.buf.slice(0, this.buf.length - keep) });
+        this.buf = this.buf.slice(this.buf.length - keep);
+      }
+      return false;
+    }
+
+    if (idx > 0) {
+      events.push({ type: 'text', v: this.buf.slice(0, idx) });
+      this.buf = this.buf.slice(idx);
+    }
+    if (kind === 'tool') {
+      this.buf = this.buf.slice(TOOL_OPEN.length);
+      const name = this._readToolName();
+      this.tool = { json: '', started: false, depth: 0, inStr: false, esc: false, name, awaitingClose: false };
+      return true;
+    }
+
+    // Legacy header — wait until the closing >>> has arrived.
+    const j = this.buf.indexOf(TAG_CLOSE);
+    if (j === -1) return false;
+    const raw = this.buf.slice(TAG_OPEN.length, j).trim();
+    this.buf = this.buf.slice(j + TAG_CLOSE.length);
+    this._openHeader(raw, events);
+    return true;
+  }
+
+  // Lenient form: `>>>tool write_file` (name before the JSON). Returns '' when
+  // the call uses the canonical `>>>tool\n{json}` shape.
+  _readToolName() {
+    let i = 0;
+    while (i < this.buf.length && /\s/.test(this.buf[i])) i++;
+    const c = this.buf[i];
+    if (!c || !/[A-Za-z_]/.test(c)) return '';
+    let j = i;
+    while (j < this.buf.length && /[A-Za-z0-9_]/.test(this.buf[j])) j++;
+    if (j >= this.buf.length) return ''; // name may still be streaming in
+    const name = this.buf.slice(i, j);
+    const after = this.buf[j];
+    if (after && !/\s|\{|\[/.test(after)) return '';
+    this.buf = this.buf.slice(j);
+    return name;
+  }
+
+  _drainTool(events) {
+    const t = this.tool;
+    if (t.awaitingClose) {
+      const ci = this.buf.indexOf(TAG_OPEN);
+      if (ci === -1) return false;
+      this.buf = this.buf.slice(ci + TAG_OPEN.length);
+      this.tool = null;
+      this._pushTool(t.json, t.name, events);
+      return true;
+    }
+
+    // Skip leading whitespace before the JSON value.
+    if (!t.started) {
+      let i = 0;
+      while (i < this.buf.length && /\s/.test(this.buf[i])) i++;
+      if (i >= this.buf.length) { this.buf = ''; return false; }
+      if (i > 0) this.buf = this.buf.slice(i);
+    }
+
+    let end = -1;
+    for (let j = 0; j < this.buf.length; j++) {
+      const ch = this.buf[j];
+      if (t.inStr) {
+        if (t.esc) t.esc = false;
+        else if (ch === '\\') t.esc = true;
+        else if (ch === '"') t.inStr = false;
+        continue;
+      }
+      if (ch === '"') { t.inStr = true; t.started = true; continue; }
+      if (ch === '{' || ch === '[') { t.depth++; t.started = true; continue; }
+      if (ch === '}' || ch === ']') {
+        t.depth--;
+        if (t.depth <= 0 && t.started) { end = j; break; }
+      }
+    }
+
+    if (end === -1) { t.json += this.buf; this.buf = ''; return false; } // every char consumed into state
+    t.json += this.buf.slice(0, end + 1);
+    this.buf = this.buf.slice(end + 1);
+    this.tool = { json: t.json, name: t.name, awaitingClose: true };
+    return true;
+  }
+
+  _pushTool(json, hintName, events) {
+    let obj = null;
+    try { obj = JSON.parse(json); } catch { obj = null; }
+    let ev = obj ? normalizeTool(obj) : null;
+    // `>>>tool name {…}` form: the JSON value IS the arguments object.
+    if (!ev && hintName && obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      ev = { type: 'tool', name: hintName, arguments: obj };
+    }
+    if (!ev) ev = { type: 'tool', name: hintName || '', arguments: {} };
+    else if (!ev.name && hintName) ev.name = hintName;
+    if (!ev.name) {
+      events.push({ type: 'text', v: TOOL_OPEN + '\n' + json + '\n' + TAG_OPEN });
+      return;
+    }
+    this._emit(ev, events);
+  }
+
+  /* ---- legacy block protocol (normalized into tool events) ------------------ */
+
+  _drainBatch(events) {
+    const be = this.buf.indexOf(BATCH_END);
+    const to = this.buf.indexOf(TAG_OPEN);
+    if (be !== -1 && (to === -1 || be <= to)) {
+      this.buf = this.buf.slice(be + BATCH_END.length);
+      const frame = this.frames.pop();
+      this._emit({ type: 'tool', name: 'batch', arguments: { tools: frame.calls } }, events);
+      return true;
+    }
+    if (to === -1) {
+      const keep = Math.max(0, this.buf.length - Math.max(BATCH_END.length - 1, TAG_OPEN.length - 1));
+      this.buf = this.buf.slice(keep);
+      return false;
+    }
+    const j = this.buf.indexOf(TAG_CLOSE, to);
+    if (j === -1) return false; // header not complete yet
+    const raw = this.buf.slice(to + TAG_OPEN.length, j).trim();
+    this.buf = this.buf.slice(j + TAG_CLOSE.length);
+    this._openHeader(raw, events);
+    return true;
+  }
+
+  _drainBody(events) {
+    const top = this.frames[this.frames.length - 1];
+    const k = this.buf.indexOf(END_TAG);
+    if (k === -1) {
+      const keep = Math.max(0, this.buf.length - (END_TAG.length - 1));
+      if (keep > 0) { top.body += this.buf.slice(0, keep); this.buf = this.buf.slice(keep); }
+      return false;
+    }
+    top.body += this.buf.slice(0, k);
+    this.buf = this.buf.slice(k + END_TAG.length);
+    this.frames.pop();
+    const ev = this._closeFrame(top);
+    const tool = ev && toTool(ev);
+    if (tool) this._emit(tool, events);
+    return true;
+  }
+
+  _emit(ev, events) {
+    const top = this.frames[this.frames.length - 1];
+    if (top && top.kind === 'BATCH') { top.calls.push(ev); return; }
+    events.push(ev);
   }
 
   _openHeader(raw, events) {
     raw = raw.replace(/^<+/, ''); // tolerate a stray '<' that clung to the tag
-    const up = raw.toUpperCase();
-    if (up === 'END') return;
     const c = raw.indexOf(':');
     const kind = (c === -1 ? raw : raw.slice(0, c)).trim().toUpperCase();
     const arg = (c === -1 ? '' : raw.slice(c + 1)).trim();
@@ -195,30 +337,19 @@ export class FileStreamer {
       return;
     }
     if (kind === 'BATCH') {
-      this.frames.push({ kind: 'BATCH', path: '', body: '' });
-      events.push(this.stamp({ type: 'batch' }));
+      this.frames.push({ kind: 'BATCH', calls: [] });
       return;
     }
-    if (kind === 'DELETE') {
-      events.push(this.stamp({ type: 'delete', path: arg }));
-      return;
-    }
-    if (kind === 'NAME') {
-      events.push(this.stamp({ type: 'name', name: arg }));
-      return;
-    }
+    if (kind === 'DELETE') { this._emit(toTool({ type: 'delete', path: arg }), events); return; }
+    if (kind === 'NAME') { this._emit(toTool({ type: 'name', name: arg }), events); return; }
     if (kind === 'CMD') {
-      // One-liner form: <<<CMD:ls -la>>>  (takes priority over the body form)
-      if (arg) {
-        events.push(this.stamp({ type: 'cmd', command: arg }));
-        return;
-      }
-      this.frames.push({ kind, path: '', body: '' }); // body form
+      if (arg) { this._emit(toTool({ type: 'cmd', command: arg }), events); return; }
+      this.frames.push({ kind, path: '', body: '' });
       return;
     }
     if (kind === 'RENAME') {
       const m = arg.match(/^(.*?)\s*(?:->|→)\s*(.*)$/);
-      if (m) events.push(this.stamp({ type: 'rename', from: m[1].trim(), to: m[2].trim() }));
+      if (m) this._emit(toTool({ type: 'rename', from: m[1].trim(), to: m[2].trim() }), events);
       else events.push({ type: 'text', v: TAG_OPEN + raw + TAG_CLOSE });
       return;
     }
@@ -229,50 +360,54 @@ export class FileStreamer {
     events.push({ type: 'text', v: TAG_OPEN + raw + TAG_CLOSE });
   }
 
-  _closeFrame(frame, truncated) {
+  _closeFrame(frame) {
     const { kind, path } = frame;
     switch (kind) {
       case 'FILE':
-        return { type: 'file', path, content: stripFences(frame.body.trim()), truncated };
+        return { type: 'file', path, content: stripFences(frame.body.trim()) };
       case 'EDIT':
-        return { type: 'edit', path, hunks: parseEditHunks(frame.body), truncated };
+        return { type: 'edit', path, hunks: parseEditHunks(frame.body) };
       case 'PLAN':
         return { type: 'plan', items: parsePlan(frame.body) };
       case 'DELEGATE':
-        return { type: 'delegate', path, task: stripFences(frame.body.trim()), truncated };
+        return { type: 'delegate', path, task: stripFences(frame.body.trim()) };
       case 'ASSET': {
         const p = assetPayload(frame.body);
-        return { type: 'asset', path, data: p.data, encoding: p.encoding, truncated };
+        return { type: 'asset', path, data: p.data, encoding: p.encoding };
       }
       case 'SEED': {
         const s = seedPayload(frame.body);
-        return { type: 'seed', collection: path, items: s.items, clear: s.clear, truncated };
+        return { type: 'seed', collection: path, items: s.items, clear: s.clear };
       }
       case 'CMD':
-        return { type: 'cmd', command: stripFences(frame.body.trim()), truncated };
+        return { type: 'cmd', command: stripFences(frame.body.trim()) };
       case 'TEST':
-        return { type: 'test', note: stripFences(frame.body.trim()).slice(0, 400), truncated };
+        return { type: 'test', note: stripFences(frame.body.trim()).slice(0, 400) };
       default:
         return null;
     }
   }
 
   flush() {
-    const out = [];
+    const events = [];
+    // A complete tool call missing only its closing <<< is still useful.
+    if (this.tool && this.tool.awaitingClose) this._pushTool(this.tool.json, this.tool.name, events);
+    this.tool = null;
     while (this.frames.length) {
       const frame = this.frames.pop();
       if (frame.kind === 'BATCH') {
-        out.push(this.stamp({ type: 'endbatch' }));
+        this._emit({ type: 'tool', name: 'batch', arguments: { tools: frame.calls } }, events);
         continue;
       }
-      const ev = this._closeFrame(frame, true);
-      if (ev) out.push(this.stamp(ev));
+      const ev = this._closeFrame(frame);
+      const tool = ev && toTool(ev);
+      if (tool) this._emit(tool, events);
     }
     if (this.buf) {
-      out.push({ type: 'text', v: this.buf });
+      events.push({ type: 'text', v: this.buf });
       this.buf = '';
     }
-    return out;
+    return mergeText(events);
   }
 }
 

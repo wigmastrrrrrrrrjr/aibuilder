@@ -90,26 +90,58 @@ let defaultModel = 'gpt-oss:120b';
 /* ---------- strip generator blocks (FILE/EDIT/DELETE/PLAN) from output ---------- */
 function BlockFilter() {
   let buf = '';
-  let depth = 0;
+  let depth = 0;      // nesting of legacy <<<…>>> blocks
+  let tool = null;    // {started, depth, inStr, esc, jsonDone} inside a >>>tool call
   this.push = function (chunk) {
     buf += chunk;
     let out = '';
     for (;;) {
-      const i = buf.indexOf('<<<');
-      if (i === -1) {
-        const keep = Math.max(0, buf.length - (depth > 0 ? 9 : 2));
-        if (keep > 0) {
-          if (depth === 0) out += buf.slice(0, keep);
-          buf = buf.slice(keep);
+      if (tool) {
+        // Skip the JSON value with brace/string tracking, then its `<<<`.
+        let i = 0;
+        for (; i < buf.length && !tool.jsonDone; i++) {
+          const ch = buf[i];
+          if (tool.inStr) {
+            if (tool.esc) tool.esc = false;
+            else if (ch === '\\') tool.esc = true;
+            else if (ch === '"') tool.inStr = false;
+            continue;
+          }
+          if (ch === '"') { tool.inStr = true; tool.started = true; continue; }
+          if (ch === '{' || ch === '[') { tool.depth++; tool.started = true; continue; }
+          if (ch === '}' || ch === ']') {
+            tool.depth--;
+            if (tool.depth <= 0 && tool.started) { tool.jsonDone = true; i++; break; }
+          }
         }
+        buf = buf.slice(i);
+        if (!tool.jsonDone) { buf = buf.slice(Math.max(0, buf.length - 2)); break; }
+        const c = buf.indexOf('<<<');
+        if (c === -1) { buf = buf.slice(Math.max(0, buf.length - 2)); break; }
+        buf = buf.slice(c + 3);
+        tool = null;
+        continue;
+      }
+      const ti = buf.indexOf('>>>tool');
+      const li = buf.indexOf('<<<');
+      if (ti !== -1 && (li === -1 || ti < li)) {
+        if (ti > 0) out += buf.slice(0, ti);
+        buf = buf.slice(ti + 7);
+        tool = { started: false, depth: 0, inStr: false, esc: false, jsonDone: false };
+        continue;
+      }
+      if (li === -1) {
+        const keep = Math.min(6, buf.length);
+        if (buf.length > keep) { out += buf.slice(0, buf.length - keep); buf = buf.slice(buf.length - keep); }
         break;
       }
-      let start = i;
-      if (i > 0 && depth === 0) out += buf.slice(0, i);
-      else if (i > 0) { buf = buf.slice(i); start = 0; }
-      const e = buf.indexOf('>>>', start);
-      if (e === -1) { buf = buf.slice(start); break; }
-      const hdr = buf.slice(start + 3, e).trim().toUpperCase();
+      if (li > 0) {
+        if (depth === 0) out += buf.slice(0, li); // inside a legacy block: discard payload
+        buf = buf.slice(li);
+      }
+      const e = buf.indexOf('>>>', 3);
+      if (e === -1) break; // header not complete yet — keep from `<<<`
+      const hdr = buf.slice(3, e).trim().toUpperCase();
       const kind = hdr.split(':')[0];
       buf = buf.slice(e + 3);
       if (kind === 'END' || kind === 'BATCHEND') {
@@ -121,7 +153,7 @@ function BlockFilter() {
     return out;
   };
   this.drain = function () {
-    if (depth > 0) { buf = ''; return ''; }
+    if (depth > 0 || tool) { buf = ''; return ''; }
     const rest = buf; buf = ''; return rest;
   };
 }

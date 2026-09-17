@@ -8,8 +8,7 @@ import { getUser, canWrite } from './auth.js';
 import { createClient } from '@supabase/supabase-js';
 import { effortLevel, EFFORT, modelCost, creditsToUnits, unitsToCredits } from './models.js';
 import { personalBalance } from './credits.js';
-import { execCommand, terminalEnabled } from './terminal.js';
-import { scriptFreezeRisks } from './smoketest.js';
+import { executeTool, createMemoryStore } from './tools.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
@@ -17,13 +16,13 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MISTRAL_MODEL = 'mistral-small-latest';
 const MODEL_RE = /^[A-Za-z0-9._:/+%-]{1,64}$/;
 const SUB_AGENT_PROMPT = `You are a sub-agent of AIBuilder, an expert engineer, working on ONE file as part of a larger web app that another engineer is building.
-Respond with a single generator block that writes your assigned file:
-<<<FILE:path>>>
-complete, polished file content
-<<<END>>>
+Respond with a single tool call that writes your assigned file, in EXACTLY this format:
+>>>tool
+{"name":"write_file","arguments":{"path":"the/assigned/path.ext","content":"complete, polished file content"}}
+<<<
 Rules:
 - Write EXACTLY the assigned file. Do not invent other files, do not edit or delete anything.
-- Do not use EDIT, DELETE, PLAN, NAME or DELEGATE blocks. Only one FILE block.
+- Use only the write_file tool, exactly once. No other tools.
 - Do not explain or narrate. Match the app's existing style and conventions.
 - The file must be complete and self-contained so it works on its own. abide by these or you will be terminated by the host AI`;
 
@@ -192,8 +191,6 @@ chat.post('/', async (c) => {
       const subAgentTasks = []; // reused each round — cleared at round start
       let ops = 0;
       let refactorSent = false;
-      let inBatch = false;
-      const batchOps = [];
       const maybeRefactor = () => {
         if (!refactorSent && (deleted.length >= 2 || edited.length >= 3 || ops >= 6)) {
           refactorSent = true;
@@ -201,129 +198,49 @@ chat.post('/', async (c) => {
         }
       };
 
-      // apply one generator op; returns an SSE event for the client
-      const handleGen = async (ev) => {
-        if (ev.type === 'batch') { inBatch = true; return; }
-        if (ev.type === 'endbatch') { inBatch = false; await flushBatch(); return; }
-        if (ev.batch && inBatch) { batchOps.push(ev); return; }
-        if (ev.type === 'file' && ev.path) {
-          await store.saveFile(pid, ev.path, ev.content);
-          written.push(ev.path);
-          ops++;
-          maybeRefactor();
-          if (scriptFreezeRisks(ev.content).length) {
-            diag.push(`freeze risk detected in ${ev.path} (non-terminating loop) — the page is disabled until this is fixed.`);
-            await quarantineSync([ev.path], send);
+      // Execute one tool call from the unified registry and surface it to the
+      // client as the SSE event it already understands. Returns false when the
+      // op really failed (errors are recorded for the repair round).
+      const handleGen = async (call) => {
+        if (!call || call.type !== 'tool') return true;
+        const name = call.name;
+        const args = call.arguments && typeof call.arguments === 'object' ? call.arguments : {};
+        if (name === 'batch') {
+          for (const sub of (Array.isArray(args.tools) ? args.tools : [])) {
+            if (!(await handleGen({ ...(sub || {}), type: 'tool' }))) break;
           }
-          send({ type: 'file', path: ev.path });
-        } else if (ev.type === 'edit' && ev.path) {
-          const res = await applyEdit(pid, ev.path, ev.hunks || []);
-          if (res.ok) {
-            edited.push(ev.path);
-            ops++;
-            maybeRefactor();
-            if (res.content && scriptFreezeRisks(res.content).length) {
-              diag.push(`freeze risk detected in ${ev.path} (non-terminating loop) — the page is disabled until this is fixed.`);
-              await quarantineSync([ev.path], send);
-            }
-            send({ type: 'edit', path: ev.path });
-          } else {
-            send({ type: 'warn', message: `edit failed on ${ev.path}: ${res.error}` });
-            diag.push(`edit failed on ${ev.path}: ${res.error}`);
-          }
-        } else if (ev.type === 'delete' && ev.path) {
-          try {
-            await store.deleteFile(pid, ev.path);
-            deleted.push(ev.path);
-            ops++;
-            maybeRefactor();
-            send({ type: 'delete', path: ev.path });
-          } catch (e) {
-            send({ type: 'warn', message: `delete failed on ${ev.path}: ${e.message}` });
-            diag.push(`delete failed on ${ev.path}: ${e.message}`);
-          }
-        } else if (ev.type === 'rename' && ev.from && ev.to) {
-          try {
-            const refs = await applyRename(pid, ev.from, ev.to);
-            renamed.push({ from: ev.from, to: ev.to });
-            ops += 1 + refs;
-            maybeRefactor();
-            send({ type: 'rename', from: ev.from, to: ev.to, refs });
-          } catch (e) {
-            send({ type: 'warn', message: `rename failed: ${String(e.message || e)}` });
-            diag.push(`rename failed: ${String(e.message || e)}`);
-          }
-        } else if (ev.type === 'asset' && ev.path) {
-          try {
-            await store.saveFile(pid, ev.path, ev.data, ev.encoding);
-            assets.push(ev.path);
-            ops++;
-            maybeRefactor();
-            if ((!ev.encoding || ev.encoding === 'utf8') && scriptFreezeRisks(ev.data || '').length) {
-              diag.push(`freeze risk detected in asset ${ev.path} (non-terminating loop) — the page is disabled until this is fixed.`);
-              await quarantineSync([ev.path], send);
-            }
-            send({ type: 'asset', path: ev.path, encoding: ev.encoding });
-          } catch (e) {
-            send({ type: 'warn', message: `asset failed on ${ev.path}: ${String(e.message || e)}` });
-            diag.push(`asset failed on ${ev.path}: ${String(e.message || e)}`);
-          }
-        } else if (ev.type === 'seed' && ev.collection) {
-          try {
-            const n = await seedCollection(pid, ev.collection, ev.items || [], ev.clear);
-            seeds.push({ collection: ev.collection, n });
-            ops++;
-            maybeRefactor();
-            send({ type: 'seed', collection: ev.collection, count: n });
-          } catch (e) {
-            send({ type: 'warn', message: `seed failed on ${ev.collection}: ${String(e.message || e)}` });
-            diag.push(`seed failed on ${ev.collection}: ${String(e.message || e)}`);
-          }
-        } else if (ev.type === 'cmd' && ev.command) {
-          const command = String(ev.command).slice(0, 2000);
-          if (!terminalEnabled()) {
-            send({ type: 'warn', message: `command "${command.slice(0, 60)}" skipped — cloud terminal not configured yet` });
-          } else {
-            const res = await execCommand(pid, command);
-            send({ type: 'cmd', command, enabled: true, ok: res.ok, code: res.code, output: res.output, error: res.error });
-            if (!res.ok) diag.push(`command failed (exit ${res.code}): ${command.slice(0, 80)} — ${String(res.error || '').slice(0, 120)}`);
-          }
-        } else if (ev.type === 'plan') {
-          try {
-            await store.setPlan(pid, ev.items || []);
-            send({ type: 'plan', items: ev.items || [] });
-          } catch { /* plan is cosmetic */ }
-        } else if (ev.type === 'name' && ev.name) {
-          const nm = String(ev.name).trim().slice(0, 60);
-          if (!nm) return;
-          try {
-            await store.rename(pid, nm);
-            send({ type: 'name', name: nm, projectId: pid });
-          } catch { /* cosmetic */ }
-        } else if (ev.type === 'delegate' && ev.path) {
-          const task = String(ev.task || '').trim();
-          if (!task) return;
-          send({ type: 'delegate', path: ev.path });
-          subAgentTasks.push(spawnSubAgent(ev.path, task));
-        } else if (ev.type === 'test') {
-          // Auto page test was removed for speed — ack the model's TEST block
-          // so the client doesn't wait on a test result that will never come.
-          send({ type: 'test', ok: true, pages: 0, scripts: 0, errors: [], note: String(ev.note || '').slice(0, 200), auto: false });
+          return true;
         }
-      };
-      // apply a queued BATCH group atomically-ish (sequentially, abort on first failure)
-      const flushBatch = async () => {
-        if (!batchOps.length) return;
-        const opsToApply = batchOps.slice();
-        batchOps.length = 0;
-        for (const ev of opsToApply) {
-          try {
-            await handleGen({ ...ev, batch: false });
-          } catch (e) {
-            send({ type: 'warn', message: `batch op failed: ${String(e.message || e)}` });
-            break;
-          }
+        const res = await executeTool(name, args, {
+          store,
+          pid,
+          diag,
+          emitContent: false,
+          checkFreeze: true,
+          cmdDiag: true,
+          quarantine: (files) => quarantineSync(files, send),
+          spawnSubAgent: (path, task) => { subAgentTasks.push(spawnSubAgent(path, task)); },
+        });
+        const s = res.stat;
+        if (s) {
+          if (s.list === 'written') written.push(s.value);
+          else if (s.list === 'edited') edited.push(s.value);
+          else if (s.list === 'deleted') deleted.push(s.value);
+          else if (s.list === 'renamed') renamed.push(s.value);
+          else if (s.list === 'assets') assets.push(s.value);
+          else if (s.list === 'seeds') seeds.push(s.value);
         }
+        if (res.op) { ops += res.ops || 1; maybeRefactor(); }
+        if (res.event) send(res.event);
+        if (res.ok) return true;
+        if (res.skipped) {
+          if (!res.noWarn) send({ type: 'warn', message: res.error });
+          return true;
+        }
+        const err = String(res.error || 'unknown error');
+        if (!res.noWarn) send({ type: 'warn', message: `${name}: ${err}` });
+        diag.push(`${name} failed: ${err}`);
+        return false;
       };
 
       // Quarantine state: a project with a freeze-risk loop is "temporarily
@@ -343,7 +260,7 @@ chat.post('/', async (c) => {
       };
 
       // Spin off a parallel sub-agent: a focused single-file generator that
-      // runs concurrently with the main response and merges its FILE output in.
+      // runs concurrently with the main response and merges its write_file in.
       // Sub-agents always run through OpenRouter on free rate-limited models;
       // if a model responds 429 (rate-limited) we skip it and try another.
       const spawnSubAgent = async (subPath, task) => {
@@ -352,7 +269,7 @@ chat.post('/', async (c) => {
           { role: 'system', content: SUB_AGENT_PROMPT },
           { role: 'user', content: `Your one assigned file: ${subPath}\n\n` +
             `Task from the main engineer:\n${task}\n\n` +
-            `Return ONLY a single <<<FILE:${subPath}>>> ... <<<END>>> block.` },
+            `Return ONLY a single >>>tool write_file call for ${subPath}.` },
         ];
         const sp = new FileStreamer();
         const evs = [];
@@ -391,20 +308,16 @@ chat.post('/', async (c) => {
               const tok = j?.choices?.[0]?.delta?.content ?? '';
               if (!tok) continue;
               for (const ev of sp.feed(tok)) {
-                if (ev.type === 'file' && ev.path) {
-                  ev.path = subPath;
-                  evs.push(ev);
-                } else if (ev.type === 'file') {
+                if (ev.type === 'tool' && ev.name === 'write_file') {
+                  ev.arguments = { ...(ev.arguments || {}), path: subPath };
                   evs.push(ev);
                 }
               }
             }
           }
           for (const ev of sp.flush()) {
-            if (ev.type === 'file' && ev.path) {
-              ev.path = subPath;
-              evs.push(ev);
-            } else if (ev.type === 'file') {
+            if (ev.type === 'tool' && ev.name === 'write_file') {
+              ev.arguments = { ...(ev.arguments || {}), path: subPath };
               evs.push(ev);
             }
           }
@@ -496,7 +409,7 @@ chat.post('/', async (c) => {
               }
               for (const ev of res.value.evs) {
                 await handleGen(ev);
-                send({ type: 'subagent', path: ev.path, model, subModel: res.value.model, provider: res.value.provider });
+                send({ type: 'subagent', path: ev.arguments?.path || '', model, subModel: res.value.model, provider: res.value.provider });
               }
             }
           }
@@ -726,8 +639,8 @@ async function workspaceChat(c, body, message, user) {
       let provider = 'ollama';
       const emit = (ev) => send(ev);
 
-      // in-memory copy of the workspace for applying surgical edits
-      const ws = new Map(cleaned.map((f) => [f.path, f.content]));
+      // in-memory store over the uploaded workspace, driven by the same registry
+      const ws = createMemoryStore(cleaned);
       const written = [];
       const edited = [];
       const deleted = [];
@@ -735,72 +648,38 @@ async function workspaceChat(c, body, message, user) {
       const diag = [];
       let ops = 0;
 
-      const handleGen = async (ev) => {
-        if (ev.type === 'file' && ev.path) {
-          ws.set(ev.path, ev.content);
-          written.push(ev.path);
-          ops++;
-          send({ type: 'file', path: ev.path, content: ev.content });
-        } else if (ev.type === 'edit' && ev.path) {
-          const existing = ws.get(ev.path);
-          if (existing === undefined) {
-            send({ type: 'warn', message: `edit failed on ${ev.path}: file not present in workspace` });
-            diag.push(`edit failed on ${ev.path}: file not present in workspace`);
-            return;
+      const handleGen = async (call) => {
+        if (!call || call.type !== 'tool') return true;
+        const name = call.name;
+        const args = call.arguments && typeof call.arguments === 'object' ? call.arguments : {};
+        if (name === 'batch') {
+          for (const sub of (Array.isArray(args.tools) ? args.tools : [])) {
+            if (!(await handleGen({ ...(sub || {}), type: 'tool' }))) break;
           }
-          let text = existing;
-          let ok = true;
-          for (const h of (ev.hunks || [])) {
-            const i = text.indexOf(h.search);
-            if (i === -1) {
-              const msg = `edit failed on ${ev.path}: search text not found: ${JSON.stringify(String(h.search).slice(0, 60))}`;
-              send({ type: 'warn', message: msg });
-              diag.push(msg);
-              ok = false;
-              break;
-            }
-            text = text.slice(0, i) + h.replace + text.slice(i + h.search.length);
-          }
-          if (!ok) return;
-          ws.set(ev.path, text);
-          edited.push(ev.path);
-          ops++;
-          send({ type: 'edit', path: ev.path, content: text });
-        } else if (ev.type === 'delete' && ev.path) {
-          ws.delete(ev.path);
-          deleted.push(ev.path);
-          ops++;
-          send({ type: 'delete', path: ev.path });
-        } else if (ev.type === 'rename' && ev.from && ev.to) {
-          if (ws.has(ev.from)) {
-            ws.set(ev.to, ws.get(ev.from));
-            ws.delete(ev.from);
-          }
-          renamed.push(`${ev.from} -> ${ev.to}`);
-          ops++;
-          send({ type: 'rename', from: ev.from, to: ev.to });
-        } else if (ev.type === 'asset' && ev.path) {
-          ws.set(ev.path, ev.data || '');
-          ops++;
-          send({ type: 'asset', path: ev.path, encoding: ev.encoding || 'utf8', data: ev.data || '' });
-        } else if (ev.type === 'plan' && ev.items) {
-          send({ type: 'plan', items: ev.items });
-        } else if (ev.type === 'name' && ev.name) {
-          send({ type: 'name', name: ev.name });
-        } else if (ev.type === 'test') {
-          // Auto page test was removed for speed — ack the model's TEST block.
-          send({ type: 'test', ok: true, pages: 0, scripts: 0, errors: [], note: String(ev.note || '').slice(0, 200), workspace: true, auto: false });
-        } else if (ev.type === 'cmd' && ev.command) {
-          // Execute on the project's dedicated cloud terminal when configured;
-          // otherwise relay so the client can offer to run it locally.
-          const command = String(ev.command).slice(0, 2000);
-          if (terminalEnabled()) {
-            const res = await execCommand(String(body.pid || '').slice(0, 40), command);
-            send({ type: 'cmd', command, enabled: true, ok: res.ok, code: res.code, output: res.output, error: res.error });
-          } else {
-            send({ type: 'cmd', command, enabled: false });
-          }
+          return true;
         }
+        const res = await executeTool(name, args, {
+          store: ws,
+          pid: String(body.pid || '').slice(0, 40),
+          diag,
+          emitContent: true,
+          checkFreeze: false,
+          cmdDiag: false,
+        });
+        if (res.stat) {
+          const v = res.stat.value;
+          if (res.stat.list === 'written') written.push(v);
+          else if (res.stat.list === 'edited') edited.push(v);
+          else if (res.stat.list === 'deleted') deleted.push(v);
+          else if (res.stat.list === 'renamed') renamed.push(`${v.from} -> ${v.to}`);
+        }
+        if (res.op) ops++;
+        if (res.event) send(res.event);
+        if (res.ok || res.skipped) return true;
+        const err = String(res.error || 'unknown error');
+        if (!res.noWarn) send({ type: 'warn', message: `${name}: ${err}` });
+        diag.push(`${name} failed: ${err}`);
+        return false;
       };
 
       // Repair rounds: if the build is still failing, keep the session alive
@@ -900,78 +779,6 @@ async function workspaceChat(c, body, message, user) {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache',
   });
-}
-
-async function applyEdit(pid, fpath, hunks) {
-  if (!hunks.length) return { error: 'no SEARCH/REPLACE hunks found' };
-  const row = await store.getFile(pid, fpath);
-  if (!row) return { error: 'file not found' };
-  if (row.encoding && row.encoding !== 'utf8') return { error: 'binary file — rewrite with FILE instead' };
-  let text = String(row.content ?? '');
-  for (const h of hunks) {
-    const i = text.indexOf(h.search);
-    if (i === -1) {
-      return { error: `search text not found: ${JSON.stringify(String(h.search).slice(0, 60))}` };
-    }
-    text = text.slice(0, i) + h.replace + text.slice(i + h.search.length);
-  }
-  await store.saveFile(pid, fpath, text);
-  return { ok: true, content: text };
-}
-
-// Move a file and refresh every other text file that references it
-// (src="...", href="...", url(...), fetch('...'), import "...", scripts).
-const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-async function applyRename(pid, from, to) {
-  const row = await store.getFile(pid, from);
-  if (!row) throw new Error(`file not found: ${from}`);
-  const oldBase = from.split('/').pop();
-  const newBase = to.split('/').pop();
-  let refs = 0;
-  let files = [];
-  try { files = await store.listFiles(pid); } catch { files = []; }
-  const nameRe = new RegExp(`(?<=[\\s"'()=/]|^)${escRe(oldBase)}(?=[\\s"'()\\.\\?#/&]|$)`, 'g');
-  for (const f of files) {
-    if (f.path === from || f.path === to) continue;
-    let r;
-    try { r = await store.getFile(pid, f.path); } catch { continue; }
-    if (!r || (r.encoding && r.encoding !== 'utf8')) continue;
-    let text = String(r.content ?? '');
-    const before = text;
-    // exact path references (plain, ./ , / and quoted)
-    text = text
-      .replace(new RegExp(`['"]${escRe(from)}['"]`, 'g'), (m) => m.replace(from, to))
-      .replace(new RegExp(escRe(from), 'g'), to);
-    // bare basename references bound by delimiters
-    text = text.replace(nameRe, newBase);
-    if (text !== before) {
-      await store.saveFile(pid, f.path, text);
-      refs++;
-    }
-  }
-  await store.saveFile(pid, to, row.content, row.encoding || 'utf8');
-  try { await store.deleteFile(pid, from); } catch { /* already gone */ }
-  return refs;
-}
-
-// SEED blocks insert rows (optionally clearing first) into a creat.db-style
-// collection using the same lazy-table BaaS storage the SDK exposes.
-async function seedCollection(pid, coll, items, clear) {
-  const tname = store.baasTable(pid, coll);
-  if (!tname) throw new Error('unsupported collection name');
-  let n = 0;
-  if (clear) {
-    const existing = await store.baasList(pid, coll);
-    for (const row of existing) {
-      try { await store.baasRemove(pid, coll, row.id); } catch { /* skip */ }
-    }
-  }
-  for (const it of items) {
-    if (!it || typeof it !== 'object') continue;
-    try { await store.baasInsert(pid, coll, it); n++; } catch { /* skip bad row */ }
-  }
-  return n;
 }
 
 // Give the model eyes on the current project: full file list plus contents
