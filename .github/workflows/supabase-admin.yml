@@ -13,6 +13,10 @@ on:
         description: 'optional single table for mode=count/clear-one'
         required: false
         default: ''
+      filter:
+        description: 'PostgREST filter for clear-one (default id=gt.0)'
+        required: false
+        default: ''
       confirm:
         description: 'Type RUN to execute, or anything else to abort'
         required: true
@@ -32,6 +36,7 @@ jobs:
           SUPA_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           MODE: ${{ github.event.inputs.mode }}
           TABLE: ${{ github.event.inputs.table }}
+          FILTER: ${{ github.event.inputs.filter }}
         run: |
           set -euo pipefail
           hdr=(-H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY")
@@ -56,8 +61,9 @@ jobs:
 
           if [ "$MODE" = "clear-one" ]; then
             [ -n "$TABLE" ] || { echo "clear-one needs table"; exit 1; }
-            echo "deleting all rows from $TABLE"
-            curl -s -o /dev/null -w "%{http_code}\n" -X DELETE "${hdr[@]}" "$SUPA_URL/rest/v1/$TABLE?select=*"
+            filt="${FILTER:-id=gt.0}"
+            echo "deleting all rows from $TABLE where $filt"
+            curl -s -w "\nHTTP %{http_code}\n" -X DELETE "${hdr[@]}" "$SUPA_URL/rest/v1/$TABLE?$filt"
             exit 0
           fi
 
