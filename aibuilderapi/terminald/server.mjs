@@ -185,12 +185,25 @@ const SUP_PATH = join(dirname(fileURLToPath(import.meta.url)), 'supervisor.mjs')
 
 try { mkdirSync(SERVE_DIR, { recursive: true }); } catch { /* best effort */ }
 
-function pickPort(set, min, max) {
-  for (let i = 0; i < 500; i++) {
-    const p = min + Math.floor(Math.random() * (max - min));
+// Pick a random free port in [min,max): start at a random offset so concurrent
+// servers rarely collide, skip ports already handed out, then confirm the OS
+// will actually let us bind the port before returning it.
+function portFree(port) {
+  return new Promise((resolvePromise) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.on('error', () => resolvePromise(false));
+    probe.listen({ host: '127.0.0.1', port, exclusive: true }, () => probe.close(() => resolvePromise(true)));
+  });
+}
+
+async function findFreePort(set, min, max) {
+  const span = max - min;
+  const start = Math.floor(Math.random() * span);
+  for (let i = 0; i < span; i++) {
+    const p = min + ((start + i) % span);
     if (p === PORT || set.has(p)) continue;
-    set.add(p);
-    return p;
+    if (await portFree(p)) { set.add(p); return p; }
   }
   throw new Error('no free port');
 }
@@ -248,14 +261,19 @@ function spawnSupervisor(rec) {
   }
 }
 
-function startServer(pid, name, cmd) {
+async function startServer(pid, name, cmd) {
   if (typeof name !== 'string' || !NAME_RE.test(name)) return { ok: false, error: 'bad server name (use a-z0-9_-)' };
   if (typeof cmd !== 'string' || !cmd.trim()) return { ok: false, error: 'cmd required' };
   const key = serverKey(pid, name);
   if (SERVERS.has(key)) return { ok: false, error: 'server already running', port: SERVERS.get(key).port };
   const cwd = workspace(pid);
-  const port = pickPort(USED_PORTS, SERVE_MIN, SERVE_MAX);
-  const ctrl = pickPort(USED_CTRL, CTRL_MIN, CTRL_MAX);
+  let port, ctrl;
+  try {
+    port = await findFreePort(USED_PORTS, SERVE_MIN, SERVE_MAX);
+    ctrl = await findFreePort(USED_CTRL, CTRL_MIN, CTRL_MAX);
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
   const rec = { pid: String(pid), name, port, ctrl, cmd, cwd, startedAt: Date.now() };
   SERVERS.set(key, rec);
   if (!spawnSupervisor(rec)) { SERVERS.delete(key); return { ok: false, error: 'could not start supervisor' }; }
@@ -432,7 +450,7 @@ const server = http.createServer(async (req, res) => {
     try { body = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'bad json' }); }
     if (body.token !== TOKEN) return json(res, 401, { error: 'bad token' });
     try { workspace(body.pid); } catch { return json(res, 400, { error: 'bad pid' }); }
-    const r = startServer(body.pid, String(body.name || '').toLowerCase(), String(body.cmd || ''));
+    const r = await startServer(body.pid, String(body.name || '').toLowerCase(), String(body.cmd || ''));
     return json(res, r.ok ? 200 : 400, r);
   }
 

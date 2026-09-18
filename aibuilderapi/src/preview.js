@@ -481,6 +481,46 @@ let BAAS_SDK_RAW = `(function () {
         return new WebSocket(proto + location.host + creat.serve.url(name, path));
       }
     },
+    dedicated: {
+      // A PERSISTENT server: runs in the project terminal with full root, gets a
+      // RANDOM free port, and is kept alive / auto-restarted by a supervisor so
+      // it survives crashes, page reloads and daemon restarts.
+      //   var info = await creat.dedicated.server('web', 'server.py');
+      //   info.port   // the random port it listens on
+      // Reach it with creat.serve.fetch('web', path) / creat.serve.ws('web', path).
+      server: function (name, file, opts) {
+        opts = opts || {};
+        var nm = String(name || 'server').toLowerCase();
+        var command = opts.command || ('python3 ' + (file || 'server.py'));
+        return fetch('/api/server/' + pid + '/start', {
+          method: 'POST',
+          headers: authHeaders({ 'content-type': 'application/json' }),
+          body: JSON.stringify({ name: nm, command: command })
+        }).then(function (r) { return r.json().catch(function () { return {}; }); }).then(function (j) {
+          if (j && j.port) return j;
+          // already running (or a race) — look up the live port
+          return creat.dedicated.list().then(function (l) {
+            var m = ((l && l.servers) || []).filter(function (s) { return s.name === nm; })[0];
+            return m ? { ok: true, name: m.name, port: m.port, running: m.running, existing: true } : (j || { ok: false });
+          });
+        });
+      },
+      list: function () {
+        return fetch('/api/server/' + pid, authHeaders()).then(function (r) { return r.json(); });
+      },
+      logs: function (name) {
+        return fetch('/api/server/' + pid + '/' + encodeURIComponent(String(name || '').toLowerCase()) + '/logs', authHeaders())
+          .then(function (r) { return r.json(); });
+      },
+      stop: function (name) {
+        return fetch('/api/server/' + pid + '/stop', {
+          method: 'POST',
+          headers: authHeaders({ 'content-type': 'application/json' }),
+          body: JSON.stringify({ name: String(name || '').toLowerCase() })
+        }).then(function (r) { return r.json(); });
+      },
+      url: function (name, path) { return creat.serve.url(name, path); }
+    },
     chat: {
       // Persistent per-project chat with history, realtime delivery,
       // and anon identities — the jsccOS chat engine, back in the SDK.

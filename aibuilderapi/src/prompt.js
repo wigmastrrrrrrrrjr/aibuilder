@@ -38,6 +38,9 @@ Tools:
     {"command":"cat index.html"}
     {"command":"curl -s https://api.example.org/data"}
     The built-in file tools (write_file/edit_file/…) stay available as the fallback if the terminal is unavailable or for changes you want applied via the diff-and-preview pipeline.
+- create_dedicated_server — run a PERSISTENT server for this project (the SDK's creat.dedicated.server). Write the script first with write_file — it must listen on the port the platform gives it (Node: process.env.PORT, Python: os.environ["PORT"]) — then create the server. It gets a RANDOM free port, runs the file under a supervisor that keeps it alive and auto-restarts it on crash, and returns the port number. Reach it from the app with creat.serve.fetch/ws(name, path). Use it for anything that must stay alive between page loads (game lobbies, bots, background workers) — not for stateless request handlers:
+    {"name":"web","file":"server.py"}
+    {"name":"bot","command":"python3 bot.py"}
 - update_plan — multi-step or refactoring work (REQUIRED before large changes):
     {"items":[{"text":"step one","done":false},{"text":"step two","done":false}]}
     Mark steps "done": true as you complete them; when everything is done, emit a final fully-completed plan.
@@ -299,6 +302,32 @@ durable state. NEVER keep anything that must last in memory or in local files in
 process. Persist all lasting state with creat.db (or creat.rt / creat.live for realtime), and
 re-read it from the database on startup. Treat the process as a stateless request handler.
 
+### creat.dedicated.server — a forever-running process (with a real port)
+
+Unlike creat.serve, a dedicated server is PERSISTENT: it runs in the project terminal (full
+root on the device), gets a random free port, and is kept alive by a supervisor that
+auto-restarts it on crash and survives daemon restarts. Use it for game lobbies, bots,
+background workers — anything that must stay up between page loads.
+
+  // The script listens on the port the platform assigns it:
+  //   Python: port = int(os.environ["PORT"])
+  //   Node:   const port = process.env.PORT
+  var info = await creat.dedicated.server('web', 'server.py');
+  // -> { ok, name, port, ... }   ← the random port number
+  await creat.dedicated.list();                 // -> [{name, port, running, restarts, ...}]
+  await creat.dedicated.logs('web');            // recent stdout/stderr
+  await creat.dedicated.stop('web');
+
+Reach it exactly like creat.serve (the port is wired up for you — use the name, not the number):
+
+  var res = await creat.serve.fetch('web', '/state');
+  var ws  = creat.serve.ws('web', '/ws');
+
+Calling creat.dedicated.server for a name that is already running just returns its existing
+port, so it is always safe to call on startup. Because the process is persistent you may hold
+live state in memory — but still persist anything that must outlive the process itself with
+creat.db.
+
 ---
 
 ## Common pitfalls — DO NOT DO THESE
@@ -313,7 +342,7 @@ re-read it from the database on startup. Treat the process as a stateless reques
 8. **"I need to manage connections or handle reconnection"** — WRONG. The SDK uses Supabase Realtime under the hood and handles all reconnection and cleanup internally.
 9. **"creat.db operations are instant"** — WRONG. They are async network calls. ALWAYS await them and show loading states.
 10. **"I'll use localStorage for data"** — WRONG. NEVER use localStorage for app data. Always use creat.db. localStorage is per-browser and lost on clear.
-11. **"My dedicated process can keep state in memory or a local file"** — WRONG. creat.serve processes are ephemeral and restart anytime. Persist everything in creat.db; re-read it on startup.
+11. **"My creat.serve process can keep state in memory or a local file"** — WRONG. creat.serve processes are ephemeral and restart anytime. If state must survive between page loads, either persist it in creat.db (and re-read on startup) or run a PERSISTENT process with creat.dedicated.server, which the platform keeps alive and auto-restarts.
 12. **"creat.terminal.run only echoes text"** — WRONG. It also syncs files the command created/changed/deleted back into the project. Inspect r.sync and refresh the UI accordingly.
 
 ---
@@ -424,17 +453,23 @@ Remove heavy data URIs from <img> tags once the asset file exists — reference 
 <<<
 The built-in file tools stay available as the fallback if the terminal is unavailable.
 
-10. test — OPTIONAL page check (each build also gets an automatic pass, so you don't need to ask):
+10. create_dedicated_server — run a PERSISTENT dedicated server for this project (SDK: creat.dedicated.server). First write the script with write_file — it must bind the port you are given via process.env.PORT (Node) or os.environ["PORT"] (Python). The call picks a RANDOM free port, starts the file under a supervisor that keeps it running and restarts it if it crashes, and RETURNS THE PORT. This is for long-lived processes (lobbies, bots, workers) that must survive between page loads; use creat.serve for stateless request handlers. Reach the running server from the app with creat.serve.fetch(name, path) / creat.serve.ws(name, path):
+>>>tool
+{"name":"create_dedicated_server","arguments":{"name":"web","file":"server.py"}}
+<<<
+In the app, talk to it through the SDK: \`fetch(creat.serve.url('web','/state'))\` or \`creat.serve.ws('web','/ws')\`.
+
+11. test — OPTIONAL page check (each build also gets an automatic pass, so you don't need to ask):
 >>>tool
 {"name":"test","arguments":{"note":"check that the new dashboard renders"}}
 <<<
 
-11. batch — run several calls as one unit (sequential; stops on first failure). Use it when a set of ops must apply together:
+12. batch — run several calls as one unit (sequential; stops on first failure). Use it when a set of ops must apply together:
 >>>tool
 {"name":"batch","arguments":{"tools":[{"name":"write_file","arguments":{"path":"index.html","content":"<main>App</main>"}},{"name":"seed_database","arguments":{"collection":"items","items":[{"v":1}]}}]}}
 <<<
 
-12. set_brief — publish the design blueprint ONCE at the start of a new app so the user sees your direction (name, vibe, palette, components, data). See "Start with a blueprint" above.
+13. set_brief — publish the design blueprint ONCE at the start of a new app so the user sees your direction (name, vibe, palette, components, data). See "Start with a blueprint" above.
 >>>tool
 {"name":"set_brief","arguments":{"name":"Ledgerly","vibe":"A calm, trustworthy billing console for small studios.","palette":["#0f766e","#0f172a","#f8fafc","#f59e0b"],"components":["KPI header","Revenue chart","Invoices table"],"data":[{"collection":"invoices","rows":8}]}}
 <<<

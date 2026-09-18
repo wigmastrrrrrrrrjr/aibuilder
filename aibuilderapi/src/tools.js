@@ -17,7 +17,7 @@
 
 import { store as defaultStore } from './store.js';
 import { scriptFreezeRisks } from './smoketest.js';
-import { execCommand, terminalEnabled } from './terminal.js';
+import { execCommand, terminalEnabled, startDedicatedServer } from './terminal.js';
 
 /* ---- path & payload helpers ------------------------------------------------ */
 
@@ -290,6 +290,33 @@ define({
   },
 });
 
+// The AI's own dedicated server. Reaches the project terminal (which runs as
+// root on the device), picks a RANDOM free port, and runs a file you wrote under
+// an auto-restarting supervisor so it stays attached forever. Exposed to
+// generated apps as the SDK method `creat.dedicated.server`.
+define({
+  name: 'create_dedicated_server',
+  description: 'Run a persistent dedicated server for this project (SDK: creat.dedicated.server). Write the script first (e.g. server.py — read process.env.PORT / os.environ["PORT"]), then call this: it finds a random free port, starts the process under a supervisor that keeps it alive and restarts it on crash, and returns the port number. Reach it from the app with creat.serve.fetch/ws(name, path) or via /api/server/<pid>/<name>/.',
+  arguments: {
+    name: { type: 'string', desc: 'server name, a-z0-9-_ (default "server")' },
+    file: { type: 'string', desc: 'script to run, project-relative (default "server.py")' },
+    command: { type: 'string', desc: 'explicit command override, e.g. "python3 app.py" (default "python3 <file>")' },
+  },
+  async run(ctx, a) {
+    const res = await startDedicatedServer(ctx.pid, { name: a.name, file: a.file, command: a.command });
+    const output = res.ok
+      ? `dedicated server "${res.name}" listening on port ${res.port} (persistent, auto-restart)`
+      : undefined;
+    return {
+      ok: Boolean(res.ok), name: res.name, port: res.port, command: res.command, file: res.file,
+      output, error: res.error,
+      noWarn: true,
+      event: { type: 'server', ok: Boolean(res.ok), name: res.name, port: res.port, file: res.file, command: res.command, error: res.error },
+      op: true,
+    };
+  },
+});
+
 define({
   name: 'create_asset',
   description: 'Add an image or binary asset (data URI, base64:, or plain text).',
@@ -442,8 +469,17 @@ export function toolDocs() {
   }).join('\n');
 }
 
+// The SDK name is `creat.dedicated.server`; accept it (and close variants) as an
+// alias for the snake_case tool so a model that writes the SDK form still works.
+const TOOL_ALIASES = {
+  'creat.dedicated.server': 'create_dedicated_server',
+  'creat.dedicated_server': 'create_dedicated_server',
+  'dedicated_server': 'create_dedicated_server',
+};
+
 // Validate, execute and normalize a tool call into a structured result.
 export async function executeTool(name, rawArgs, ctx = {}) {
+  name = TOOL_ALIASES[name] || name;
   const tool = tools.get(name);
   if (!tool) return { tool: name || '(unnamed)', ok: false, error: `unknown tool "${name}" — valid tools: ${toolNames().join(', ')}` };
   const v = validateArgs(tool.arguments, rawArgs);

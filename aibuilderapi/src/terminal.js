@@ -446,6 +446,45 @@ async function daemonServe(method, path, { body, query } = {}) {
   }
 }
 
+// Create (or re-attach to) a persistent dedicated server for a project. This is
+// the AI-facing primitive behind the `create_dedicated_server` tool and the
+// SDK's `creat.dedicated.server`. The daemon allocates a random free port,
+// starts the file under its own auto-restarting supervisor and hands the port
+// back; the process keeps running even if the daemon or the build restarts.
+//
+// `file` defaults to server.py and `command` defaults to `python3 <file>`; pass
+// `command` to run anything else. The project's files are mirrored to the
+// terminal first so a script written this same round is already on disk.
+export async function startDedicatedServer(pid, { name, file, command } = {}) {
+  if (!terminalEnabled()) return { ok: false, error: 'terminal not configured' };
+  const safe = String(name || 'server').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 32) || 'server';
+  const script = cleanRelPath(file) || 'server.py';
+  const cmd = String(command || '').trim() || `python3 ${script}`;
+  try {
+    const files = await store.listFilesWithContent(pid);
+    await mirrorToTerminal(pid, Array.isArray(files) ? files : []);
+  } catch { /* mirror is best-effort — the file may already be on disk */ }
+  const r = await daemonServe('POST', '/serve', { body: { pid, name: safe, cmd } });
+  const j = r.json || {};
+  if (r.status < 400 && j.ok && j.port) {
+    return { ok: true, name: safe, port: j.port, command: cmd, file: script };
+  }
+  // A second call for an existing server is treated as a successful re-attach.
+  if (/already running/i.test(String(j.error || '')) || j.port) {
+    const list = await daemonServe('GET', '/serve', { query: { pid } });
+    const m = ((list.json && list.json.servers) || []).find((s) => s.name === safe);
+    if (m && m.port) return { ok: true, name: safe, port: m.port, command: cmd, file: script, existing: true };
+  }
+  return { ok: false, error: j.error || 'could not start dedicated server', name: safe, command: cmd, file: script };
+}
+
+// Reject absolute paths and `..`; keep it project-relative like cleanPath().
+function cleanRelPath(p) {
+  const s = String(p == null ? '' : p).replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/^\/+/, '').trim();
+  if (!s || s === '.' || s.split('/').includes('..')) return '';
+  return s;
+}
+
 export const serverApi = new Hono();
 serverApi.use('*', requireUser);
 

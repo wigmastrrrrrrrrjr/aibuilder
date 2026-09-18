@@ -1562,6 +1562,19 @@ async function send() {
             }
           }
           if (aiMsg && ev.ok) aiMsg.card('run', actCards.term(ev.command));
+        } else if (ev.type === 'server') {
+          const srvCmd = ev.command || (ev.file ? ('python3 ' + ev.file) : '');
+          if (window.__termLine) {
+            if (ev.ok) {
+              window.__termLine('$ ' + srvCmd, 'cmd');
+              window.__termLine(`[dedicated] ${ev.name} listening on :${ev.port} — persistent, auto-restart`, 'meta');
+            } else {
+              window.__termLine('[dedicated] ' + (ev.error || 'failed to start'), 'meta');
+            }
+          }
+          if (aiMsg) aiMsg.card(ev.ok ? 'server' : 'server fail', actCards.term(srvCmd + (ev.ok ? `  →  :${ev.port}` : '')));
+          activityText.textContent = ev.ok ? `Dedicated server :${ev.port}` : 'Dedicated server failed';
+          termLog(ev.ok ? `dedicated ${ev.name} on :${ev.port}` : `dedicated ${ev.name} failed: ${ev.error || ''}`, ev.ok ? 's' : 'e');
         } else if (ev.type === 'plan') {
           renderPlan(ev.items || []);
           if (aiMsg) aiMsg.card('', actCards.plan());
