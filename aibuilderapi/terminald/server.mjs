@@ -14,6 +14,7 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { mkdirSync, statSync, readdirSync, readFileSync, unlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { configure as configureAgent, agentRoute } from './agent.mjs';
 
 const PORT = Number(process.env.PORT || process.argv[2] || 3000);
@@ -163,72 +164,160 @@ function run(cwd, cmd, timeoutMs) {
 // ---- dedicated servers: per-project long-running processes -----------------
 // Generated apps can start their own HTTP server here (Node/Express/Python/…).
 // Each gets a private loopback port; the worker proxies HTTP + WebSocket
-// requests to it via /srv/<pid>/<name>/... . The daemon persists NO server
-// state — apps must save anything durable with the database/multiplayer SDKs.
+// requests to it via /srv/<pid>/<name>/... .
+//
+// A server is never a direct child of the daemon: it runs under its own
+// detached *supervisor* (supervisor.mjs — a second, auto-created terminal).
+// The supervisor owns the process and restarts it with backoff when it crashes,
+// so a bad server can't take down the terminal. Supervisors survive daemon
+// restarts and are re-adopted from an on-disk manifest, so builds keep running.
+// The daemon persists SERVER state itself; apps must still save durable data
+// with the database/multiplayer SDKs.
 
 const SERVERS = new Map();                 // `${pid}\0${name}` -> record
 const USED_PORTS = new Set();
+const USED_CTRL = new Set();
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const SERVE_MIN = 41000, SERVE_MAX = 41999;
-const LOG_RING = 20000;                    // chars of stdout/stderr kept per server
+const CTRL_MIN = 42000, CTRL_MAX = 42999;
+const SERVE_DIR = join(SANDBOX, '.servers');
+const SUP_PATH = join(dirname(fileURLToPath(import.meta.url)), 'supervisor.mjs');
 
-function pickPort() {
+try { mkdirSync(SERVE_DIR, { recursive: true }); } catch { /* best effort */ }
+
+function pickPort(set, min, max) {
   for (let i = 0; i < 500; i++) {
-    const p = SERVE_MIN + Math.floor(Math.random() * (SERVE_MAX - SERVE_MIN));
-    if (p === PORT || USED_PORTS.has(p)) continue;
-    USED_PORTS.add(p);
+    const p = min + Math.floor(Math.random() * (max - min));
+    if (p === PORT || set.has(p)) continue;
+    set.add(p);
     return p;
   }
   throw new Error('no free port');
 }
 
 function serverKey(pid, name) { return `${String(pid)}\0${String(name)}`; }
+function safeName(s) { return String(s || '').replace(/[^a-zA-Z0-9._-]/g, ''); }
+function manifestPath(pid, name) { return join(SERVE_DIR, `${safeName(pid)}__${safeName(name)}.json`); }
+
+function writeManifest(rec) {
+  try { writeFileSync(manifestPath(rec.pid, rec.name), JSON.stringify(rec)); } catch { /* best effort */ }
+}
+function removeManifest(pid, name) { try { unlinkSync(manifestPath(pid, name)); } catch { /* gone */ } }
+function readManifests() {
+  const out = [];
+  let names = [];
+  try { names = readdirSync(SERVE_DIR); } catch { return out; }
+  for (const f of names) {
+    if (!f.endsWith('.json')) continue;
+    try { out.push(JSON.parse(readFileSync(join(SERVE_DIR, f), 'utf8'))); } catch { /* skip bad file */ }
+  }
+  return out;
+}
+
+// Ask a supervisor's control socket. Rejects if it is unreachable/dead.
+function supCall(rec, path, method = 'GET', timeoutMs = 1500) {
+  return new Promise((resolve, reject) => {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    fetch(`http://127.0.0.1:${rec.ctrl}${path}?token=${encodeURIComponent(TOKEN)}`, { method, signal: ac.signal })
+      .then(async (r) => { clearTimeout(t); resolve(await r.json().catch(() => ({}))); },
+            (e) => { clearTimeout(t); reject(e); });
+  });
+}
+
+function spawnSupervisor(rec) {
+  try {
+    const child = spawn(process.execPath, [SUP_PATH], {
+      detached: true, stdio: 'ignore',
+      env: {
+        ...process.env,
+        SUP_CMD: rec.cmd, SUP_CWD: rec.cwd, SUP_PORT: String(rec.port), SUP_CTRL: String(rec.ctrl),
+        SUP_TOKEN: TOKEN, SUP_PID: rec.pid, SUP_NAME: rec.name,
+        SUP_KEY: `${safeName(rec.pid)}__${safeName(rec.name)}`, // env values can't hold NUL
+        SUP_MANIFEST: manifestPath(rec.pid, rec.name),
+      },
+    });
+    child.on('error', (e) => console.error(`terminald: supervisor spawn failed (${rec.name}): ${e.message}`));
+    child.unref();
+    rec.supervisorPid = child.pid;
+    writeManifest(rec);
+    return true;
+  } catch (e) {
+    console.error(`terminald: supervisor spawn failed (${rec.name}): ${e.message}`);
+    return false;
+  }
+}
 
 function startServer(pid, name, cmd) {
   if (typeof name !== 'string' || !NAME_RE.test(name)) return { ok: false, error: 'bad server name (use a-z0-9_-)' };
   if (typeof cmd !== 'string' || !cmd.trim()) return { ok: false, error: 'cmd required' };
   const key = serverKey(pid, name);
-  const prev = SERVERS.get(key);
-  if (prev && prev.child && prev.exit === null) return { ok: false, error: 'server already running', port: prev.port };
+  if (SERVERS.has(key)) return { ok: false, error: 'server already running', port: SERVERS.get(key).port };
   const cwd = workspace(pid);
-  const port = pickPort();
-  const rec = { pid: String(pid), name, port, child: null, startedAt: Date.now(), log: '', exit: null };
+  const port = pickPort(USED_PORTS, SERVE_MIN, SERVE_MAX);
+  const ctrl = pickPort(USED_CTRL, CTRL_MIN, CTRL_MAX);
+  const rec = { pid: String(pid), name, port, ctrl, cmd, cwd, startedAt: Date.now() };
   SERVERS.set(key, rec);
-  const append = (d) => { rec.log = (rec.log + d.toString()).slice(-LOG_RING); };
-  try {
-    rec.child = spawn('/bin/sh', ['-c', cmd], {
-      cwd,
-      detached: true,                      // own process group → kill the whole tree
-      env: { ...process.env, HOME: cwd, PORT: String(port), PROJECT_ID: String(pid), SERVER_NAME: name },
-    });
-  } catch (e) {
-    rec.exit = -1; rec.log += `\n[spawn error] ${e.message}`;
-    return { ok: false, error: String(e.message) };
-  }
-  rec.child.stdout.on('data', append);
-  rec.child.stderr.on('data', append);
-  rec.child.on('close', (code) => { rec.exit = code; rec.child = null; });
-  rec.child.on('error', (e) => { rec.exit = -1; rec.log += `\n[spawn error] ${e.message}`; rec.child = null; });
+  if (!spawnSupervisor(rec)) { SERVERS.delete(key); return { ok: false, error: 'could not start supervisor' }; }
   return { ok: true, name, port };
 }
 
-function stopServer(pid, name) {
-  const rec = SERVERS.get(serverKey(pid, name));
+async function stopServer(pid, name) {
+  const key = serverKey(pid, name);
+  const rec = SERVERS.get(key);
   if (!rec) return { ok: false, error: 'server not found' };
-  const kill = (sig) => { try { if (rec.child) process.kill(-rec.child.pid, sig); } catch { /* gone */ } };
-  kill('SIGTERM');
-  setTimeout(() => kill('SIGKILL'), 3000);
+  try { await supCall(rec, '/stop', 'POST'); } catch { /* already gone */ }
+  // Belt-and-braces: reap anything the manifest remembers.
+  try { if (rec.childPid) process.kill(-rec.childPid, 'SIGKILL'); } catch { /* gone */ }
+  try { if (rec.supervisorPid) process.kill(rec.supervisorPid, 'SIGKILL'); } catch { /* gone */ }
+  SERVERS.delete(key);
+  removeManifest(pid, name);
   return { ok: true, name };
 }
 
-function serverInfo(rec) {
-  return { name: rec.name, port: rec.port, running: !!rec.child && rec.exit === null, startedAt: rec.startedAt, exit: rec.exit };
+async function serverInfo(rec) {
+  const out = { name: rec.name, port: rec.port, startedAt: rec.startedAt, running: false };
+  try {
+    const s = await supCall(rec, '/status');
+    Object.assign(out, {
+      running: !!s.running, exits: s.exits || 0, restarts: s.restarts || 0,
+      lastExit: s.lastExit ?? null, backoffMs: s.backoffMs || 0, childPid: s.childPid || null,
+    });
+  } catch { /* supervisor unreachable → reported as not running */ }
+  return out;
 }
 
-function listServers(pid) {
+async function listServers(pid) {
   const out = [];
-  for (const rec of SERVERS.values()) if (rec.pid === String(pid)) out.push(serverInfo(rec));
+  for (const rec of SERVERS.values()) if (rec.pid === String(pid)) out.push(await serverInfo(rec));
   return out;
+}
+
+// On startup, re-attach to supervisors that outlived us (detached), and revive
+// any whose supervisor died while the daemon was down.
+async function adoptServers() {
+  for (const m of readManifests()) {
+    if (!m || typeof m.cmd !== 'string' || !m.pid || !m.name) continue;
+    const key = serverKey(m.pid, m.name);
+    if (SERVERS.has(key)) continue;
+    if (Number.isInteger(m.port)) USED_PORTS.add(m.port);
+    if (Number.isInteger(m.ctrl)) USED_CTRL.add(m.ctrl);
+    const rec = {
+      pid: String(m.pid), name: String(m.name), port: m.port, ctrl: m.ctrl, cmd: m.cmd,
+      cwd: m.cwd || workspace(m.pid), startedAt: m.startedAt || Date.now(),
+      childPid: m.childPid, supervisorPid: m.supervisorPid,
+    };
+    let alive = false;
+    try { const s = await supCall(rec, '/status'); alive = !!s.ok; } catch { alive = false; }
+    SERVERS.set(key, rec);
+    if (alive) {
+      console.log(`terminald: adopted server ${rec.name} (${rec.pid}) on :${rec.port}`);
+    } else {
+      try { if (rec.childPid) process.kill(-rec.childPid, 'SIGKILL'); } catch { /* gone */ }
+      spawnSupervisor(rec);
+      console.log(`terminald: revived server ${rec.name} (${rec.pid}) on :${rec.port}`);
+    }
+  }
 }
 
 // Resolve `/srv/<pid>/<name>/<rest>` to a running server record.
@@ -236,7 +325,7 @@ function matchServer(pathname) {
   const m = pathname.match(/^\/srv\/([^/]+)\/([^/]+)(\/.*)?$/);
   if (!m) return null;
   const rec = SERVERS.get(serverKey(m[1], m[2]));
-  if (!rec || !rec.child || rec.exit !== null) return null;
+  if (!rec) return null;
   return { rec, rest: (m[3] || '/') };
 }
 
@@ -349,14 +438,14 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/serve') {
     if ((url.searchParams.get('token') || '') !== TOKEN) return json(res, 401, { error: 'bad token' });
-    return json(res, 200, { ok: true, servers: listServers(url.searchParams.get('pid') || 'default') });
+    return json(res, 200, { ok: true, servers: await listServers(url.searchParams.get('pid') || 'default') });
   }
 
   if (req.method === 'POST' && url.pathname === '/serve/stop') {
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'bad json' }); }
     if (body.token !== TOKEN) return json(res, 401, { error: 'bad token' });
-    const r = stopServer(body.pid, String(body.name || '').toLowerCase());
+    const r = await stopServer(body.pid, String(body.name || '').toLowerCase());
     return json(res, r.ok ? 200 : 404, r);
   }
 
@@ -364,7 +453,13 @@ const server = http.createServer(async (req, res) => {
     if ((url.searchParams.get('token') || '') !== TOKEN) return json(res, 401, { error: 'bad token' });
     const rec = SERVERS.get(serverKey(url.searchParams.get('pid') || 'default', url.searchParams.get('name') || ''));
     if (!rec) return json(res, 404, { error: 'server not found' });
-    return json(res, 200, { ok: true, name: rec.name, running: !!rec.child && rec.exit === null, exit: rec.exit, log: rec.log });
+    try {
+      const s = await supCall(rec, '/logs');
+      const st = await supCall(rec, '/status').catch(() => ({}));
+      return json(res, 200, { ok: true, name: rec.name, running: !!st.running, exit: st.lastExit ?? null, log: s.log || '' });
+    } catch {
+      return json(res, 200, { ok: true, name: rec.name, running: false, exit: null, log: '' });
+    }
   }
 
   // ---- HTTP reverse proxy to a running dedicated server ------------------
@@ -400,6 +495,10 @@ server.on('upgrade', (req, socket, head) => {
   socket.on('error', () => { try { upstream.destroy(); } catch { /* gone */ } });
   socket.on('close', () => { try { upstream.destroy(); } catch { /* gone */ } });
 });
+
+// Re-adopt dedicated servers whose supervisors outlived this daemon before we
+// start accepting traffic, so /srv/... works immediately after a restart.
+await adoptServers();
 
 server.listen(PORT, () => {
   console.log(`terminald on :${PORT}, sandbox=${SANDBOX}`);
