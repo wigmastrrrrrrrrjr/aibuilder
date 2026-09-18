@@ -68,10 +68,10 @@ export const FREE_DAILY_CREDITS = 30;
 // Standard (default, level 2) is free as before. Deep/Deepest charge a
 // multiplier of the base model cost from the user's daily grant + earnings.
 export const EFFORT = {
-  1: { label: 'Fast',      creditMult: 0, tokens: 2048,  think: false, ctx: 8000 },
-  2: { label: 'Standard',  creditMult: 0, tokens: 8192,  think: false, ctx: 16000 },
-  3: { label: 'Deep',      creditMult: 2, tokens: 32768, think: true,  ctx: 64000 },
-  4: { label: 'Deepest',   creditMult: 4, tokens: 65536, think: true,  ctx: 128000 },
+  1: { label: 'Fast',      creditMult: 0, tokens: 4096,  think: false, ctx: 12000 },
+  2: { label: 'Standard',  creditMult: 0, tokens: 16384, think: false, ctx: 32000 },
+  3: { label: 'Deep',      creditMult: 2, tokens: 49152, think: true,  ctx: 96000 },
+  4: { label: 'Deepest',   creditMult: 4, tokens: 98304, think: true,  ctx: 128000 },
 };
 export const DEFAULT_EFFORT = 2;
 export function effortLevel(v) {

@@ -64,7 +64,7 @@ Rules:
 - If a change spans multiple related parts, use a separate call for each file.
 - On follow-up requests, touch ONLY the files that need to change.
 - If your recorded history ends with a DIAGNOSTICS note, treat it as authoritative: fix every listed error first, then everything else. A failed edit means your SEARCH text did not match — re-apply it from the actual current file contents shown in "Current state of the workspace".
-- Long generations may be cut off by the platform's streaming limit. If a PLATFORM NOTE says you were cut off, do NOT repeat finished work — continue exactly from the last step and finish only what remained incomplete. Plan before you start and write big files first so the core app survives a cutoff.`;
+- Long generations may be cut off by the platform's streaming limit. When that happens the system automatically restarts you with a PLATFORM NOTE — do NOT repeat finished work, continue exactly from the last step, and finish only what remained incomplete. Keep building until every file the user asked for actually exists; if an interrupted write left a file half-edited, read its real current state with read_file before finishing it. Plan before you start and write big files first so the core app survives a cutoff.`;
 }
 
 export function systemPrompt() {

@@ -351,10 +351,13 @@ export async function runChat(ctx) {
       };
 
       // One "round" = one model generation plus its post-build checks. If the
-      // build still has failing operations the session keeps going and the AI
-      // is asked to fix everything IN PLACE. History is cached in memory once
+      // build still has failing operations OR the AI is cut off mid-build by a
+      // token/stream limit, the session keeps going and the AI is restarted to
+      // continue EXACTLY where it stopped. History is cached in memory once
       // (not re-fetched from D1 each round) and appended to as rounds record.
-      const MAX_REPAIR_ROUNDS = 3;
+      // MAX_ROUNDS is a soft cap on total rounds per request (env-tunable); the
+      // build only fully stops when a round finishes cleanly or the cap is hit.
+      const MAX_ROUNDS = Math.max(1, Number(getVar('MAX_BUILD_ROUNDS') || 12) || 12);
       const histRef = await store.history(pid).then(ms => ms.map(m => ({ role: m.role, content: m.content })));
       const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + fileCtx }, ...histRef];
       const repairPrompt = () => {
@@ -367,9 +370,11 @@ export async function runChat(ctx) {
 
       let attempt = 0;
       let wantRepair = true;
-      while (wantRepair && attempt < MAX_REPAIR_ROUNDS && !signal.aborted) {
+      let wasCut = false;
+      while (wantRepair && attempt < MAX_ROUNDS && !signal.aborted) {
         attempt++;
         wantRepair = false;
+        wasCut = false;
         const diagAtStart = diag.length;
         subAgentTasks.length = 0;
         cmdLog.length = 0;
@@ -392,6 +397,7 @@ export async function runChat(ctx) {
           const dec = new TextDecoder();
           let lineBuf = '';
           let raw = '';
+          let finish = '';
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -408,11 +414,15 @@ export async function runChat(ctx) {
               } catch { continue; }
               let tok = '';
               if (provider === 'mistral' || provider === 'openrouter') {
+                const fr = j?.choices?.[0]?.finish_reason;
+                if (fr) finish = fr;
                 tok = j?.choices?.[0]?.delta?.content ?? '';
               } else {
                 // ollama cloud + local ollama both use message.content
                 const msg = j?.message ?? {};
                 if (msg.thinking) send({ type: 'think', v: msg.thinking });
+                if (j.done_reason) finish = j.done_reason;
+                else if (j.done === true && !finish) finish = 'stop';
                 tok = msg.content ?? '';
               }
               if (!tok) continue;
@@ -456,7 +466,20 @@ export async function runChat(ctx) {
           // Record the round WITH every new error so it reaches the AI before
           // the stream stops.
           if (diag.length > diagAtStart) wantRepair = true;
-          if (wantRepair) send({ type: 'note', message: 'The build still has errors — continuing in this session so the AI can fix them right now.' });
+          if (!wantRepair && raw.trim()) {
+            // The AI was cut off mid-build (token-limit/done_reason, or the
+            // upstream died mid-tool-call without a finish signal). Instead of
+            // stopping the build, restart it exactly where it stopped.
+            const opens = (raw.match(/>>>tool/gi) || []).length;
+            const closes = (raw.match(/^<<<$/gm) || []).length;
+            if ((finish && finish !== 'stop') || opens > closes) {
+              wasCut = true;
+              wantRepair = true;
+            }
+          }
+          if (wantRepair) send({ type: 'note', message: wasCut
+            ? 'Output limit reached — continuing so the AI can finish the build; it resumes exactly where it stopped.'
+            : 'The build still has errors — continuing in this session so the AI can fix them right now.' });
           const roundDiag = diag.slice(diagAtStart);
           if (raw.trim()) {
             let recorded = raw;
@@ -465,7 +488,10 @@ export async function runChat(ctx) {
               notes.push('DIAGNOSTICS — these operations FAILED just now, so the app may be incomplete or broken. Fix them in your very next step using the exact errors above:\n' +
                 roundDiag.map((x) => ' - ' + x).join('\n'));
             }
-            if (wantRepair) {
+            if (wasCut) {
+              notes.push('PLATFORM NOTE — you hit the output limit and were cut off mid-build. This message is frozen as-is. Do NOT repeat or restate anything already done — continue EXACTLY from the interruption and keep going until every file you planned is actually created.');
+            }
+            if (wantRepair && !wasCut) {
               notes.push('REPAIR REQUIRED — the operations above still fail. Your next turn starts from this exact message and must fix every error listed here.');
             }
             if (notes.length) recorded += '\n\n' + notes.join('\n\n');
@@ -474,7 +500,9 @@ export async function runChat(ctx) {
             try { histRef.push({ role: 'assistant', content: recorded }); } catch {}
           }
           if (wantRepair) {
-            const prompt = repairPrompt();
+            const prompt = wasCut
+              ? 'PLATFORM NOTE — your previous output was cut off by the token limit before you finished. Do NOT recap, restate, apologise or repeat work already done. Resume EXACTLY where you stopped: finish the exact file/operation that was interrupted (read its real current state with read_file first if unsure), then continue the remaining steps until the whole build is complete.'
+              : repairPrompt();
             await store.addMessage(pid, 'user', prompt);
             try { histRef.push({ role: 'user', content: prompt }); } catch {}
           }
@@ -827,7 +855,7 @@ async function workspaceChat(c, body, message, user) {
 
       // Repair rounds: if the build is still failing, keep the session alive
       // and have the AI fix every logged error before we stop.
-      const MAX_REPAIR_ROUNDS = 3;
+      const MAX_ROUNDS = Math.max(1, Number(getVar('MAX_BUILD_ROUNDS') || 12) || 12);
       const buildWsMessages = (transcript, userContent) => [
         { role: 'system', content: workspaceSystemPrompt() + buildWorkspaceContext(cleaned) },
         ...transcript,
@@ -843,17 +871,20 @@ async function workspaceChat(c, body, message, user) {
 
       let attempt = 0;
       let wantRepair = true;
+      let wasCut = false;
       const termPid = String(body.pid || 'default').slice(0, 40);
       const transcript = history.slice(); // live transcript fed to the model each round
-      while (wantRepair && attempt < MAX_REPAIR_ROUNDS && !ac.signal.aborted) {
+      while (wantRepair && attempt < MAX_ROUNDS && !ac.signal.aborted) {
         attempt++;
         wantRepair = false;
+        wasCut = false;
         cmdLog.length = 0;
         let termSnap = null;
         termSnap = await mirrorToTerminal(termPid, cleaned.map((f) => ({ path: f.path, content: f.content })));
         const diagAtStart = diag.length;
         const parser = new FileStreamer();
         let raw = '';
+        let finish = '';
         let upstream;
         let providerUsed = null;
         try {
@@ -884,10 +915,14 @@ async function workspaceChat(c, body, message, user) {
               } catch { continue; }
               let tok = '';
               if (provider === 'mistral' || provider === 'openrouter') {
+                const fr = j?.choices?.[0]?.finish_reason;
+                if (fr) finish = fr;
                 tok = j?.choices?.[0]?.delta?.content ?? '';
               } else {
                 const msg = j?.message ?? {};
                 if (msg.thinking) send({ type: 'think', v: msg.thinking });
+                if (j.done_reason) finish = j.done_reason;
+                else if (j.done === true && !finish) finish = 'stop';
                 tok = msg.content ?? '';
               }
               if (!tok) continue;
@@ -927,18 +962,33 @@ async function workspaceChat(c, body, message, user) {
             }
           }
           if (diag.length > diagAtStart) wantRepair = true;
-          if (wantRepair) send({ type: 'note', message: 'The build still has errors — continuing in this session so the AI can fix them right now.' });
+          if (!wantRepair && raw.trim()) {
+            // Token-limit (or mid-tool-call) cutoff: restart the build right
+            // where it stopped instead of ending it.
+            const opens = (raw.match(/>>>tool/gi) || []).length;
+            const closes = (raw.match(/^<<<$/gm) || []).length;
+            if ((finish && finish !== 'stop') || opens > closes) {
+              wasCut = true;
+              wantRepair = true;
+            }
+          }
+          if (wantRepair) send({ type: 'note', message: wasCut
+            ? 'Output limit reached — continuing so the AI can finish the build; it resumes exactly where it stopped.'
+            : 'The build still has errors — continuing in this session so the AI can fix them right now.' });
           if (raw.trim()) {
             let recorded = raw;
             const notes = [];
             const roundDiag = diag.slice(diagAtStart);
             if (roundDiag.length) notes.push('DIAGNOSTICS — these operations FAILED just now:\n' + roundDiag.map((x) => ' - ' + x).join('\n'));
-            if (wantRepair) notes.push('REPAIR REQUIRED — the operations above still fail. Fix every error listed here.');
+            if (wasCut) notes.push('PLATFORM NOTE — you hit the output limit and were cut off mid-build. This message is frozen as-is. Do NOT repeat or restate anything already done — continue EXACTLY from the interruption and keep going until every file you planned is actually created.');
+            if (wantRepair && !wasCut) notes.push('REPAIR REQUIRED — the operations above still fail. Fix every error listed here.');
             if (notes.length) recorded += '\n\n' + notes.join('\n\n');
             if (cmdLog.length) recorded += '\n\nTERMINAL & FILE OPS — output of the commands, reads and searches you just ran:\n' + cmdLog.map(cmdTranscript).join('\n\n');
             transcript.push({ role: 'assistant', content: recorded });
           }
-          if (wantRepair) transcript.push({ role: 'user', content: wsRepairPrompt() });
+          if (wantRepair) transcript.push({ role: 'user', content: wasCut
+            ? 'PLATFORM NOTE — your previous output was cut off by the token limit before you finished. Do NOT recap, restate, apologise or repeat work already done. Resume EXACTLY where you stopped: finish the exact file/operation that was interrupted (read its real current state first if unsure), then continue the remaining steps until the whole build is complete.'
+            : wsRepairPrompt() });
         } catch (e) {
           if (!ac.signal.aborted) send({ type: 'error', message: String(e.message || e) });
           wantRepair = false;
