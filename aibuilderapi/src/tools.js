@@ -29,6 +29,37 @@ export function cleanPath(p) {
 
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// A file row is "text" unless it was stored as binary (utf8 is the default).
+const isTextFile = (f) => !(f.encoding && f.encoding !== 'utf8');
+
+// Collect every project file as { path, content, encoding } from any store (D1,
+// the daemon RPC proxy, or the in-memory workspace store). Prefers
+// listFilesWithContent (one round trip) and falls back to listFiles + getFile.
+const MAX_READ_FILES = 300;
+async function projectFiles(st, pid) {
+  let files = [];
+  try {
+    if (typeof st.listFilesWithContent === 'function') {
+      const fw = await st.listFilesWithContent(pid);
+      if (Array.isArray(fw)) files = fw;
+    }
+  } catch { files = []; }
+  if (!files.length) {
+    try {
+      const names = await st.listFiles(pid);
+      for (const f of (Array.isArray(names) ? names : []).slice(0, MAX_READ_FILES)) {
+        const p = typeof f === 'string' ? f : (f && f.path);
+        if (!p) continue;
+        try {
+          const r = await st.getFile(pid, p);
+          if (r && typeof r.content === 'string') files.push(r);
+        } catch { /* skip unreadable file */ }
+      }
+    } catch { files = []; }
+  }
+  return (Array.isArray(files) ? files : []).slice(0, MAX_READ_FILES);
+}
+
 // Accept either `edits: [{search, replace}]` or a single `search`/`replace`.
 function normalizeEdits(a) {
   if (Array.isArray(a.edits)) {
@@ -235,6 +266,123 @@ define({
     const event = { type: 'edit', path };
     if (ctx.emitContent) event.content = res.content;
     return { ok: true, path, content: res.content, freezeFiles, event, stat: { list: 'edited', value: path }, op: true };
+  },
+});
+
+define({
+  name: 'read_file',
+  description: 'Read a project file and see its contents (optionally a 1-based {from}/{to} line range for paging big files). Use BEFORE editing a large or unfamiliar file — cheaper than run_command cat and needs no terminal. Reads from app storage.',
+  arguments: {
+    path: { type: 'string', required: true, desc: 'project-relative path' },
+    from: { type: 'number', desc: '1-based first line to read (default 1)' },
+    to: { type: 'number', desc: '1-based last line to read (default end of file)' },
+  },
+  async run(ctx, a) {
+    const path = cleanPath(a.path);
+    const osPath = String(a.path || '');
+    if (!path) return { ok: false, error: 'invalid path', command: 'read ' + osPath };
+    const row = await ctx.store.getFile(ctx.pid, path);
+    if (!row) return { ok: false, error: `file not found: ${path}`, command: 'read ' + path };
+    if (!isTextFile(row)) return { ok: false, error: `binary file: ${path} — rebuild it with create_asset instead`, command: 'read ' + path };
+    const full = String(row.content ?? '');
+    const totalLines = full.length ? full.split('\n').length : 0;
+    const from = Number.isFinite(a.from) ? Math.max(1, Math.floor(a.from)) : 1;
+    const to = Number.isFinite(a.to) ? Math.max(from, Math.floor(a.to)) : totalLines;
+    let content = full;
+    const gotRange = from > 1 || to < totalLines;
+    if (gotRange) {
+      content = full.split('\n').slice(from - 1, to).join('\n');
+    }
+    const TRUNCATE = 20000;
+    let truncated = false;
+    if (content.length > TRUNCATE) {
+      content = content.slice(0, TRUNCATE) + `\n…(truncated at ${TRUNCATE} chars — pass a narrower from/to range)`;
+      truncated = true;
+    }
+    const event = { type: 'read', path, lines: totalLines, from, to };
+    if (ctx.emitContent) event.content = content;
+    const note = gotRange ? ` [lines ${from}-${Math.min(to, totalLines)} of ${totalLines}]` : '';
+    return { ok: true, path, content, bytes: full.length, lines: totalLines, truncated, command: 'read ' + path, output: `${note}\n${content}`.trimStart(), event, noWarn: true };
+  },
+});
+
+define({
+  name: 'search_files',
+  description: 'Search every project file for a term and get matching lines with file paths and line numbers (like grep, no terminal needed). query is plain text, or a regex when wrapped in slashes — e.g. "/\\btodo\\b/i". Use it to find where a name is defined or used before editing or rewriting.',
+  arguments: {
+    query: { type: 'string', required: true, desc: 'term, or /regex/flags' },
+    path: { type: 'string', desc: 'limit the search to this file or folder prefix, e.g. "js" or "js/app.js"' },
+    caseInsensitive: { type: 'boolean', desc: 'match ignoring case (regex /i flag also works)' },
+    maxResults: { type: 'number', desc: 'cap the number of matches (default 100)' },
+  },
+  async run(ctx, a) {
+    const query = String(a.query || '');
+    const cmd = 'search ' + query;
+    if (!query.trim()) return { ok: false, error: 'query required', command: cmd };
+    const m = query.match(/^\/(.*)\/([a-z]*)$/s);
+    let re = null;
+    let literal = query;
+    if (m) {
+      try { re = new RegExp(m[1], m[2].replace(/g/g, '')); literal = null; }
+      catch (e) { return { ok: false, error: `invalid regex: ${e.message}`, command: cmd }; }
+    }
+    const ci = a.caseInsensitive === true;
+    const max = Math.max(1, Math.min(500, Number.isFinite(a.maxResults) ? Math.floor(a.maxResults) : 100));
+    const prefix = cleanPath(a.path);
+    const files = await projectFiles(ctx.store, ctx.pid);
+    const results = [];
+    let searched = 0;
+    let totalMatches = 0;
+    for (const f of files) {
+      if (prefix && f.path !== prefix && !f.path.startsWith(prefix + '/')) continue;
+      if (!isTextFile(f)) continue;
+      const text = String(f.content ?? '');
+      if (!text.length) continue;
+      searched++;
+      const lines = text.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const L = lines[i];
+        let hit;
+        if (re) { re.lastIndex = 0; hit = re.test(L); }
+        else if (ci) hit = L.toLowerCase().includes(query.toLowerCase());
+        else hit = L.includes(query);
+        if (!hit) continue;
+        totalMatches++;
+        if (results.length < max) results.push({ file: f.path, line: i + 1, text: L.slice(0, 200) });
+      }
+    }
+    const capped = totalMatches > results.length;
+    const filesHit = [...new Set(results.map((r) => r.file))];
+    const output = results.length
+      ? results.map((r) => `${r.file}:${r.line}: ${r.text}`).join('\n') + (capped ? `\n…(${totalMatches - results.length} more matches hidden — pass a higher maxResults)` : '')
+      : (searched ? `no matches for ${query} in ${searched} file${searched === 1 ? '' : 's'}` : 'no files to search');
+    return {
+      ok: true, query, count: totalMatches, files: filesHit, searched, capped,
+      command: cmd, output, noWarn: true,
+      event: { type: 'search', query: query.slice(0, 120), count: totalMatches, files: filesHit, capped },
+    };
+  },
+});
+
+define({
+  name: 'list_files',
+  description: 'List every file in the project with its size, optionally narrowed to a folder prefix.',
+  arguments: { path: { type: 'string', desc: 'folder prefix to list, e.g. "js" or "img"' } },
+  async run(ctx, a) {
+    const prefix = cleanPath(a.path);
+    const files = await projectFiles(ctx.store, ctx.pid);
+    const rows = files
+      .filter((f) => !prefix || f.path === prefix || f.path.startsWith(prefix + '/'))
+      .map((f) => ({ path: f.path, bytes: String(f.content ?? '').length }))
+      .sort((x, y) => x.path.localeCompare(y.path));
+    const output = rows.length
+      ? rows.map((r) => `${r.path} (${r.bytes} ${r.bytes === 1 ? 'byte' : 'bytes'})`).join('\n')
+      : (prefix ? `no files under ${prefix}` : 'project is empty');
+    return {
+      ok: true, files: rows, count: rows.length,
+      command: 'list_files' + (prefix ? ' ' + prefix : ''), output, noWarn: true,
+      event: { type: 'listfiles', count: rows.length, files: rows.map((r) => r.path) },
+    };
   },
 });
 
@@ -475,6 +623,10 @@ const TOOL_ALIASES = {
   'creat.dedicated.server': 'create_dedicated_server',
   'creat.dedicated_server': 'create_dedicated_server',
   'dedicated_server': 'create_dedicated_server',
+  'search': 'search_files',
+  'grep': 'search_files',
+  'term_search': 'search_files',
+  'read': 'read_file',
 };
 
 // Validate, execute and normalize a tool call into a structured result.

@@ -1575,6 +1575,19 @@ async function send() {
           if (aiMsg) aiMsg.card(ev.ok ? 'server' : 'server fail', actCards.term(srvCmd + (ev.ok ? `  →  :${ev.port}` : '')));
           activityText.textContent = ev.ok ? `Dedicated server :${ev.port}` : 'Dedicated server failed';
           termLog(ev.ok ? `dedicated ${ev.name} on :${ev.port}` : `dedicated ${ev.name} failed: ${ev.error || ''}`, ev.ok ? 's' : 'e');
+        } else if (ev.type === 'read') {
+          const cnt = ev.lines != null ? ` (${ev.lines} line${ev.lines === 1 ? '' : 's'})` : '';
+          activityText.textContent = `Read ${ev.path}`;
+          termLog('read ' + ev.path + cnt, 's');
+        } else if (ev.type === 'search') {
+          const n = ev.count || 0;
+          activityText.textContent = `Search: ${n} match${n === 1 ? '' : 'es'}`;
+          const q = String(ev.query || '').slice(0, 60);
+          termLog(`search "${q}" → ${n} match${n === 1 ? '' : 'es'}${ev.capped ? ' (capped)' : ''}`, 's');
+        } else if (ev.type === 'listfiles') {
+          const n = ev.count || 0;
+          activityText.textContent = `Listed ${n} file${n === 1 ? '' : 's'}`;
+          termLog(`listed ${n} file${n === 1 ? '' : 's'}`, 's');
         } else if (ev.type === 'plan') {
           renderPlan(ev.items || []);
           if (aiMsg) aiMsg.card('', actCards.plan());
