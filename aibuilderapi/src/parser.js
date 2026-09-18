@@ -301,10 +301,13 @@ export class FileStreamer {
     if (!ev && hintName && obj && typeof obj === 'object' && !Array.isArray(obj)) {
       ev = { type: 'tool', name: hintName, arguments: obj };
     }
-    if (!ev) ev = { type: 'tool', name: hintName || '', arguments: {} };
-    else if (!ev.name && hintName) ev.name = hintName;
-    if (!ev.name) {
-      events.push({ type: 'text', v: TOOL_OPEN + '\n' + json + '\n' + TAG_OPEN });
+    if (ev && !ev.name && hintName) ev.name = hintName;
+    // A block that can't be decoded into a named tool call used to be silently
+    // demoted to prose: the round then "succeeded" but the requested file never
+    // got created and the model never noticed. Fail LOUDLY with a sentinel tool
+    // instead, so the caller records a diagnostic and forces a retry.
+    if (!ev || !ev.name) {
+      events.push({ type: 'tool', name: '_parse_error', arguments: { raw: String(json).slice(0, 2000) } });
       return;
     }
     this._emit(ev, events);

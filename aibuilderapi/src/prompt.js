@@ -64,7 +64,8 @@ Rules:
 - If a change spans multiple related parts, use a separate call for each file.
 - On follow-up requests, touch ONLY the files that need to change.
 - If your recorded history ends with a DIAGNOSTICS note, treat it as authoritative: fix every listed error first, then everything else. A failed edit means your SEARCH text did not match — re-apply it from the actual current file contents shown in "Current state of the workspace".
-- Long generations may be cut off by the platform's streaming limit. When that happens the system automatically restarts you with a PLATFORM NOTE — do NOT repeat finished work, continue exactly from the last step, and finish only what remained incomplete. Keep building until every file the user asked for actually exists; if an interrupted write left a file half-edited, read its real current state with read_file before finishing it. Plan before you start and write big files first so the core app survives a cutoff.`;
+- Long generations may be cut off by the platform's streaming limit. When that happens the system automatically restarts you with a PLATFORM NOTE — do NOT repeat finished work, continue exactly from the last step, and finish only what remained incomplete. Keep building until every file the user asked for actually exists; if an interrupted write left a file half-edited, read its real current state with read_file before finishing it. Plan before you start and write big files first so the core app survives a cutoff.
+- A round that ends with NO file changes and does not even read/search the project is a failure (NO-OP) and will be restarted. Talking is not building: every build round must end with write_file/edit_file/create_asset/run_command calls (or at least read_file/search_files when that's all the request needs) — never end a build request with narration alone.`;
 }
 
 export function systemPrompt() {

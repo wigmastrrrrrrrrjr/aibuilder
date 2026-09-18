@@ -213,6 +213,8 @@ export async function runChat(ctx) {
       const cmdLog = [];        // run_command results — fed back to the model next turn
       const subAgentTasks = []; // reused each round — cleared at round start
       let ops = 0;
+      let inspected = 0;       // read/search/list ops this request (no-op guard)
+      let noOpStrikes = 0;     // bounded extra attempts when a round does nothing
       let refactorSent = false;
       const maybeRefactor = () => {
         if (!refactorSent && (deleted.length >= 2 || edited.length >= 3 || ops >= 6)) {
@@ -244,6 +246,11 @@ export async function runChat(ctx) {
           quarantine: (files) => quarantineSync(files, send),
           spawnSubAgent: (path, task) => { subAgentTasks.push(spawnSubAgent(path, task)); },
         });
+        if (name === '_parse_error') {
+          send({ type: 'warn', message: 'tool call could not be parsed — the model will retry it' });
+          diag.push(`TOOL CALL REJECTED — the model emitted a >>>tool block the parser could not decode into a valid tool call (missing/invalid JSON, or no tool name). Do NOT narrate a description of the file — re-emit the exact call as valid JSON, e.g. {"name":"write_file","arguments":{"path":"...","content":"..."}} and nothing else. Raw fragment: ${String(args.raw || '').slice(0, 200)}`);
+          return false;
+        }
         const s = res.stat;
         if (s) {
           if (s.list === 'written') written.push(s.value);
@@ -256,6 +263,7 @@ export async function runChat(ctx) {
         if (res.op) { ops += res.ops || 1; maybeRefactor(); }
         if (res.event) send(res.event);
         if ((name === 'run_command' || name === 'create_dedicated_server' || name === 'read_file' || name === 'search_files' || name === 'list_files') && typeof res.command === 'string') cmdLog.push(res);
+        if (res.ok && (name === 'read_file' || name === 'search_files' || name === 'list_files')) inspected++;
         if (res.ok) return true;
         if (res.skipped) {
           if (!res.noWarn) send({ type: 'warn', message: res.error });
@@ -371,11 +379,15 @@ export async function runChat(ctx) {
       let attempt = 0;
       let wantRepair = true;
       let wasCut = false;
+      let noOp = false;
       while (wantRepair && attempt < MAX_ROUNDS && !signal.aborted) {
         attempt++;
         wantRepair = false;
         wasCut = false;
+        noOp = false;
         const diagAtStart = diag.length;
+        const opsAtStart = ops;
+        const inspectedAtStart = inspected;
         subAgentTasks.length = 0;
         cmdLog.length = 0;
         let termSnap = null;
@@ -477,9 +489,20 @@ export async function runChat(ctx) {
               wantRepair = true;
             }
           }
-          if (wantRepair) send({ type: 'note', message: wasCut
-            ? 'Output limit reached — continuing so the AI can finish the build; it resumes exactly where it stopped.'
-            : 'The build still has errors — continuing in this session so the AI can fix them right now.' });
+          // Silent build failure: the round changed NO file and inspected
+          // NOTHING (no read/search/list). The user asked for work; the AI only
+          // talked. That used to finish a "clean" build with no files created.
+          // Kick it to actually act, bounded so pure questions can't loop.
+          if (!wantRepair && raw.trim() && (ops - opsAtStart) === 0 && (inspected - inspectedAtStart) === 0 && noOpStrikes < 2) {
+            noOpStrikes++;
+            noOp = true;
+            wantRepair = true;
+          }
+          if (wantRepair) send({ type: 'note', message: noOp
+            ? 'The AI produced no file changes and did not inspect the project — the build needs real work. Restarting it for another attempt.'
+            : wasCut
+              ? 'Output limit reached — continuing so the AI can finish the build; it resumes exactly where it stopped.'
+              : 'The build still has errors — continuing in this session so the AI can fix them right now.' });
           const roundDiag = diag.slice(diagAtStart);
           if (raw.trim()) {
             let recorded = raw;
@@ -491,7 +514,10 @@ export async function runChat(ctx) {
             if (wasCut) {
               notes.push('PLATFORM NOTE — you hit the output limit and were cut off mid-build. This message is frozen as-is. Do NOT repeat or restate anything already done — continue EXACTLY from the interruption and keep going until every file you planned is actually created.');
             }
-            if (wantRepair && !wasCut) {
+            if (noOp) {
+              notes.push('NO-OP DETECTED — this round created or changed ZERO files and did not even read/search the project. Talk is not building: if the user asked for work, you MUST emit write_file/edit_file/create_asset/run_command calls; if it was only a question, back it with read_file/search_files first.');
+            }
+            if (wantRepair && !wasCut && !noOp) {
               notes.push('REPAIR REQUIRED — the operations above still fail. Your next turn starts from this exact message and must fix every error listed here.');
             }
             if (notes.length) recorded += '\n\n' + notes.join('\n\n');
@@ -500,9 +526,11 @@ export async function runChat(ctx) {
             try { histRef.push({ role: 'assistant', content: recorded }); } catch {}
           }
           if (wantRepair) {
-            const prompt = wasCut
-              ? 'PLATFORM NOTE — your previous output was cut off by the token limit before you finished. Do NOT recap, restate, apologise or repeat work already done. Resume EXACTLY where you stopped: finish the exact file/operation that was interrupted (read its real current state with read_file first if unsure), then continue the remaining steps until the whole build is complete.'
-              : repairPrompt();
+            const prompt = noOp
+              ? 'NO-OP DETECTED — your previous round performed no file changes and did not inspect the project. If the user asked you to build or change something: actually do it NOW with write_file/edit_file/create_asset (or run_command) — create every requested file, no narration-only answers. If the user only asked a question, first inspect the real project with read_file/search_files/list_files and then answer. Do it now.'
+              : wasCut
+                ? 'PLATFORM NOTE — your previous output was cut off by the token limit before you finished. Do NOT recap, restate, apologise or repeat work already done. Resume EXACTLY where you stopped: finish the exact file/operation that was interrupted (read its real current state with read_file first if unsure), then continue the remaining steps until the whole build is complete.'
+                : repairPrompt();
             await store.addMessage(pid, 'user', prompt);
             try { histRef.push({ role: 'user', content: prompt }); } catch {}
           }
@@ -817,6 +845,8 @@ async function workspaceChat(c, body, message, user) {
       const diag = [];
       const cmdLog = [];        // run_command results — fed back to the model next turn
       let ops = 0;
+      let inspected = 0;       // read/search/list ops this request (no-op guard)
+      let noOpStrikes = 0;     // bounded extra attempts when a round does nothing
 
       const handleGen = async (call) => {
         if (!call || call.type !== 'tool') return true;
@@ -836,6 +866,11 @@ async function workspaceChat(c, body, message, user) {
           checkFreeze: false,
           cmdDiag: false,
         });
+        if (name === '_parse_error') {
+          send({ type: 'warn', message: 'tool call could not be parsed — the model will retry it' });
+          diag.push(`TOOL CALL REJECTED — the model emitted a >>>tool block the parser could not decode into a valid tool call (missing/invalid JSON, or no tool name). Do NOT narrate a description of the file — re-emit the exact call as valid JSON, e.g. {"name":"write_file","arguments":{"path":"...","content":"..."}} and nothing else. Raw fragment: ${String(args.raw || '').slice(0, 200)}`);
+          return false;
+        }
         if (res.stat) {
           const v = res.stat.value;
           if (res.stat.list === 'written') written.push(v);
@@ -846,6 +881,7 @@ async function workspaceChat(c, body, message, user) {
         if (res.op) ops++;
         if (res.event) send(res.event);
         if ((name === 'run_command' || name === 'create_dedicated_server' || name === 'read_file' || name === 'search_files' || name === 'list_files') && typeof res.command === 'string') cmdLog.push(res);
+        if (res.ok && (name === 'read_file' || name === 'search_files' || name === 'list_files')) inspected++;
         if (res.ok || res.skipped) return true;
         const err = String(res.error || 'unknown error');
         if (!res.noWarn) send({ type: 'warn', message: `${name}: ${err}` });
@@ -872,13 +908,17 @@ async function workspaceChat(c, body, message, user) {
       let attempt = 0;
       let wantRepair = true;
       let wasCut = false;
+      let noOp = false;
       const termPid = String(body.pid || 'default').slice(0, 40);
       const transcript = history.slice(); // live transcript fed to the model each round
       while (wantRepair && attempt < MAX_ROUNDS && !ac.signal.aborted) {
         attempt++;
         wantRepair = false;
         wasCut = false;
+        noOp = false;
         cmdLog.length = 0;
+        const opsAtStart = ops;
+        const inspectedAtStart = inspected;
         let termSnap = null;
         termSnap = await mirrorToTerminal(termPid, cleaned.map((f) => ({ path: f.path, content: f.content })));
         const diagAtStart = diag.length;
@@ -972,23 +1012,34 @@ async function workspaceChat(c, body, message, user) {
               wantRepair = true;
             }
           }
-          if (wantRepair) send({ type: 'note', message: wasCut
-            ? 'Output limit reached — continuing so the AI can finish the build; it resumes exactly where it stopped.'
-            : 'The build still has errors — continuing in this session so the AI can fix them right now.' });
+          // Silent build failure: changed NO file and inspected NOTHING.
+          if (!wantRepair && raw.trim() && (ops - opsAtStart) === 0 && (inspected - inspectedAtStart) === 0 && noOpStrikes < 2) {
+            noOpStrikes++;
+            noOp = true;
+            wantRepair = true;
+          }
+          if (wantRepair) send({ type: 'note', message: noOp
+            ? 'The AI produced no file changes and did not inspect the workspace — the build needs real work. Restarting it for another attempt.'
+            : wasCut
+              ? 'Output limit reached — continuing so the AI can finish the build; it resumes exactly where it stopped.'
+              : 'The build still has errors — continuing in this session so the AI can fix them right now.' });
           if (raw.trim()) {
             let recorded = raw;
             const notes = [];
             const roundDiag = diag.slice(diagAtStart);
             if (roundDiag.length) notes.push('DIAGNOSTICS — these operations FAILED just now:\n' + roundDiag.map((x) => ' - ' + x).join('\n'));
             if (wasCut) notes.push('PLATFORM NOTE — you hit the output limit and were cut off mid-build. This message is frozen as-is. Do NOT repeat or restate anything already done — continue EXACTLY from the interruption and keep going until every file you planned is actually created.');
-            if (wantRepair && !wasCut) notes.push('REPAIR REQUIRED — the operations above still fail. Fix every error listed here.');
+            if (noOp) notes.push('NO-OP DETECTED — this round created or changed ZERO files and did not even read/search the workspace. Talk is not building: if the user asked for work, emit write_file/edit_file/create_asset/run_command calls; if it was only a question, back it with read_file/search_files first.');
+            if (wantRepair && !wasCut && !noOp) notes.push('REPAIR REQUIRED — the operations above still fail. Fix every error listed here.');
             if (notes.length) recorded += '\n\n' + notes.join('\n\n');
             if (cmdLog.length) recorded += '\n\nTERMINAL & FILE OPS — output of the commands, reads and searches you just ran:\n' + cmdLog.map(cmdTranscript).join('\n\n');
             transcript.push({ role: 'assistant', content: recorded });
           }
-          if (wantRepair) transcript.push({ role: 'user', content: wasCut
-            ? 'PLATFORM NOTE — your previous output was cut off by the token limit before you finished. Do NOT recap, restate, apologise or repeat work already done. Resume EXACTLY where you stopped: finish the exact file/operation that was interrupted (read its real current state first if unsure), then continue the remaining steps until the whole build is complete.'
-            : wsRepairPrompt() });
+          if (wantRepair) transcript.push({ role: 'user', content: noOp
+            ? 'NO-OP DETECTED — your previous round performed no file changes and did not inspect the workspace. If the user asked you to build or change something: actually do it NOW with write_file/edit_file/create_asset (or run_command) — create every requested change, no narration-only answers. If the user only asked a question, first inspect the real workspace with read_file/search_files/list_files and then answer. Do it now.'
+            : wasCut
+              ? 'PLATFORM NOTE — your previous output was cut off by the token limit before you finished. Do NOT recap, restate, apologise or repeat work already done. Resume EXACTLY where you stopped: finish the exact file/operation that was interrupted (read its real current state first if unsure), then continue the remaining steps until the whole build is complete.'
+              : wsRepairPrompt() });
         } catch (e) {
           if (!ac.signal.aborted) send({ type: 'error', message: String(e.message || e) });
           wantRepair = false;
