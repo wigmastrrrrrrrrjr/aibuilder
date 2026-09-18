@@ -1365,6 +1365,13 @@ function hideBuildSplash(instant) {
 }
 
 /* ---------- chat streaming ---------- */
+// A stable id for one generation turn. Sent up-front so the client can re-attach
+// to the background run even if the very first response never arrives.
+function newRunId() {
+  try { return crypto.randomUUID().replace(/-/g, '').slice(0, 24); }
+  catch { return 'r' + Math.random().toString(36).slice(2) + Date.now().toString(36); }
+}
+
 async function send() {
   const message = promptBox.value.trim();
   if (!message || busy) return;
@@ -1393,6 +1400,8 @@ async function send() {
 
   let chipFiles = [];
   let doneReceived = false;
+  let lastSeq = -1;      // daemon replay cursor (events carry a monotonic seq)
+  let activeRun = null;  // set by the `run` event when the build can be resumed
   let previewTimer = null;
   // Live preview: per-event, but rate-capped so bursts of file changes collapse
   // into one reload per interval (with a guaranteed trailing refresh). `done`
@@ -1415,6 +1424,11 @@ async function send() {
     log.scrollTop = log.scrollHeight;
   };
 
+  // Remember the turn id before sending: if the tab dies mid-build the next load
+  // can re-attach. Cleared once the run reports done (or is not resumable).
+  const runId = newRunId();
+  try { localStorage.setItem('ab.run.last', runId); } catch {}
+
   try {
     const res = await fetch(`${API}/api/chat`, {
       method: 'POST',
@@ -1424,6 +1438,7 @@ async function send() {
         apiKey: ownKey() || undefined,
         sid: SID,
         effort,
+        runId,
       }),
     });
     if (!res.ok) {
@@ -1446,6 +1461,9 @@ async function send() {
       throw new Error(msg);
     }
 
+    // Read one SSE response and apply every event. Kept as a function so the
+    // reconnect path can feed later responses through the same handling.
+    const readStream = async (res) => {
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let lineBuf = '';
@@ -1459,7 +1477,11 @@ async function send() {
         if (!line.startsWith('data:')) continue;
         let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
 
-        if (ev.type === 'meta') {
+        if (typeof ev.seq === 'number' && ev.seq > lastSeq) lastSeq = ev.seq;
+        if (ev.type === 'run') {
+          if (ev.resumable && ev.runId) activeRun = ev.runId;
+          else { try { localStorage.removeItem('ab.run.last'); } catch {} }
+        } else if (ev.type === 'meta') {
           if (!projectId) {
             showBuildSplash();
             projectId = ev.projectId; canEdit = true;
@@ -1587,6 +1609,8 @@ async function send() {
           notify('Generation error', ev.message);
         } else if (ev.type === 'done') {
           doneReceived = true;
+          activeRun = null;
+          try { localStorage.removeItem('ab.run.last'); } catch {}
           hideBuildSplash();
           $('refactorBar').hidden = true;
           const bitsEnd = [];
@@ -1618,15 +1642,43 @@ async function send() {
         }
       }
     }
-    // Stream ended without a done event (server crashed / connection dropped)
-    if (!doneReceived) {
-      if (displayText.trim() && !aiMsg) addAiBubble((displayText + filter.drain()).trim());
-      if (aiMsg) {
-        aiMsg.setStatus('interrupted');
-        const rest = filter.drain();
-        if (rest.trim()) aiMsg.append(rest);
+    };
+
+    // First read of the turn. When the daemon owns the build it buffers every
+    // event, so a dropped connection can be resumed instead of losing the run.
+    await readStream(res);
+
+    if (!doneReceived && activeRun) {
+      termLog('stream interrupted — the build is still running on the server; reconnecting…', 'meta');
+      if (aiMsg) aiMsg.setStatus('still building in the background…');
+      notify('Still building', "The connection dropped, but your build is still running in the background — your project won't be lost. Reconnecting…");
+      let attempt = 0;
+      while (!doneReceived && activeRun && attempt < 60) {
+        attempt++;
+        await new Promise((r) => setTimeout(r, Math.min(1000 + attempt * 750, 6000)));
+        try {
+          const rr = await fetch(`${API}/api/chat/stream/${encodeURIComponent(activeRun)}?since=${lastSeq + 1}`, { headers: authHeaders() });
+          if (rr.status === 404) { termLog('the background run is no longer available to re-attach', 'meta'); break; }
+          if (!rr.ok) continue;
+          await readStream(rr);
+        } catch { /* keep retrying until the run reports done */ }
       }
-      if (displayText.trim()) notify('Stream interrupted', 'Connection ended before the model finished responding.');
+    }
+
+    // Stream ended for good without a done event (server crashed / connection dropped)
+    if (!doneReceived) {
+      if (activeRun) {
+        termLog('live re-attach paused — the build continues on the server; it will resume when this page reloads', 'meta');
+        notify('Still building in the background', 'We could not re-establish the live stream here, but the build is still running on the server and your project is safe. Reload to reconnect.');
+      } else {
+        if (displayText.trim() && !aiMsg) addAiBubble((displayText + filter.drain()).trim());
+        if (aiMsg) {
+          aiMsg.setStatus('interrupted');
+          const rest = filter.drain();
+          if (rest.trim()) aiMsg.append(rest);
+        }
+        if (displayText.trim()) notify('Stream interrupted', 'Connection ended before the model finished responding.');
+      }
     }
   } catch (e) {
     addAiBubble(`⚠ ${e.message}`);
@@ -2271,4 +2323,37 @@ termInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') termRun();
 $('termRun').onclick = termRun;
 
 window.__termLine = termLine; // SSE handler pushes generator CMD runs here
+
+// If the page was reloaded (or closed) while a background build was running,
+// quietly re-attach once it finishes so the preview and project list catch up.
+async function resumeStoredRun() {
+  let runId = null;
+  try { runId = localStorage.getItem('ab.run.last'); } catch {}
+  if (!runId) return;
+  try {
+    const r = await fetch(`${API}/api/chat/stream/${encodeURIComponent(runId)}?since=0`, { headers: authHeaders() });
+    if (!r.ok) { try { localStorage.removeItem('ab.run.last'); } catch {} return; }
+    notify('Build still running', 'A previous build is still running in the background — reconnecting. Your project is safe.');
+    const dec = new TextDecoder(); let buf = '';
+    const reader = r.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) !== -1) {
+        const line = buf.slice(0, i).trim(); buf = buf.slice(i + 2);
+        if (!line.startsWith('data:')) continue;
+        let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
+        if (ev.type === 'done') {
+          try { localStorage.removeItem('ab.run.last'); } catch {}
+          notify('Build finished', 'The background build completed — the preview and project are up to date.');
+          refreshPreview(true); loadProjects(); loadCredits();
+        }
+      }
+    }
+  } catch { /* leave the marker; a later load can try again */ }
+}
+
 refreshTermStatus();
+resumeStoredRun();

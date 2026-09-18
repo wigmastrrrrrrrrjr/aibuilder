@@ -111,39 +111,26 @@ async function chargeEffort(user, model, effort) {
   return null;
 }
 
-chat.post('/', async (c) => {
-  const user = await getUser(c);
-  if (!user) return c.json({ error: 'sign in required' }, 401);
-
-  const body = await c.req.json();
-  const message = body?.message;
-  if (!message || typeof message !== 'string') {
-    return c.json({ error: 'message required' }, 400);
-  }
-
-  if (body?.mode === 'workspace') {
-    return workspaceChat(c, body, message, user);
-  }
-
+// Shared pre-flight for one generation turn. The Worker route calls this for a
+// local run; the terminal daemon calls it for an offloaded run. It resolves the
+// API key, project, presence, model, credits and file context and records the
+// user message. Returns { error, status } to reject, or the run context.
+export async function prepareChat({ user, body, message, apiKey, sid, key: forcedKey, ownKey: forcedOwnKey }) {
   // BYOK: a user-supplied key (x-api-key header or body.apiKey) takes priority
   // over the built-in platform key. It is used for this request only.
+  const headerKey = typeof apiKey === 'string' ? apiKey : '';
+  const bodyKey = typeof body?.apiKey === 'string' ? body.apiKey : '';
   const isLocalModel = typeof body.model === 'string' && body.model.startsWith('local:');
-  const ownKey = Boolean(extractKey(
-    c.req.header('x-api-key'),
-    typeof body.apiKey === 'string' ? body.apiKey : '',
-  ));
-  const key = extractKey(
-    c.req.header('x-api-key'),
-    typeof body.apiKey === 'string' ? body.apiKey : '',
-  ) || builtinKey();
+  const ownKey = typeof forcedOwnKey === 'boolean' ? forcedOwnKey : Boolean(extractKey(headerKey, bodyKey));
+  const key = forcedKey || extractKey(headerKey, bodyKey) || builtinKey();
   if (!key && !isLocalModel) {
-    return c.json({ error: 'no API key — add one in the UI (🔑) or set OLLAMA_API_KEY/MISTRAL_API_KEY in .env' }, 500);
+    return { error: { error: 'no API key — add one in the UI (🔑) or set OLLAMA_API_KEY/MISTRAL_API_KEY in .env' }, status: 500 };
   }
   {
     const reqOR = typeof body.model === 'string'
       && (body.model.includes('/') || body.model === 'openrouter/free');
     if (reqOR && !openrouterKey()) {
-      return c.json({ error: 'no OPENROUTER_API_KEY configured — set it to use OpenRouter free models' }, 500);
+      return { error: { error: 'no OPENROUTER_API_KEY configured — set it to use OpenRouter free models' }, status: 500 };
     }
   }
 
@@ -152,7 +139,7 @@ chat.post('/', async (c) => {
   if (pid) {
     project = await store.getProject(pid);
     if (!project) pid = null;
-    else if (!(await canWrite(project, user))) return c.json({ error: "you don't own this project" }, 403);
+    else if (!(await canWrite(project, user))) return { error: { error: "you don't own this project" }, status: 403 };
   }
   if (!project) {
     // the owner names the project themselves — never name it after the prompt
@@ -162,14 +149,17 @@ chat.post('/', async (c) => {
   // Concurrency cap: at most 10 people live on one project at once. Presence is
   // keyed per client (sid = browser tab), so 10 tabs/people = the working set.
   {
-    const sid = String(body.sid || '').trim().slice(0, 64) || `cli:${crypto.randomUUID().slice(0, 12)}`;
+    const psid = String(sid || body.sid || '').trim().slice(0, 64) || `cli:${crypto.randomUUID().slice(0, 12)}`;
     try {
-      const pr = await store.touchPresence(project.id, sid, user.name, Date.now());
+      const pr = await store.touchPresence(pid, psid, user.name, Date.now());
       if (!pr.accepted) {
-        return c.json({
-          error: 'This project is at its 10-people live limit right now. Wait a moment for a spot, or open it read-only.',
-          presence: { active: pr.active, limit: 10 },
-        }, 429);
+        return {
+          error: {
+            error: 'This project is at its 10-people live limit right now. Wait a moment for a spot, or open it read-only.',
+            presence: { active: pr.active, limit: 10 },
+          },
+          status: 429,
+        };
       }
     } catch { /* presence is best-effort */ }
   }
@@ -178,8 +168,6 @@ chat.post('/', async (c) => {
   const requested = typeof body.model === 'string' && MODEL_RE.test(body.model) ? body.model : '';
   const model = requested || (project && MODEL_RE.test(project.model || '') ? project.model : '')
     || getVar('OLLAMA_MODEL') || 'gemma4:31b';
-  const isORModel = typeof model === 'string' && (model.includes('/') || model === 'openrouter/free');
-  const orKey = openrouterKey();
 
   // Chat is rate-limited only (3000 req/min per IP in app.js) — no per-request
   // credit cost. Credit balances are still tracked for the gift feature.
@@ -191,33 +179,29 @@ chat.post('/', async (c) => {
   const effort = effortLevel(body.effort);
   if (!ownKey && !isLocalModel) {
     const chargeErr = await chargeEffort(user, model, effort);
-    if (chargeErr) return c.json(chargeErr, 402);
+    if (chargeErr) return { error: chargeErr, status: 402 };
   }
 
   const fileCtx = await buildFileContext(pid);
   await store.addMessage(pid, 'user', message, user.name);
 
-  // Client-cancel propagates to the upstream request.
-  const ac = new AbortController();
-  c.req.raw.signal.addEventListener('abort', () => ac.abort());
+  return { pid, model, effort, fileCtx, key, ownKey, isLocalModel, project };
+}
 
-  const enc = new TextEncoder();
-  const streamBody = new ReadableStream({
-    async start(controller) {
-      let closed = false;
-      const send = (ev) => {
-        if (closed) return;
-        try {
-          controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
-        } catch { closed = true; }
-      };
-      send({ type: 'meta', projectId: pid, model, effort: EFFORT[effort].label });
+// Run one generation turn: emits `meta`, streams tokens and tool events, and
+// finishes with `done`. Host-agnostic — the Worker route passes a stream-backed
+// emit and the request signal; the terminal daemon passes its run-buffer emit
+// and a signal that only aborts on explicit cancel. The loop body below keeps
+// its original indentation so the two hosts share one implementation.
+export async function runChat(ctx) {
+  const { body, message, pid, model, effort, fileCtx, key, signal } = ctx;
+  const send = typeof ctx.emit === 'function' ? ctx.emit : () => {};
 
-      const mistralKey = getVar('MISTRAL_API_KEY') || '';
-      const localUrl = await localOllamaUrl();
+  send({ type: 'meta', projectId: pid, model, effort: EFFORT[effort].label });
+  const orKey = openrouterKey();
 
-      let provider = 'ollama';
-      const emit = (ev) => send(ev);
+  let provider = 'ollama';
+  const emit = (ev) => send(ev);
 
       const written = [];
       const edited = [];
@@ -319,7 +303,7 @@ chat.post('/', async (c) => {
           const subModel = OR_SUB_MODELS[(subRound++ + i) % OR_SUB_MODELS.length];
           const r = await fetch(OPENROUTER_URL, {
             method: 'POST',
-            signal: AbortSignal.any([ac.signal, AbortSignal.timeout(300000)]),
+            signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
             headers: {
               Authorization: `Bearer ${orKey}`,
               'Content-Type': 'application/json',
@@ -383,7 +367,7 @@ chat.post('/', async (c) => {
 
       let attempt = 0;
       let wantRepair = true;
-      while (wantRepair && attempt < MAX_REPAIR_ROUNDS && !ac.signal.aborted) {
+      while (wantRepair && attempt < MAX_REPAIR_ROUNDS && !signal.aborted) {
         attempt++;
         wantRepair = false;
         const diagAtStart = diag.length;
@@ -396,9 +380,9 @@ chat.post('/', async (c) => {
         let upstream;
         let providerUsed = null;
         try {
-          ({ upstream, provider } = await openUpstream(model, buildGenMessages(), key, ac.signal, emit, EFFORT[effort]));
+          ({ upstream, provider } = await openUpstream(model, buildGenMessages(), key, signal, emit, EFFORT[effort]));
         } catch (e) {
-          if (!ac.signal.aborted) send({ type: 'error', message: e.message });
+          if (!signal.aborted) send({ type: 'error', message: e.message });
           break;
         }
         providerUsed = provider;
@@ -501,25 +485,73 @@ chat.post('/', async (c) => {
             await quarantineSync([], send);
           }
         } catch (e) {
-          if (!ac.signal.aborted) send({ type: 'error', message: String(e.message || e) });
+          if (!signal.aborted) send({ type: 'error', message: String(e.message || e) });
           wantRepair = false;
         } finally {
           if (providerUsed) { try { active[providerUsed]--; } catch {} }
         }
       }
-      send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, seeds, model });
-        // co-build: tell everyone else watching this project that it changed
-        try {
-          const sbUrl = getVar('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co';
-          const sbKey = getVar('SUPABASE_SERVICE_KEY') || '';
-          if (sbUrl && sbKey) {
-            const sb = createClient(sbUrl, sbKey);
-            const ch = sb.channel('build:' + pid);
-            await ch.send({ type: 'broadcast', event: 'evt', payload: { type: 'refresh', sid: body.sid || '', files: written } });
-            setTimeout(() => { try { sb.removeChannel(ch); } catch {} }, 100);
-          }
-        } catch { /* live layer is best-effort */ }
-      try { controller.close(); } catch { /* already closed */ }
+  send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, seeds, model });
+  // co-build: tell everyone else watching this project that it changed
+  try {
+    const sbUrl = getVar('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co';
+    const sbKey = getVar('SUPABASE_SERVICE_KEY') || '';
+    if (sbUrl && sbKey) {
+      const sb = createClient(sbUrl, sbKey);
+      const ch = sb.channel('build:' + pid);
+      await ch.send({ type: 'broadcast', event: 'evt', payload: { type: 'refresh', sid: body.sid || '', files: written } });
+      setTimeout(() => { try { sb.removeChannel(ch); } catch {} }, 100);
+    }
+  } catch { /* live layer is best-effort */ }
+}
+
+// ---- Worker route ----------------------------------------------------------
+// Hand the turn to the local terminal daemon when it is configured. The daemon
+// runs the generation as a detached background run and buffers every event, so
+// a dropped Worker/client connection no longer loses the build: the client can
+// re-attach with the same runId and catch up. Falls back to running here.
+chat.post('/', async (c) => {
+  const user = await getUser(c);
+  if (!user) return c.json({ error: 'sign in required' }, 401);
+
+  const body = await c.req.json();
+  const message = body?.message;
+  if (!message || typeof message !== 'string') {
+    return c.json({ error: 'message required' }, 400);
+  }
+
+  if (body?.mode === 'workspace') {
+    return workspaceChat(c, body, message, user);
+  }
+
+  const off = await offloadChat(c, { user, body, message });
+  if (off) return off;
+  return localChat(c, { user, body, message });
+});
+
+// Run the turn inside this Worker (no daemon / daemon unreachable). No resumable
+// buffer here, so a dropped connection ends the turn — the client is told so.
+async function localChat(c, { user, body, message }) {
+  const ac = new AbortController();
+  c.req.raw.signal.addEventListener('abort', () => ac.abort());
+
+  const prep = await prepareChat({ user, body, message, apiKey: c.req.header('x-api-key'), sid: body.sid });
+  if (prep.error) return c.json(prep.error, prep.status);
+
+  const enc = new TextEncoder();
+  const streamBody = new ReadableStream({
+    async start(controller) {
+      let closed = false;
+      const send = (ev) => {
+        if (closed) return;
+        try { controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`)); } catch { closed = true; }
+      };
+      send({ type: 'run', runId: null, resumable: false });
+      try {
+        await runChat({ ...prep, body, message, signal: ac.signal, emit: send });
+      } finally {
+        try { controller.close(); } catch { /* already closed */ }
+      }
     },
     cancel() { ac.abort(); },
   });
@@ -528,6 +560,58 @@ chat.post('/', async (c) => {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache',
   });
+}
+
+// Forward the turn to the daemon when configured. Returns null to fall back.
+async function offloadChat(c, { user, body, message }) {
+  const base = String(getVar('TERMINAL_URL') || '').replace(/\/+$/, '');
+  const token = String(getVar('TERMINAL_TOKEN') || '');
+  if (!base || !token || getVar('LOCAL_TERMINAL')) return null;
+  const apiKey = c.req.header('x-api-key') || '';
+  const bodyKey = typeof body.apiKey === 'string' ? body.apiKey : '';
+  const ownKey = Boolean(extractKey(apiKey, bodyKey));
+  const key = extractKey(apiKey, bodyKey) || builtinKey();
+  try {
+    const r = await fetch(`${base}/agent/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        origin: new URL(c.req.url).origin,
+        runId: typeof body.runId === 'string' ? body.runId.slice(0, 64) : '',
+        user: { id: user.id, name: user.name },
+        body, message, apiKey, key, ownKey,
+      }),
+    });
+    if (!r.ok || !r.body) return null;
+    return c.newResponse(r.body, 200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+    });
+  } catch { return null; }
+}
+
+// Re-attach to a background run (the client lost its stream). Proxies the
+// daemon's buffered event log from `since`, then streams live until done.
+chat.get('/stream/:runId', async (c) => {
+  const user = await getUser(c);
+  if (!user) return c.json({ error: 'sign in required' }, 401);
+  const base = String(getVar('TERMINAL_URL') || '').replace(/\/+$/, '');
+  const token = String(getVar('TERMINAL_TOKEN') || '');
+  if (!base || !token || getVar('LOCAL_TERMINAL')) return c.json({ error: 'no resumable runs' }, 404);
+  const since = Math.max(0, Number(c.req.query('since') || 0) || 0);
+  try {
+    const url = `${base}/agent/stream/${encodeURIComponent(c.req.param('runId'))}?` +
+      new URLSearchParams({ token, since: String(since), uid: user.id });
+    const r = await fetch(url);
+    if (!r.ok || !r.body) return c.json({ error: 'run not found' }, r.status === 404 ? 404 : 502);
+    return c.newResponse(r.body, 200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+    });
+  } catch (e) {
+    return c.json({ error: `terminal unreachable: ${String(e?.message || e)}` }, 502);
+  }
 });
 
 // ---- generator op helpers ---------------------------------------------------

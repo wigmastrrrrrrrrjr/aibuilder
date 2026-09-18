@@ -21,6 +21,7 @@ const CHAT_OFFLOAD_PREFIXES = [
   '/api/baas',
   '/api/terminal',
   '/api/server',
+  '/api/internal',
   '/api/v2',
   '/api/projects',
   '/api/models',

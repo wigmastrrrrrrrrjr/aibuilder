@@ -11,6 +11,7 @@ import { builtinKey } from './keys.js';
 import { toBase64 } from './base64.js';
 import { live } from './live.js';
 import { terminal, serverApi } from './terminal.js';
+import { agentBridge } from './agent-bridge.js';
 import { auth, requireUser, canWrite } from './auth.js';
 import { teams } from './teams.js';
 import { features } from './features.js';
@@ -585,6 +586,7 @@ app.route('/', features);
 app.route('/api/forum', forum);
 app.route('/api/terminal', terminal);
 app.route('/api/server', serverApi);
+app.route('/api/internal/agent', agentBridge);
 app.route('/preview', preview);
 
 // 404s: API callers get a JSON error, browsers get a simple page

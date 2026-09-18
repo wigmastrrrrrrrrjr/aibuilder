@@ -14,6 +14,7 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { mkdirSync, statSync, readdirSync, readFileSync, unlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
+import { configure as configureAgent, agentRoute } from './agent.mjs';
 
 const PORT = Number(process.env.PORT || process.argv[2] || 3000);
 const SANDBOX = resolve(process.env.SANDBOX || process.argv[3] || '/var/term/sandbox');
@@ -272,9 +273,15 @@ function json(res, code, obj) {
   res.end(body);
 }
 
+// The daemon also hosts AI generation runs (see agent.mjs): the Worker forwards
+// a chat turn, the daemon runs it in the background and buffers the events so a
+// dropped connection never loses the build.
+configureAgent({ port: PORT, token: TOKEN, sandbox: SANDBOX, apiBase: process.env.AGENT_API_URL });
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   if (req.method === 'GET' && url.pathname === '/status') return json(res, 200, { ok: true, pid: process.pid });
+  if (await agentRoute(req, res, url, TOKEN)) return;
 
   if (req.method === 'POST' && url.pathname === '/exec') {
     let body;
