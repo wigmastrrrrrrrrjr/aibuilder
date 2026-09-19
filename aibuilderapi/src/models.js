@@ -129,6 +129,16 @@ export function modelCost(model) {
   return CREDIT_COST[model] || FREE_TIER_COST;
 }
 
+// Widest sampling-temperature scale a model supports (the UI minimum is 1).
+// OpenAI-compatible APIs (Puter, OpenRouter, BYOK-hosted) accept up to 2.0;
+// Ollama Cloud, local-tunnel and Mistral cap at 1.0 — and 1.0 is the safe
+// default for anything unknown.
+export function temperatureMax(model) {
+  const m = typeof model === 'string' ? model : '';
+  if (m.startsWith('puter/') || m.startsWith('openrouter/') || (m.includes('/') && !m.startsWith('local:'))) return 2;
+  return 1;
+}
+
 export const models = new Hono();
 
 function sortForCoding(names) {

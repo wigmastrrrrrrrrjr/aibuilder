@@ -162,6 +162,9 @@
             <button type="button" data-effort="3" title="Deep — 2× credits, works longer">Deep</button>
             <button type="button" data-effort="4" title="Deepest — 4× credits, works hardest">Deepest</button>
           </div>
+          <span class="fieldLabel">Temp</span>
+          <input type="range" id="tempSel" min="1" max="2" step="0.05" value="1" title="Sampling temperature — from 1 (minimum) up to whatever the model supports (2 for OpenAI/Puter &amp; OpenRouter, 1 for Ollama)">
+          <output id="tempVal" class="tempVal">1.00</output>
           <span class="promptHint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
         </div>
         <div id="composerMain">
@@ -427,6 +430,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=50"></script>
+    <script src="app.js?v=51"></script>
 </body>
 </html>

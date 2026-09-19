@@ -61,6 +61,7 @@ const activityEl = $('activity'), activityText = $('activityText'), rawStream = 
 const fileChips = $('fileChips'), frame = $('previewFrame'), projName = $('projName');
 const modelSel = $('modelSel'), publishBtn = $('publishBtn');
 const effortSel = $('effortSel');
+const tempSel = $('tempSel'), tempVal = $('tempVal');
 
 /* freeze quarantine: when a build has a non-terminating loop we hide the
    preview, stop it from loading, and keep it disabled until a clean build. */
@@ -111,6 +112,32 @@ effortSel.addEventListener('click', (e) => {
   const label = EFFORT_HINT[effort] || '';
   if (label) notify('Effort', label + (effort >= 3 ? ` · model "${cur}"` : ''));
 });
+
+// Sampling temperature — the UI floor is always 1, the ceiling is whatever
+// the selected model supports (2 for OpenAI/Puter/OpenRouter, 1 for Ollama).
+let temp = Number(localStorage.getItem('ab.temp')) || 1;
+function tempMaxOf(m) {
+  return (m && (m.startsWith('puter/') || m.startsWith('openrouter/') || (m.includes('/') && !m.startsWith('local:')))) ? 2 : 1;
+}
+function applyTempMax(max) {
+  if (!tempSel) return;
+  const top = Number(max) || tempMaxOf(currentModel());
+  tempSel.max = String(top);
+  temp = Math.min(Math.max(Number(temp) || 1, 1), top);
+  tempSel.value = String(temp);
+  if (tempVal) tempVal.textContent = temp.toFixed(2);
+}
+function renderTemp() {
+  if (tempVal && tempSel) {
+    temp = Math.min(Math.max(Number(tempSel.value) || 1, 1), Number(tempSel.max) || 2);
+    tempVal.textContent = temp.toFixed(2);
+  }
+}
+tempSel.addEventListener('input', () => {
+  renderTemp();
+  try { localStorage.setItem('ab.temp', String(temp)); } catch { /* ignore */ }
+});
+applyTempMax();
 
 let projectId = null;
 let busy = false;
@@ -1009,6 +1036,7 @@ async function loadModels() {
       ? worker.recommended
       : names[0];
     modelSel.value = saved && names.includes(saved) ? saved : recommended;
+    applyTempMax();
   } else {
     modelSel.innerHTML = `<option>gpt-oss:120b</option>`;
   }
@@ -1058,6 +1086,7 @@ async function selectProject(pid) {
   if (data.project.model && [...modelSel.options].some(o => o.value === data.project.model)) {
     modelSel.value = data.project.model;
   }
+  applyTempMax();
   messagesEl.innerHTML = '';
   for (const m of data.messages) {
     if (m.role === 'user') addUserBubble(m.content, whoLabel(m.user));
@@ -1561,6 +1590,7 @@ async function send() {
         apiKey: ownKey() || undefined,
         sid: SID,
         effort,
+        temperature: temp,
         runId,
       }),
     });
@@ -2277,7 +2307,7 @@ $('snapBtn').onclick = () => {
   loadSnapshots();
 };
 sendBtn.onclick = send;
-modelSel.addEventListener('change', () => localStorage.setItem('ab.model', modelSel.value));
+modelSel.addEventListener('change', () => { localStorage.setItem('ab.model', modelSel.value); applyTempMax(); });
 $('newBtn').onclick = () => { if (!busy) resetToNew(); };
 $('refreshBtn').onclick = () => refreshPreview(true);
 $('openBtn').onclick = () => {

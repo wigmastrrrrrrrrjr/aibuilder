@@ -6,7 +6,7 @@ import { extractKey, builtinKey, localOllamaUrl, openrouterKey, extractPuterToke
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
 import { createClient } from '@supabase/supabase-js';
-import { effortLevel, EFFORT, modelCost, creditsToUnits, unitsToCredits } from './models.js';
+import { effortLevel, EFFORT, modelCost, creditsToUnits, unitsToCredits, temperatureMax } from './models.js';
 import { personalBalance } from './credits.js';
 import { executeTool, createMemoryStore } from './tools.js';
 import { terminalEnabled, mirrorToTerminal, readTerminalFiles, diffTerminal } from './terminal.js';
@@ -17,6 +17,12 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const PUTER_URL = 'https://api.puter.com/drivers/call';
 const MISTRAL_MODEL = 'mistral-small-latest';
 const MODEL_RE = /^[A-Za-z0-9._:/+%-]{1,64}$/;
+const TEMP_MIN = 1;
+function clampedTemp(v, model) {
+  const n = Number(v);
+  const t = Number.isFinite(n) && n > 0 ? n : TEMP_MIN;
+  return Math.min(Math.max(t, TEMP_MIN), temperatureMax(model));
+}
 const SUB_AGENT_PROMPT = `You are a sub-agent of AIBuilder, an expert engineer, working on ONE file as part of a larger web app that another engineer is building.
 Respond with a single tool call that writes your assigned file, in EXACTLY this format:
 >>>tool
@@ -196,7 +202,7 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
   const fileCtx = await buildFileContext(pid);
   await store.addMessage(pid, 'user', message, user.name);
 
-  return { pid, model, effort, fileCtx, key, ownKey, isLocalModel, isPuterModel, puter, project };
+  return { pid, model, effort, temperature: clampedTemp(body?.temperature, model), fileCtx, key, ownKey, isLocalModel, isPuterModel, puter, project };
 }
 
 // Run one generation turn: emits `meta`, streams tokens and tool events, and
@@ -408,7 +414,7 @@ export async function runChat(ctx) {
         let upstream;
         let providerUsed = null;
         try {
-          ({ upstream, provider } = await openUpstream(model, buildGenMessages(), key, signal, emit, EFFORT[effort], puter));
+          ({ upstream, provider } = await openUpstream(model, buildGenMessages(), key, signal, emit, EFFORT[effort], puter, prep.temperature));
         } catch (e) {
           if (!signal.aborted) send({ type: 'error', message: e.message });
           break;
@@ -689,7 +695,7 @@ chat.get('/stream/:runId', async (c) => {
 
 // ---- generator op helpers ---------------------------------------------------
 
-async function openUpstream(model, messages, key, signal, emit, effortCfg, puter) {
+async function openUpstream(model, messages, key, signal, emit, effortCfg, puter, temperature = TEMP_MIN) {
   const mistralKey = getVar('MISTRAL_API_KEY') || '';
   const orKey = openrouterKey();
   const localUrl = await localOllamaUrl();
@@ -704,7 +710,7 @@ async function openUpstream(model, messages, key, signal, emit, effortCfg, puter
       method: 'POST',
       signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: true, think: eff.think, options: ollamaOpts }),
+      body: JSON.stringify({ model, messages, stream: true, think: eff.think, options: { ...ollamaOpts, temperature } }),
     });
     if (!r.ok) throw new Error(`ollama ${r.status}`);
     return { upstream: r, provider: 'ollama' };
@@ -716,7 +722,7 @@ async function openUpstream(model, messages, key, signal, emit, effortCfg, puter
       method: 'POST',
       signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
       headers: { Authorization: `Bearer ${mistralKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: MISTRAL_MODEL, messages, stream: true, max_tokens: eff.tokens }),
+      body: JSON.stringify({ model: MISTRAL_MODEL, messages, stream: true, max_tokens: eff.tokens, temperature }),
     });
     if (!r.ok) {
       const t = await r.text().catch(() => '');
@@ -731,7 +737,7 @@ async function openUpstream(model, messages, key, signal, emit, effortCfg, puter
       method: 'POST',
       signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: localModel, messages, stream: true, think: eff.think, options: ollamaOpts }),
+      body: JSON.stringify({ model: localModel, messages, stream: true, think: eff.think, options: { ...ollamaOpts, temperature } }),
     });
     if (!r.ok) throw new Error(`local ollama ${r.status}`);
     return { upstream: r, provider: 'local' };
@@ -748,7 +754,7 @@ async function openUpstream(model, messages, key, signal, emit, effortCfg, puter
         'HTTP-Referer': 'https://github.com/wigmastrrrrrrrrjr/aibuilder',
         'X-Title': 'aibuilder',
       },
-      body: JSON.stringify({ model, messages, stream: true, max_tokens: eff.tokens }),
+      body: JSON.stringify({ model, messages, stream: true, max_tokens: eff.tokens, temperature }),
     });
     if (!r.ok) {
       const t = await r.text().catch(() => '');
@@ -767,7 +773,7 @@ async function openUpstream(model, messages, key, signal, emit, effortCfg, puter
         driver: 'ai-chat',
         method: 'complete',
         test_mode: false,
-        args: { messages, model: isPuterModel ? model.slice('puter/'.length) : model, stream: true, temperature: 0.4, max_tokens: eff.tokens },
+        args: { messages, model: isPuterModel ? model.slice('puter/'.length) : model, stream: true, temperature, max_tokens: eff.tokens },
       };
     console.log('[puter] call drivers/call model=', pbody.args.model, 'messages=', JSON.stringify(messages).slice(0, 120));
     const r = await fetch(PUTER_URL, {
@@ -868,6 +874,8 @@ async function workspaceChat(c, body, message, user) {
     const chargeErr = await chargeEffort(user, model, effort);
     if (chargeErr) return c.json(chargeErr, 402);
   }
+
+  const temperature = clampedTemp(body?.temperature, model);
 
   const history = Array.isArray(body.history) ? body.history.slice(-40) : [];
 
@@ -981,7 +989,7 @@ async function workspaceChat(c, body, message, user) {
         let upstream;
         let providerUsed = null;
         try {
-          ({ upstream, provider } = await openUpstream(model, buildWsMessages(transcript, attempt === 1 ? message : wsRepairPrompt()), key, ac.signal, emit, EFFORT[effort], puter));
+          ({ upstream, provider } = await openUpstream(model, buildWsMessages(transcript, attempt === 1 ? message : wsRepairPrompt()), key, ac.signal, emit, EFFORT[effort], puter, temperature));
         } catch (e) {
           if (!ac.signal.aborted) send({ type: 'error', message: e.message });
           break;
