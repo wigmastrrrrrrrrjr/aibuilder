@@ -770,7 +770,7 @@ async function openUpstream(model, messages, key, signal, emit, effortCfg, puter
         driver: 'ai-chat',
         method: 'complete',
         test_mode: false,
-        args: { messages, model, stream: true, temperature: 0.4, max_tokens: eff.tokens },
+        args: { messages, model: isPuterModel ? model.slice('puter/'.length) : model, stream: true, temperature: 0.4, max_tokens: eff.tokens },
       }),
     });
     if (!r.ok) {
