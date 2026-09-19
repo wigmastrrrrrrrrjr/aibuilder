@@ -943,35 +943,74 @@ document.querySelectorAll('.copyBtn').forEach((btn) => {
   });
 });
 
+const PUTER_CODING_RANK = [
+  'gpt-5.6-luna', 'claude-opus-4-8', 'gpt-5.4', 'claude-sonnet-5',
+  'gemini-3.7-flash', 'gpt-5.4-mini', 'deepseek-v4-pro', 'qwen3-coder-plus',
+  'gpt-5.2', 'gemini-3.1-flash-lite', 'glm-5.3', 'deepseek-v3.2',
+  'qwen3-coder-flash', 'codestral-2508', 'kimi-k2.7-code',
+];
+
 async function loadModels() {
+  let worker = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const r = await fetch(`${API}/api/models`, { headers: authHeaders() });
       const j = await r.json();
-      const names = Array.isArray(j.models) && j.models.length
-        ? j.models
-        : ['gemma4:31b', 'gpt-oss:120b', 'gpt-oss:20b'];
-      const recommended = typeof j.recommended === 'string' && names.includes(j.recommended)
-        ? j.recommended
-        : names[0];
-      modelSel.innerHTML = '';
-      for (const n of names) {
-        const o = document.createElement('option');
-        o.value = n; o.textContent = n;
-        modelSel.appendChild(o);
-      }
-      const saved = localStorage.getItem('ab.model');
-      if (saved && names.includes(saved)) modelSel.value = saved;
-      else modelSel.value = recommended;
-      return;
+      if (Array.isArray(j.models) && j.models.length) worker = j;
+      break;
     } catch (e) {
-      if (attempt === 3) {
-        console.warn('loadModels: /api/models unreachable', e);
-        modelSel.innerHTML = `<option>gpt-oss:120b</option>`;
-        return;
-      }
-      await new Promise((res) => setTimeout(res, 1200 * attempt));
+      console.warn('loadModels: /api/models unreachable', e);
+      if (attempt < 3) await new Promise((res) => setTimeout(res, 1200 * attempt));
     }
+  }
+
+  let puter = null;
+  if (window.puter?.ai?.listModels && puterTok()) {
+    try {
+      const list = await Promise.race([
+        window.puter.ai.listModels(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('puter.ai.listModels timed out')), 8000)),
+      ]);
+      if (Array.isArray(list)) {
+        puter = list
+          .map((m) => ({ id: `puter/${m?.id}`, label: m?.name || m?.id }))
+          .filter((m) => m.id.length > 6);
+      }
+    } catch (e) {
+      console.warn('loadModels: puter.ai.listModels failed', e);
+    }
+  }
+
+  const names = [];
+  const seen = new Set();
+  for (const n of (worker?.models || [])) { seen.add(n); names.push(n); }
+  if (puter) {
+    puter.sort((a, b) => {
+      const ra = PUTER_CODING_RANK.indexOf(a.id.slice(6));
+      const rb = PUTER_CODING_RANK.indexOf(b.id.slice(6));
+      return (ra === -1 ? 100 : ra) - (rb === -1 ? 100 : rb);
+    });
+    for (const m of puter) {
+      if (!seen.has(m.id)) { seen.add(m.id); names.push(m.id); }
+    }
+  }
+
+  if (names.length) {
+    modelSel.innerHTML = '';
+    for (const n of names) {
+      const o = document.createElement('option');
+      o.value = n;
+      const pm = puter && puter.find((m) => m.id === n);
+      o.textContent = pm ? `${pm.label} (${n})` : n;
+      modelSel.appendChild(o);
+    }
+    const saved = localStorage.getItem('ab.model');
+    const recommended = worker?.recommended && names.includes(worker.recommended)
+      ? worker.recommended
+      : names[0];
+    modelSel.value = saved && names.includes(saved) ? saved : recommended;
+  } else {
+    modelSel.innerHTML = `<option>gpt-oss:120b</option>`;
   }
 }
 
