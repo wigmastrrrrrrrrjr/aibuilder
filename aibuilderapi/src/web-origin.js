@@ -15,8 +15,6 @@ export const DEFAULT_ALLOWED_ORIGINS = [
 
 export const BLOCK_MSG = 'nice try script kiddy this won\'t work!';
 
-const WEBSIM_RE = /^https:\/\/(?:[a-z0-9-]+\.)*websim\.com$/i;
-
 // The origin set only changes when the env value changes — build it once and
 // reuse across requests instead of allocating a Set + splitting env every time.
 let _originKey = null;
@@ -36,14 +34,12 @@ export function allowedOrigins() {
 
 export function originAllowed(origin) {
   if (!origin) return true;
-  if (WEBSIM_RE.test(origin)) return true;
   const set = allowedOrigins();
   if (set.has(origin)) return true;
   let host = origin;
   try {
     const u = new URL(origin);
     host = `${u.protocol}//${u.hostname}`;
-    if (WEBSIM_RE.test(host)) return true;
   } catch { /* keep raw value */ }
   return set.has(host);
 }

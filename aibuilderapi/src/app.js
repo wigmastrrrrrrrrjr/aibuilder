@@ -28,11 +28,11 @@ export { DEFAULT_ALLOWED_ORIGINS };
 
 export const app = new Hono();
 
-// CORS: only the WebSim page origin may call this API from a browser. WebSim
-// apps run on websim.com (and its *.websim.com subdomains); loopback origins
-// are kept for local `npm start` development. Anything else gets the block
-// message. Requests with no Origin (same-origin, curl, non-browser tooling)
-// pass through. Add more with the ALLOWED_ORIGINS env var (comma-separated).
+// CORS: only approved origins may call this API from a browser — the GitHub
+// Pages site and the worker's own origin by default; loopback origins are kept
+// for local `npm start` development. Anything else gets the block message.
+// Requests with no Origin (same-origin, curl, non-browser tooling) pass
+// through. Add more with the ALLOWED_ORIGINS env var (comma-separated).
 // (Policy lives in web-origin.js so the chat/preview workers share it.)
 
 app.use('*', blockForeignOrigins);
