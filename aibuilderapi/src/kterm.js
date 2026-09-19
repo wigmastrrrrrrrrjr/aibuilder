@@ -183,7 +183,7 @@ async function finishJob(c, db, id, pid, row) {
   let blobs = null;
   try { blobs = JSON.parse(row.result_files || 'null'); } catch { blobs = null; }
   if (blobs && typeof blobs === 'object') {
-    const baseline = {};
+    let baseline = {};
     try {
       const job = await db.prepare(`SELECT files FROM kterm_jobs WHERE id=?`).bind(id).first();
       if (job && job.files) baseline = JSON.parse(job.files);
