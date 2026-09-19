@@ -498,13 +498,17 @@ function paintPuter() {
   }
 }
 
-async function signInWithPuter(after) {
+async function signInWithPuter(after, switchAccount) {
   if (!window.puter || typeof puter.auth?.signIn !== 'function') {
     alert('Puter.js could not load — check your connection and try again.');
     return;
   }
   try {
-    const res = await puter.auth.signIn(puterTok() ? { request_auth: true } : undefined);
+    // request_auth forces the account re-pick prompt *even when this site
+    // already holds a Puter token* — only the explicit "switch account" pill
+    // should do that. Plain sign-in (gate button) lets Puter skip the prompt
+    // for a site it has seen before, per the auth.signIn docs.
+    const res = await puter.auth.signIn(switchAccount && puterTok() ? { request_auth: true } : undefined);
     if (!res || !res.success || !res.token) throw new Error(res?.msg || 'puter sign-in failed');
     localStorage.setItem('ab.puter', res.token);
     localStorage.setItem('ab.puterUser', String(res.username || ''));
@@ -541,7 +545,7 @@ $('puterMini')?.addEventListener('click', () => {
   signInWithPuter(async () => {
     await loadModels();
     notify('Puter', 'Signed in — more models are now unlocked in the picker.');
-  });
+  }, /* switchAccount */ true);
 });
 paintPuter();
 
