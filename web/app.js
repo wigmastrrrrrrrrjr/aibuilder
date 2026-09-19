@@ -509,6 +509,21 @@ async function signInWithPuter(after) {
     localStorage.setItem('ab.puter', res.token);
     localStorage.setItem('ab.puterUser', String(res.username || ''));
     paintPuter();
+
+    if (!sessTok()) {
+      // Puter signs the user into aibuilder too, so the app gate lifts.
+      const r = await fetch(`${API}/api/auth/puter`, {
+        method: 'POST',
+        headers: authHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ token: res.token }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `could not finish sign-in (HTTP ${r.status})`);
+      localStorage.setItem('ab.tok', d.token);
+      localStorage.setItem('ab.user', d.username);
+      if (!$('authGate')?.hidden) { location.reload(); return; }
+    }
+
     if (typeof after === 'function') await after();
   } catch (e) {
     if (e?.error === 'popup_blocked') {
