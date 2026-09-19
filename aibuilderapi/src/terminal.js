@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { getVar } from './env.js';
 import { requireUser } from './auth.js';
 import { store } from './store.js';
+import { execViaKaggle, kaggleRelayEnabled } from './kterm.js';
 
 // Dedicated cloud terminal for the AI. The worker proxies shell commands to a
 // small daemon running on an always-free VM (GCP e2-micro / Oracle Always Free),
@@ -310,7 +311,7 @@ async function daemonRead(urlPath, body) {
 }
 
 export async function execCommand(pid, cmd, opts = {}) {
-  if (!terminalEnabled()) return { enabled: false };
+  if (!terminalEnabled() && !kaggleRelayEnabled()) return { enabled: false };
 
   // --- LOCAL_TERMINAL: spawn directly on the host (local dev / Termux only) ---
   // In production the Workers runtime has no node:child_process; LOCAL_TERMINAL
@@ -345,6 +346,13 @@ export async function execCommand(pid, cmd, opts = {}) {
         resolvePromise({ ok: false, code: 1, output: '', error: String(e.message) });
       });
     });
+  }
+
+  // --- Kaggle executor first (Python agent polls the D1 relay); the regular
+  // terminal daemon below is the automatic fallback when no agent is available.
+  if (kaggleRelayEnabled()) {
+    const kg = await execViaKaggle(pid, cmd, opts);
+    if (kg.kind === 'result') return kg.result;
   }
 
   // --- Cloud terminal daemon (production) ---

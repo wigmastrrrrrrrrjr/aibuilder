@@ -170,3 +170,23 @@ CREATE TABLE IF NOT EXISTS feature_votes (
   PRIMARY KEY (feature_id, user)
 );
 CREATE INDEX IF NOT EXISTS idx_feature_votes ON feature_votes (feature_id);
+
+-- Kaggle terminal relay jobs (see aibuilderapi/src/kterm.js + terminald/kaggeld/agent.py).
+CREATE TABLE IF NOT EXISTS kterm_jobs (
+  id           TEXT PRIMARY KEY,
+  pid          TEXT NOT NULL,
+  cmd          TEXT NOT NULL,
+  cwd          TEXT NOT NULL DEFAULT '',
+  timeout_ms   INTEGER NOT NULL DEFAULT 30000,
+  status       TEXT NOT NULL DEFAULT 'pending',   -- pending | running | done | abandoned
+  output       TEXT,
+  code         INTEGER,
+  blocked      INTEGER NOT NULL DEFAULT 0,
+  error        TEXT,
+  agent        TEXT,
+  files        TEXT,
+  result_files TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_kterm_pending ON kterm_jobs (status, created_at);
