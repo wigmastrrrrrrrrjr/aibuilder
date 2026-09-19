@@ -439,7 +439,8 @@ export async function runChat(ctx) {
               if (provider === 'puter') {
                 const fr = j?.finish_reason || j?.message?.finish_reason;
                 if (fr) finish = fr;
-                tok = j?.delta?.content ?? j?.message?.content ?? '';
+                if (j?.done === true && !finish) finish = 'stop';
+                tok = j?.text ?? j?.delta?.content ?? j?.message?.content ?? '';
               } else if (provider === 'mistral' || provider === 'openrouter') {
                 const fr = j?.choices?.[0]?.finish_reason;
                 if (fr) finish = fr;
@@ -761,18 +762,21 @@ async function openUpstream(model, messages, key, signal, emit, effortCfg, puter
   // matches the current drivers/call contract (interface/driver/method/args).
   const tryPuter = async () => {
     if (!puter) throw new Error('sign in with Puter to use puter models');
-    const r = await fetch(PUTER_URL, {
-      method: 'POST',
-      signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
-      headers: { Authorization: `Bearer ${puter}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const pbody = {
         interface: 'puter-chat-completion',
         driver: 'ai-chat',
         method: 'complete',
         test_mode: false,
         args: { messages, model: isPuterModel ? model.slice('puter/'.length) : model, stream: true, temperature: 0.4, max_tokens: eff.tokens },
-      }),
+      };
+    console.log('[puter] call drivers/call model=', pbody.args.model, 'messages=', JSON.stringify(messages).slice(0, 120));
+    const r = await fetch(PUTER_URL, {
+      method: 'POST',
+      signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
+      headers: { Authorization: `Bearer ${puter}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(pbody),
     });
+    console.log('[puter] drivers/call response status=', r.status);
     if (!r.ok) {
       const t = await r.text().catch(() => '');
       throw new Error(`puter ${r.status}: ${t.slice(0, 200)}`);
@@ -1006,7 +1010,8 @@ async function workspaceChat(c, body, message, user) {
               if (provider === 'puter') {
                 const fr = j?.finish_reason || j?.message?.finish_reason;
                 if (fr) finish = fr;
-                tok = j?.delta?.content ?? j?.message?.content ?? '';
+                if (j?.done === true && !finish) finish = 'stop';
+                tok = j?.text ?? j?.delta?.content ?? j?.message?.content ?? '';
               } else if (provider === 'mistral' || provider === 'openrouter') {
                 const fr = j?.choices?.[0]?.finish_reason;
                 if (fr) finish = fr;
