@@ -1588,6 +1588,17 @@ async function send() {
           const n = ev.count || 0;
           activityText.textContent = `Listed ${n} file${n === 1 ? '' : 's'}`;
           termLog(`listed ${n} file${n === 1 ? '' : 's'}`, 's');
+        } else if (ev.type === 'glob') {
+          const n = ev.count || 0;
+          activityText.textContent = `Glob ${n} file${n === 1 ? '' : 's'}`;
+          termLog(`glob "${ev.pattern || ''}" → ${n} match${n === 1 ? '' : 'es'}`, 's');
+        } else if (ev.type === 'websearch') {
+          const n = ev.count || 0;
+          activityText.textContent = `Web search: ${n} result${n === 1 ? '' : 's'}`;
+          termLog(`websearch "${String(ev.query || '').slice(0, 60)}" → ${n} result${n === 1 ? '' : 's'}`, 's');
+        } else if (ev.type === 'fetch') {
+          activityText.textContent = `Fetched ${ev.url || ''}`;
+          termLog(`fetch ${ev.url || ''} (${ev.bytes != null ? String(ev.bytes) + ' bytes' : ''})`, 's');
         } else if (ev.type === 'plan') {
           renderPlan(ev.items || []);
           if (aiMsg) aiMsg.card('', actCards.plan());

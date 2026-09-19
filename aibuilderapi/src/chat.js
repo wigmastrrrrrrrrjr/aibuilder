@@ -262,8 +262,8 @@ export async function runChat(ctx) {
         }
         if (res.op) { ops += res.ops || 1; maybeRefactor(); }
         if (res.event) send(res.event);
-        if ((name === 'run_command' || name === 'create_dedicated_server' || name === 'read_file' || name === 'search_files' || name === 'list_files') && typeof res.command === 'string') cmdLog.push(res);
-        if (res.ok && (name === 'read_file' || name === 'search_files' || name === 'list_files')) inspected++;
+        if ((name === 'run_command' || name === 'create_dedicated_server' || name === 'read_file' || name === 'search_files' || name === 'list_files' || name === 'glob' || name === 'web_search' || name === 'fetch_url') && typeof res.command === 'string') cmdLog.push(res);
+        if (res.ok && (name === 'read_file' || name === 'search_files' || name === 'list_files' || name === 'glob' || name === 'web_search' || name === 'fetch_url')) inspected++;
         if (res.ok) return true;
         if (res.skipped) {
           if (!res.noWarn) send({ type: 'warn', message: res.error });
@@ -880,8 +880,8 @@ async function workspaceChat(c, body, message, user) {
         }
         if (res.op) ops++;
         if (res.event) send(res.event);
-        if ((name === 'run_command' || name === 'create_dedicated_server' || name === 'read_file' || name === 'search_files' || name === 'list_files') && typeof res.command === 'string') cmdLog.push(res);
-        if (res.ok && (name === 'read_file' || name === 'search_files' || name === 'list_files')) inspected++;
+        if ((name === 'run_command' || name === 'create_dedicated_server' || name === 'read_file' || name === 'search_files' || name === 'list_files' || name === 'glob' || name === 'web_search' || name === 'fetch_url') && typeof res.command === 'string') cmdLog.push(res);
+        if (res.ok && (name === 'read_file' || name === 'search_files' || name === 'list_files' || name === 'glob' || name === 'web_search' || name === 'fetch_url')) inspected++;
         if (res.ok || res.skipped) return true;
         const err = String(res.error || 'unknown error');
         if (!res.noWarn) send({ type: 'warn', message: `${name}: ${err}` });
