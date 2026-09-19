@@ -47,7 +47,7 @@ export function originAllowed(origin) {
 export const CORS_OPTIONS = {
   origin: (origin) => (originAllowed(origin) ? origin || '*' : null),
   allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'x-ab-sess', 'x-recaptcha-token', 'x-api-key'],
+  allowHeaders: ['Content-Type', 'Authorization', 'x-ab-sess', 'x-recaptcha-token', 'x-api-key', 'x-puter-token'],
   exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'Retry-After'],
 };
 

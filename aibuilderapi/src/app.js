@@ -21,7 +21,7 @@ import { teamPool, personalBalance } from './credits.js';
 import { v2 } from './v2.js';
 import { rateLimit } from './rate-limit.js';
 import {
-  CORS_OPTIONS, DEFAULT_ALLOWED_ORIGINS, GITHUB_URL, blockForeignOrigins,
+  CORS_OPTIONS, DEFAULT_ALLOWED_ORIGINS, GITHUB_URL, originAllowed,
 } from './web-origin.js';
 
 export { DEFAULT_ALLOWED_ORIGINS };
@@ -30,14 +30,22 @@ export const app = new Hono();
 
 // CORS: only approved origins may call this API from a browser — the GitHub
 // Pages site and the worker's own origin by default; loopback origins are kept
-// for local `npm start` development. Anything else gets the block message.
-// Requests with no Origin (same-origin, curl, non-browser tooling) pass
-// through. Add more with the ALLOWED_ORIGINS env var (comma-separated).
+// for local `npm start` development. Requests with no Origin (same-origin,
+// curl, non-browser tooling) pass through. Add more with the ALLOWED_ORIGINS
+// env var (comma-separated). Any OTHER Origin stays public but gets a very
+// strict rate limit below (10 requests/day) instead of a hard block.
 // (Policy lives in web-origin.js so the chat/preview workers share it.)
 
-app.use('*', blockForeignOrigins);
-
 app.use('*', cors(CORS_OPTIONS));
+
+// Foreign origins (anything not on the allowlist) may use the public API, but
+// under a very strict cap. Preflights are free (cheap, hit no route state).
+app.use('*', async (c, next) => {
+  if (c.req.method === 'OPTIONS') return next();
+  const o = c.req.header('origin');
+  if (o && !originAllowed(o)) return foreignLimit(c, next);
+  return next();
+});
 
 // NO compression, NO caching. The client that consumes this API cannot decode
 // gzip, and Cloudflare's edge re-encodes responses (even identity/q=0 requests
@@ -62,6 +70,8 @@ const authLimit   = rateLimit({ windowMs: MIN, max: 3 });     // 3 auth attempts
 const uploadLimit = rateLimit({ windowMs: MIN, max: 3 });     // 3 uploads/min per IP
 const giftLimit   = rateLimit({ windowMs: MIN, max: 3 });     // 3 gifts/min per IP
 const termLimit   = rateLimit({ windowMs: MIN, max: 30 });    // 30 terminal cmds/min per IP
+// Requests from an Origin outside the allowlist: very strict — 10/day per origin.
+const foreignLimit = rateLimit({ windowMs: DAY, max: 10, keyFn: (c) => 'foreign:' + (c.req.header('origin') || '') });
 
 // Limiters MUST be registered before any matching route: Hono skips app.use()
 // middleware for a path once a route for that exact path already exists.
@@ -121,7 +131,7 @@ app.get('/api/docs', (c) => {
   return c.json({
     name: 'aibuilder API',
     version: '0.2.0',
-    description: 'AI app builder backend. Only the WebSim page origin may call this API from a browser; any other Origin receives the block message.',
+    description: 'AI app builder backend. Allowed browser origins use the full API; any other Origin is public but strictly rate-limited (10 requests/day).',
     baseUrl: base,
     allowedOrigins: DEFAULT_ALLOWED_ORIGINS,
     auth,
