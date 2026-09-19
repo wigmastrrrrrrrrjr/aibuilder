@@ -53,10 +53,13 @@ JAIL_DEV = {"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/zero",
 def http_json(method, path, body=None, timeout=60):
     url = RELAY + path
     if requests is not None:
-        if method == "GET":
-            r = requests.get(url, headers={"User-Agent": UA}, timeout=timeout)
-        else:
-            r = requests.post(url, json=body, headers={"User-Agent": UA}, timeout=timeout)
+        try:
+            if method == "GET":
+                r = requests.get(url, headers={"User-Agent": UA}, timeout=timeout)
+            else:
+                r = requests.post(url, json=body, headers={"User-Agent": UA}, timeout=timeout)
+        except Exception as exc:
+            raise RuntimeError("relay unreachable: %s" % exc)
         if r.status_code >= 500:
             raise RuntimeError("relay %d on %s" % (r.status_code, method))
         try:
@@ -318,7 +321,7 @@ def main():
     while True:
         try:
             claims = http_json("GET", "/api/kterm/next?token=" + urllib.parse.quote(TOKEN) + "&agent=" + urllib.parse.quote(AGENT), timeout=POLL + 30)
-        except RuntimeError as exc:
+        except Exception as exc:
             print("poll error: %s" % exc, file=sys.stderr, flush=True)
             time.sleep(POLL)
             continue
