@@ -11,6 +11,7 @@ export const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost',
   'http://127.0.0.1',
   'https://aibuilderapi.csomeone301.workers.dev',
+  'https://wigmastrrrrrrrrjr.github.io',
 ];
 
 export const BLOCK_MSG = 'nice try script kiddy this won\'t work!';
