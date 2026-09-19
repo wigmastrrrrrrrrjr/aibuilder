@@ -18,7 +18,6 @@
 import { Hono } from 'hono';
 import { store } from './store.js';
 import { getVar } from './env.js';
-import { extractPuterToken } from './keys.js';
 import { sendEmail } from './email.js';
 import { resolveSession, clearSession } from './session-cache.js';
 
@@ -322,71 +321,6 @@ auth.post('/api/auth/login', async (c) => {
   // ---- normal account: instant session ----
   const token = await store.createSession(user.id);
   return c.json({ token, username: user.name });
-});
-
-// Puter identity endpoint — server-side token verification. The token travels
-// in the x-puter-token header (mirror of the BYOK key) and is never persisted.
-const PUTER_WHOAMI = 'https://api.puter.com/whoami';
-
-// Puter accounts are namespaced here as "puter_" + hex of the user's uuid.
-// The uuid is server-verified (never a client-asserted username), so the
-// mapping is stable, unique, and cannot be impersonated.
-function puterAcctName(uuid) {
-  const hex = String(uuid || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase().slice(0, 18);
-  return hex.length >= 6 ? 'puter_' + hex : '';
-}
-
-function isPuterAcct(user) {
-  return Boolean(user && typeof user.phash === 'string' && user.phash.startsWith('puter:'));
-}
-
-// ---- LOGIN WITH PUTER (mints the aibuilder session for the gate too) -------
-auth.post('/api/auth/puter', async (c) => {
-  const { token: bodyToken } = await c.req.json().catch(() => ({}));
-  const tok = extractPuterToken(bodyToken, c.req.header('x-puter-token'));
-  if (!tok) return c.json({ error: 'a valid Puter token is required' }, 401);
-
-  // Prove the token still belongs to a real Puter account and read its uuid.
-  let who;
-  try {
-    const r = await fetch(PUTER_WHOAMI, {
-      headers: { Authorization: `Bearer ${tok}` },
-      signal: AbortSignal.timeout(15000),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) return c.json({
-      error: d.code === 'token_auth_failed'
-        ? 'this Puter sign-in expired — click "Log in with Puter" again'
-        : (d.error || 'Puter rejected this token'),
-    }, 401);
-    who = d;
-  } catch {
-    return c.json({ error: 'could not reach Puter — try again' }, 502);
-  }
-  const uuid = who.uuid || who.id || who.user?.uuid || who.user?.id;
-  const name = puterAcctName(uuid);
-  if (!name) return c.json({ error: 'could not read your Puter identity' }, 400);
-
-  let user = await store.findUserByName(name);
-  if (user) {
-    // A Puter-derived name can only be claimed by an account we minted.
-    if (!isPuterAcct(user)) return c.json({ error: 'that username is taken — sign up normally instead' }, 409);
-  } else {
-    // First sign-in: create deterministically. phash is a sentinel — no
-    // password was ever set, so password login can never match this account.
-    const tag = await ipTag(c);
-    try {
-      const phash = 'puter:' + hex(crypto.getRandomValues(new Uint8Array(32)));
-      user = await store.createUser({ name, phash, ip: tag, email: '' });
-      await store.verifyUser(name);
-    } catch {
-      user = await store.findUserByName(name); // raced — another request made it
-      if (!user || !isPuterAcct(user)) return c.json({ error: 'username already taken' }, 409);
-    }
-  }
-
-  const token = await store.createSession(user.id);
-  return c.json({ token, username: user.name, puter: true });
 });
 
 // ---- ai_dev: verify 2FA code ------------------------------------------------

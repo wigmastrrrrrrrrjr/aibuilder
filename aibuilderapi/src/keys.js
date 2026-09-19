@@ -27,18 +27,6 @@ export function openrouterKey() {
   return k && !k.startsWith('your_') ? k : '';
 }
 
-// Puter sign-in tokens (JWT-ish, longer than a provider key). Come from the
-// x-puter-token header, mirror the user-pays model (the user covers their own
-// AI usage), and are never persisted server-side.
-export function extractPuterToken(...candidates) {
-  for (const k of candidates) {
-    if (typeof k !== 'string') continue;
-    const t = k.trim();
-    if (t.length >= 20 && t.length <= 2000 && !/\s/.test(t)) return t;
-  }
-  return '';
-}
-
 // LOCAL_OLLAMA_URL (static) wins; otherwise fall back to a runtime beacon —
 // a raw gist (or any URL returning a plain https URL) that a Kaggle session
 // keeps refreshing with its current cloudflared tunnel URL. Cached ~3 min.

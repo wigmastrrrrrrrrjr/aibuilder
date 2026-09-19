@@ -114,10 +114,10 @@ effortSel.addEventListener('click', (e) => {
 });
 
 // Sampling temperature — the UI floor is always 1, the ceiling is whatever
-// the selected model supports (2 for OpenAI/Puter/OpenRouter, 1 for Ollama).
+// the selected model supports (2 for OpenAI/OpenRouter, 1 for Ollama).
 let temp = Number(localStorage.getItem('ab.temp')) || 1;
 function tempMaxOf(m) {
-  return (m && (m.startsWith('puter/') || m.startsWith('openrouter/') || (m.includes('/') && !m.startsWith('local:')))) ? 2 : 1;
+  return (m && (m.startsWith('openrouter/') || (m.includes('/') && !m.startsWith('local:')))) ? 2 : 1;
 }
 function applyTempMax(max) {
   if (!tempSel) return;
@@ -284,15 +284,9 @@ function currentModel() {
 /* ---------- BYOK (bring your own Ollama API key) ---------- */
 const ownKey = () => localStorage.getItem('ab.key') || '';
 
-// "Log in with Puter" — per-user token stored locally and passed along like a
-// BYOK key; Puter bills the user, so this app never touches their costs.
-const puterTok = () => localStorage.getItem('ab.puter') || '';
-const puterUser = () => localStorage.getItem('ab.puterUser') || '';
-
 function authHeaders(extra) {
   const h = { ...(extra || {}) };
   if (ownKey()) h['x-api-key'] = ownKey();
-  if (puterTok()) h['x-puter-token'] = puterTok();
   if (sessTok()) h['x-ab-sess'] = sessTok();
   return h;
 }
@@ -505,76 +499,6 @@ $('authSwitch').addEventListener('click', () => {
   pendingTfaSession = null;
 });
 paintAuth();
-
-/* ---------- Log in with Puter (more models, billed to the user) ---------- */
-function paintPuter() {
-  const tok = puterTok();
-  const name = puterUser();
-  const mini = $('puterMini');
-  if (mini) {
-    mini.classList.toggle('ok', Boolean(tok));
-    const lbl = $('puterMiniLbl');
-    if (lbl) lbl.textContent = tok ? (name ? `Puter · ${name}` : 'Puter connected') : 'Log in with Puter';
-    mini.title = tok ? 'Signed in with Puter — more models unlocked. Click to switch account.' : 'Log in with Puter for more models';
-  }
-  const ap = $('authPuter');
-  if (ap) {
-    ap.classList.toggle('ok', Boolean(tok));
-    const b = ap.querySelector('.apBody b');
-    if (b) b.textContent = tok ? `Signed in with Puter${name ? ' · ' + name : ''}` : 'Log in with Puter';
-  }
-}
-
-async function signInWithPuter(after, switchAccount) {
-  if (!window.puter || typeof puter.auth?.signIn !== 'function') {
-    alert('Puter.js could not load — check your connection and try again.');
-    return;
-  }
-  try {
-    // request_auth forces the account re-pick prompt *even when this site
-    // already holds a Puter token* — only the explicit "switch account" pill
-    // should do that. Plain sign-in (gate button) lets Puter skip the prompt
-    // for a site it has seen before, per the auth.signIn docs.
-    const res = await puter.auth.signIn(switchAccount && puterTok() ? { request_auth: true } : undefined);
-    if (!res || !res.success || !res.token) throw new Error(res?.msg || 'puter sign-in failed');
-    localStorage.setItem('ab.puter', res.token);
-    localStorage.setItem('ab.puterUser', String(res.username || ''));
-    paintPuter();
-
-    if (!sessTok()) {
-      // Puter signs the user into aibuilder too, so the app gate lifts.
-      const r = await fetch(`${API}/api/auth/puter`, {
-        method: 'POST',
-        headers: authHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify({ token: res.token }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.error || `could not finish sign-in (HTTP ${r.status})`);
-      localStorage.setItem('ab.tok', d.token);
-      localStorage.setItem('ab.user', d.username);
-      if (!$('authGate')?.hidden) { location.reload(); return; }
-    }
-
-    if (typeof after === 'function') await after();
-  } catch (e) {
-    if (e?.error === 'popup_blocked') {
-      alert('Your browser blocked the Puter login popup — allow popups for this site and try again.');
-      return;
-    }
-    if (e?.error === 'auth_window_closed') return; // user cancelled — not an error
-    console.error('[putert]', e);
-    alert('Puter sign-in failed: ' + String(e?.msg || e?.message || e));
-  }
-}
-
-$('authPuter')?.addEventListener('click', () => signInWithPuter());
-$('puterMini')?.addEventListener('click', () => {
-  signInWithPuter(async () => {
-    await loadModels();
-    notify('Puter', 'Signed in — more models are now unlocked in the picker.');
-  }, /* switchAccount */ true);
-});
-paintPuter();
 
 const whoBtn = $('whoBtn');
 function setPub(published) {
@@ -970,13 +894,6 @@ document.querySelectorAll('.copyBtn').forEach((btn) => {
   });
 });
 
-const PUTER_CODING_RANK = [
-  'gpt-5.6-luna', 'claude-opus-4-8', 'gpt-5.4', 'claude-sonnet-5',
-  'gemini-3.7-flash', 'gpt-5.4-mini', 'deepseek-v4-pro', 'qwen3-coder-plus',
-  'gpt-5.2', 'gemini-3.1-flash-lite', 'glm-5.3', 'deepseek-v3.2',
-  'qwen3-coder-flash', 'codestral-2508', 'kimi-k2.7-code',
-];
-
 async function loadModels() {
   let worker = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -991,44 +908,16 @@ async function loadModels() {
     }
   }
 
-  let puter = null;
-  if (window.puter?.ai?.listModels && puterTok()) {
-    try {
-      const list = await Promise.race([
-        window.puter.ai.listModels(),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('puter.ai.listModels timed out')), 8000)),
-      ]);
-      if (Array.isArray(list)) {
-        puter = list
-          .map((m) => ({ id: `puter/${m?.id}`, label: m?.name || m?.id }))
-          .filter((m) => m.id.length > 6);
-      }
-    } catch (e) {
-      console.warn('loadModels: puter.ai.listModels failed', e);
-    }
-  }
-
   const names = [];
   const seen = new Set();
   for (const n of (worker?.models || [])) { seen.add(n); names.push(n); }
-  if (puter) {
-    puter.sort((a, b) => {
-      const ra = PUTER_CODING_RANK.indexOf(a.id.slice(6));
-      const rb = PUTER_CODING_RANK.indexOf(b.id.slice(6));
-      return (ra === -1 ? 100 : ra) - (rb === -1 ? 100 : rb);
-    });
-    for (const m of puter) {
-      if (!seen.has(m.id)) { seen.add(m.id); names.push(m.id); }
-    }
-  }
 
   if (names.length) {
     modelSel.innerHTML = '';
     for (const n of names) {
       const o = document.createElement('option');
       o.value = n;
-      const pm = puter && puter.find((m) => m.id === n);
-      o.textContent = pm ? `${pm.label} (${n})` : n;
+      o.textContent = n;
       modelSel.appendChild(o);
     }
     const saved = localStorage.getItem('ab.model');

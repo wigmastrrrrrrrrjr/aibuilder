@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { store } from './store.js';
 import { FileStreamer } from './parser.js';
 import { systemPrompt, workspaceSystemPrompt } from './prompt.js';
-import { extractKey, builtinKey, localOllamaUrl, openrouterKey, extractPuterToken } from './keys.js';
+import { extractKey, builtinKey, localOllamaUrl, openrouterKey } from './keys.js';
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
 import { createClient } from '@supabase/supabase-js';
@@ -14,7 +14,6 @@ import { terminalEnabled, mirrorToTerminal, readTerminalFiles, diffTerminal } fr
 const OLLAMA_URL = 'https://ollama.com/api/chat';
 const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const PUTER_URL = 'https://api.puter.com/drivers/call';
 const MISTRAL_MODEL = 'mistral-small-latest';
 const MODEL_RE = /^[A-Za-z0-9._:/+%-]{1,64}$/;
 const TEMP_MIN = 1;
@@ -122,25 +121,15 @@ async function chargeEffort(user, model, effort) {
 // local run; the terminal daemon calls it for an offloaded run. It resolves the
 // API key, project, presence, model, credits and file context and records the
 // user message. Returns { error, status } to reject, or the run context.
-export async function prepareChat({ user, body, message, apiKey, sid, key: forcedKey, ownKey: forcedOwnKey, puterToken }) {
+export async function prepareChat({ user, body, message, apiKey, sid, key: forcedKey, ownKey: forcedOwnKey }) {
   // BYOK: a user-supplied key (x-api-key header or body.apiKey) takes priority
   // over the built-in platform key. It is used for this request only.
   const headerKey = typeof apiKey === 'string' ? apiKey : '';
   const bodyKey = typeof body?.apiKey === 'string' ? body.apiKey : '';
-  const puter = typeof puterToken === 'string' ? puterToken : extractPuterToken(apiKey, bodyKey);
-  // A Puter model without a connected Puter account can't run (Puter bills the
-  // user) — rather than nag for a login, fall back to the platform's default
-  // free model so the build still goes through.
-  if (typeof body?.model === 'string' && body.model.startsWith('puter/') && !puter) {
-    body = { ...body, model: 'gpt-oss:120b' };
-  }
   const isLocalModel = typeof body.model === 'string' && body.model.startsWith('local:');
-  const isPuterModel = typeof body.model === 'string' && body.model.startsWith('puter/');
   const ownKey = typeof forcedOwnKey === 'boolean' ? forcedOwnKey : Boolean(extractKey(headerKey, bodyKey));
   const key = forcedKey || extractKey(headerKey, bodyKey) || builtinKey();
-  // Puter users supply the compute through their own account (user-pays), so
-  // no built-in key is required and no platform credits are charged.
-  if (!key && !isLocalModel && !isPuterModel) {
+  if (!key && !isLocalModel) {
     return { error: { error: 'no API key — add one in the UI (🔑) or set OLLAMA_API_KEY/MISTRAL_API_KEY in .env' }, status: 500 };
   }
   {
@@ -188,13 +177,16 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
 
   // Chat is rate-limited only (3000 req/min per IP in app.js) — no per-request
   // credit cost. Credit balances are still tracked for the gift feature.
+  if (model.startsWith('puter/')) {
+    return { error: { error: 'Puter models are no longer supported — pick an Ollama, OpenRouter, Mistral or local model' }, status: 400 };
+  }
   await store.setModel(pid, model);
 
   // Effort: the user picks how hard the AI works. Deep/Deepest charge credits
   // (Standard and Fast stay free); platform-paid requests only — BYOK/local
   // requests get the longer generation for free since the user owns the compute.
   const effort = effortLevel(body.effort);
-  if (!ownKey && !isLocalModel && !isPuterModel) {
+  if (!ownKey && !isLocalModel) {
     const chargeErr = await chargeEffort(user, model, effort);
     if (chargeErr) return { error: chargeErr, status: 402 };
   }
@@ -202,7 +194,7 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
   const fileCtx = await buildFileContext(pid);
   await store.addMessage(pid, 'user', message, user.name);
 
-  return { pid, model, effort, temperature: clampedTemp(body?.temperature, model), fileCtx, key, ownKey, isLocalModel, isPuterModel, puter, project };
+  return { pid, model, effort, temperature: clampedTemp(body?.temperature, model), fileCtx, key, ownKey, isLocalModel, project };
 }
 
 // Run one generation turn: emits `meta`, streams tokens and tool events, and
@@ -211,7 +203,7 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
 // and a signal that only aborts on explicit cancel. The loop body below keeps
 // its original indentation so the two hosts share one implementation.
 export async function runChat(ctx) {
-  const { body, message, pid, model, effort, fileCtx, key, signal, puter, temperature = TEMP_MIN } = ctx;
+  const { body, message, pid, model, effort, fileCtx, key, signal, temperature = TEMP_MIN } = ctx;
   const send = typeof ctx.emit === 'function' ? ctx.emit : () => {};
 
   send({ type: 'meta', projectId: pid, model, effort: EFFORT[effort].label });
@@ -414,7 +406,7 @@ export async function runChat(ctx) {
         let upstream;
         let providerUsed = null;
         try {
-          ({ upstream, provider } = await openUpstream(model, buildGenMessages(), key, signal, emit, EFFORT[effort], puter, temperature));
+          ({ upstream, provider } = await openUpstream(model, buildGenMessages(), key, signal, emit, EFFORT[effort], temperature));
         } catch (e) {
           if (!signal.aborted) send({ type: 'error', message: e.message });
           break;
@@ -442,12 +434,7 @@ export async function runChat(ctx) {
                 j = JSON.parse(payload);
               } catch { continue; }
               let tok = '';
-              if (provider === 'puter') {
-                const fr = j?.finish_reason || j?.message?.finish_reason;
-                if (fr) finish = fr;
-                if (j?.done === true && !finish) finish = 'stop';
-                tok = j?.text ?? j?.delta?.content ?? j?.message?.content ?? '';
-              } else if (provider === 'mistral' || provider === 'openrouter') {
+              if (provider === 'mistral' || provider === 'openrouter') {
                 const fr = j?.choices?.[0]?.finish_reason;
                 if (fr) finish = fr;
                 tok = j?.choices?.[0]?.delta?.content ?? '';
@@ -613,7 +600,7 @@ async function localChat(c, { user, body, message }) {
   const ac = new AbortController();
   c.req.raw.signal.addEventListener('abort', () => ac.abort());
 
-  const prep = await prepareChat({ user, body, message, apiKey: c.req.header('x-api-key'), sid: body.sid, puterToken: extractPuterToken(c.req.header('x-puter-token')) });
+  const prep = await prepareChat({ user, body, message, apiKey: c.req.header('x-api-key'), sid: body.sid });
   if (prep.error) return c.json(prep.error, prep.status);
 
   const enc = new TextEncoder();
@@ -659,7 +646,6 @@ async function offloadChat(c, { user, body, message }) {
         runId: typeof body.runId === 'string' ? body.runId.slice(0, 64) : '',
         user: { id: user.id, name: user.name },
         body, message, apiKey, key, ownKey,
-        puterToken: extractPuterToken(c.req.header('x-puter-token')),
       }),
     });
     if (!r.ok || !r.body) return null;
@@ -695,12 +681,11 @@ chat.get('/stream/:runId', async (c) => {
 
 // ---- generator op helpers ---------------------------------------------------
 
-async function openUpstream(model, messages, key, signal, emit, effortCfg, puter, temperature = TEMP_MIN) {
+async function openUpstream(model, messages, key, signal, emit, effortCfg, temperature = TEMP_MIN) {
   const mistralKey = getVar('MISTRAL_API_KEY') || '';
   const orKey = openrouterKey();
   const localUrl = await localOllamaUrl();
   const isLocalModel = typeof model === 'string' && model.startsWith('local:');
-  const isPuterModel = typeof model === 'string' && model.startsWith('puter/');
   const localModel = isLocalModel ? model.slice(6) : model;
   const eff = effortCfg || EFFORT[2];
   const ollamaOpts = { num_predict: eff.tokens, num_ctx: eff.ctx };
@@ -763,35 +748,8 @@ async function openUpstream(model, messages, key, signal, emit, effortCfg, puter
     return { upstream: r, provider: 'openrouter' };
   };
 
-  // Puter models run through the user's Puter account (user-pays): the app
-  // passes that user's token along so Puter can bill them directly. Body
-  // matches the current drivers/call contract (interface/driver/method/args).
-  const tryPuter = async () => {
-    if (!puter) throw new Error('sign in with Puter to use puter models');
-    const pbody = {
-        interface: 'puter-chat-completion',
-        driver: 'ai-chat',
-        method: 'complete',
-        test_mode: false,
-        args: { messages, model: isPuterModel ? model.slice('puter/'.length) : model, stream: true, temperature, max_tokens: eff.tokens },
-      };
-    console.log('[puter] call drivers/call model=', pbody.args.model, 'messages=', JSON.stringify(messages).slice(0, 120));
-    const r = await fetch(PUTER_URL, {
-      method: 'POST',
-      signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
-      headers: { Authorization: `Bearer ${puter}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(pbody),
-    });
-    console.log('[puter] drivers/call response status=', r.status);
-    if (!r.ok) {
-      const t = await r.text().catch(() => '');
-      throw new Error(`puter ${r.status}: ${t.slice(0, 200)}`);
-    }
-    return { upstream: r, provider: 'puter' };
-  };
-
   const isORModel = typeof model === 'string' && (model.includes('/') || model === 'openrouter/free');
-  if (isPuterModel) return tryPuter();
+  if (typeof model === 'string' && model.startsWith('puter/')) throw new Error('Puter models are no longer supported');
   if (isORModel) return tryOpenRouter();
   if (isLocalModel && localUrl) return tryLocal();
   try {
@@ -847,13 +805,6 @@ async function workspaceChat(c, body, message, user) {
   }
 
   const isLocalModel = typeof body.model === 'string' && body.model.startsWith('local:');
-  // No Puter account connected? Drop to the platform's default free model
-  // instead of nagging for a login (see prepareChat).
-  if (typeof body.model === 'string' && body.model.startsWith('puter/') && !extractPuterToken(c.req.header('x-puter-token'))) {
-    body = { ...body, model: 'gpt-oss:120b' };
-  }
-  const isPuterModel = typeof body.model === 'string' && body.model.startsWith('puter/');
-  const puter = extractPuterToken(c.req.header('x-puter-token'));
   const ownKey = Boolean(extractKey(
     c.req.header('x-api-key'),
     typeof body.apiKey === 'string' ? body.apiKey : '',
@@ -862,15 +813,18 @@ async function workspaceChat(c, body, message, user) {
     c.req.header('x-api-key'),
     typeof body.apiKey === 'string' ? body.apiKey : '',
   ) || builtinKey();
-  if (!key && !isLocalModel && !isPuterModel) {
+  if (!key && !isLocalModel) {
     return c.json({ error: 'no API key — add one in the UI (🔑) or set OLLAMA_API_KEY/MISTRAL_API_KEY in .env' }, 500);
   }
 
   const requested = typeof body.model === 'string' && MODEL_RE.test(body.model) ? body.model : '';
   const model = requested || getVar('OLLAMA_MODEL') || 'gemma4:31b';
+  if (model.startsWith('puter/')) {
+    return c.json({ error: 'Puter models are no longer supported — pick an Ollama, OpenRouter, Mistral or local model' }, 400);
+  }
 
   const effort = effortLevel(body.effort);
-  if (!ownKey && !isLocalModel && !isPuterModel) {
+  if (!ownKey && !isLocalModel) {
     const chargeErr = await chargeEffort(user, model, effort);
     if (chargeErr) return c.json(chargeErr, 402);
   }
@@ -989,7 +943,7 @@ async function workspaceChat(c, body, message, user) {
         let upstream;
         let providerUsed = null;
         try {
-          ({ upstream, provider } = await openUpstream(model, buildWsMessages(transcript, attempt === 1 ? message : wsRepairPrompt()), key, ac.signal, emit, EFFORT[effort], puter, temperature));
+          ({ upstream, provider } = await openUpstream(model, buildWsMessages(transcript, attempt === 1 ? message : wsRepairPrompt()), key, ac.signal, emit, EFFORT[effort], temperature));
         } catch (e) {
           if (!ac.signal.aborted) send({ type: 'error', message: e.message });
           break;
@@ -1015,12 +969,7 @@ async function workspaceChat(c, body, message, user) {
                 j = JSON.parse(payload);
               } catch { continue; }
               let tok = '';
-              if (provider === 'puter') {
-                const fr = j?.finish_reason || j?.message?.finish_reason;
-                if (fr) finish = fr;
-                if (j?.done === true && !finish) finish = 'stop';
-                tok = j?.text ?? j?.delta?.content ?? j?.message?.content ?? '';
-              } else if (provider === 'mistral' || provider === 'openrouter') {
+              if (provider === 'mistral' || provider === 'openrouter') {
                 const fr = j?.choices?.[0]?.finish_reason;
                 if (fr) finish = fr;
                 tok = j?.choices?.[0]?.delta?.content ?? '';

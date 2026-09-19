@@ -34,6 +34,20 @@ function fmtDate(ts) {
   catch { return ''; }
 }
 
+const VIEW_W = 1280;
+const VIEW_H = 720;
+
+function fit(shot) {
+  const fr = shot.querySelector('iframe');
+  if (!fr) return;
+  const rect = shot.getBoundingClientRect();
+  const scale = rect.width > 0 ? rect.width / VIEW_W : 1;
+  shot.style.aspectRatio = `${VIEW_W} / ${VIEW_H}`;
+  fr.style.width = `${VIEW_W}px`;
+  fr.style.height = `${VIEW_H}px`;
+  fr.style.transform = `scale(${scale})`;
+}
+
 function card(app, featured) {
   const d = document.createElement('article');
   d.className = 'card' + (featured ? ' large' : '');
@@ -51,7 +65,12 @@ function card(app, featured) {
   fr.referrerPolicy = 'no-referrer';
   fr.title = `${app.name} preview`;
   fr.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-modals');
-  fr.addEventListener('load', () => shot.classList.add('loaded'));
+  fr.addEventListener('load', () => {
+    fit(shot);
+    shot.classList.add('loaded');
+  });
+  const ro = new ResizeObserver(() => fit(shot));
+  ro.observe(shot);
   const title = document.createElement('h3');
   title.className = 'shotTitle';
   title.textContent = app.name;
