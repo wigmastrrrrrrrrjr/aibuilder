@@ -134,6 +134,7 @@ function startRun(spec) {
       const prep = await prepareChat({
         user: spec.user, body: spec.body, message: spec.message,
         apiKey: spec.apiKey, sid: spec.body?.sid, key: spec.key, ownKey: spec.ownKey,
+        puterToken: spec.puterToken,
       });
       if (prep.error) {
         run.emit({ type: 'error', message: prep.error.error || 'could not start the build' });

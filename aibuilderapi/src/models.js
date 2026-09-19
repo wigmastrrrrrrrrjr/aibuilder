@@ -5,13 +5,37 @@
 //   whatever plan that key entitles, unfiltered.
 
 import { Hono } from 'hono';
-import { extractKey, builtinKey, mistralKey, localOllamaUrl, openrouterKey } from './keys.js';
+import { extractKey, builtinKey, mistralKey, localOllamaUrl, openrouterKey, extractPuterToken } from './keys.js';
 import { getVar } from './env.js';
 
 const BASE = 'https://ollama.com/api/tags';
 const OR_BASE = 'https://openrouter.ai/api/v1/models';
+const PUTER_DETAILS = 'https://api.puter.com/puterai/chat/models/details';
 const cache = { t: 0, names: [] };
 const orCache = { t: 0, names: [] };
+const puterCache = { t: 0, ids: [] };
+
+// Coding-suitable Puter model shortlist (id -> preference order), verified
+// against the live catalogue above (Sept 2026). Puter bills the *user*, so
+// these are exposed only to users who signed in with Puter (x-puter-token
+// present) and behave like the free tier cost-wise for the platform.
+const PUTER_PICKS = [
+  'gpt-5.6-luna',
+  'claude-opus-4-8',
+  'gpt-5.4',
+  'claude-sonnet-5',
+  'gemini-3.7-flash',
+  'gpt-5.4-mini',
+  'deepseek-v4-pro',
+  'qwen3-coder-plus',
+  'gpt-5.2',
+  'gemini-3.1-flash-lite',
+  'glm-5.3',
+  'deepseek-v3.2',
+  'qwen3-coder-flash',
+  'codestral-2508',
+  'kimi-k2.7-code',
+];
 
 // Models the free plan can actually run (verified via /api/chat probes;
 // see test/probe-models.sh to re-check after Ollama changes entitlements).
@@ -101,7 +125,7 @@ const LOCAL_COST = 0.4;
 
 export function modelCost(model) {
   if (typeof model === 'string' && model.startsWith('local:')) return LOCAL_COST;
-  if (typeof model === 'string' && (model.endsWith(':free') || model === 'openrouter/free')) return FREE_TIER_COST;
+  if (typeof model === 'string' && (model.endsWith(':free') || model === 'openrouter/free' || model.startsWith('puter/'))) return FREE_TIER_COST;
   return CREDIT_COST[model] || FREE_TIER_COST;
 }
 
@@ -112,6 +136,29 @@ function sortForCoding(names) {
     const ra = rankOf(a); const rb = rankOf(b);
     return (ra === -1 ? 99 : ra) - (rb === -1 ? 99 : rb);
   });
+}
+
+// Live Puter catalogue (public endpoint, no token needed to list). Filtered
+// down to the coding shortlist so the dropdown stays readable; if the endpoint
+// is unreachable we serve the snapshot so the feature still works.
+async function puterNames() {
+  if (puterCache.ids.length === 0 || Date.now() - puterCache.t > 6 * 3600_000) {
+    try {
+      const r = await fetch(PUTER_DETAILS);
+      if (r.ok) {
+        const j = await r.json();
+        const live = new Set(
+          (Array.isArray(j) ? j : j.models || [])
+            .map((m) => m?.id)
+            .filter(Boolean),
+        );
+        puterCache.ids = PUTER_PICKS.filter((id) => live.has(id));
+      }
+      puterCache.t = Date.now();
+    } catch { /* serve snapshot */ }
+  }
+  const ids = puterCache.ids.length ? puterCache.ids : PUTER_PICKS;
+  return ids.map((id) => `puter/${id}`);
 }
 
 // OpenRouter free coding picks rank just below Ollama's top tier.
@@ -127,12 +174,15 @@ function rankOf(m) {
 models.get('/', async (c) => {
   const userKey = extractKey(c.req.header('x-api-key'));
   const key = userKey || builtinKey();
+  // Puter adds "more models" for signed-in Puter users only (user-pays).
+  const puterTok = extractPuterToken(c.req.header('x-puter-token'));
+  const puters = puterTok ? await puterNames() : [];
 
   // No key configured at all? Still populate the dropdown with the known
   // free-tier models so the UI works; chat will surface a clear error.
   if (!key) {
     return c.json({
-      models: sortForCoding([...FREE_MODELS]),
+      models: sortForCoding([...FREE_MODELS, ...puters]),
       recommended: recommendedPick([...FREE_MODELS]),
       freePlanOnly: true,
       warning: 'server has no OLLAMA_API_KEY secret — set it via: npm --prefix aibuilderapi run secret:key',
@@ -170,7 +220,7 @@ models.get('/', async (c) => {
         const names = (j.models || []).map(m => m.name).filter(Boolean);
         if (userKey) {
           return c.json({
-            models: sortForCoding(names),
+            models: sortForCoding([...names, ...puters]),
             recommended: recommendedPick(names.length ? names : [...FREE_MODELS]),
             freePlanOnly: false,
             usingOwnKey: true,
@@ -207,11 +257,16 @@ models.get('/', async (c) => {
       if (!names.includes(m)) names.push(m);
     }
   }
+  // Append Puter models (only when a Puter token is present)
+  for (const m of puters) {
+    if (!names.includes(m)) names.push(m);
+  }
   return c.json({
     models: sortForCoding(names),
     recommended: recommendedPick(names.length ? names : [...FREE_MODELS]),
     freePlanOnly: !bypassFreeFilter,
     openrouter: Boolean(orKey),
+    puter: Boolean(puterTok),
   });
 });
 

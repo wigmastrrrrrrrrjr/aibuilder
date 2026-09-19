@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#e8501a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="style.css?v=45">
+<link rel="stylesheet" href="style.css?v=46">
 <script>(function(){try{var t=localStorage.getItem('ab.theme')||((window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light');document.documentElement.dataset.theme=t}catch(e){}})();</script>
 </head>
 <body>
@@ -154,6 +154,7 @@
         <div id="composerTop">
           <span class="fieldLabel">Model</span>
           <select id="modelSel" title="Model used for generation"></select>
+          <button id="puterMini" type="button" title="Log in with Puter for more models — billed to your Puter account"><span class="ms" data-ic="bolt"></span><em id="puterMiniLbl">Log in with Puter</em></button>
           <span class="fieldLabel">Effort</span>
           <div class="effortSel" id="effortSel" role="group" aria-label="Effort level">
             <button type="button" data-effort="1" title="Fast — quickest, free">Fast</button>
@@ -380,6 +381,13 @@
           <span>I agree to the <a href="tos.html" target="_blank" rel="noopener">Terms of Service</a>, <a href="tou.html" target="_blank" rel="noopener">Terms of Use</a> and <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
         <button id="authGo" type="submit">Sign up</button>
         <button id="authSwitch" type="button">Already have an account? Log in</button>
+        <div class="authPuterRow" id="authPuterRow">
+          <div class="authOr"><span>or</span></div>
+          <button id="authPuter" type="button" title="Use 500+ models from OpenAI, Anthropic and Google — usage is billed to your Puter account, no API keys needed">
+            <span class="apLogo">P</span>
+            <span class="apBody"><b>Log in with Puter</b><em>unlock more models, billed to your Puter account</em></span>
+          </button>
+        </div>
       </form>
       <form id="verifyForm" class="authFormBox" hidden>
         <h1 id="authTitle2" class="hShared">Check your email</h1>
@@ -414,10 +422,11 @@
   <a class="footBtn" href="privacy.html" target="_blank" rel="noopener">Privacy</a>
 </footer>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="https://js.puter.com/v2/"></script>
     <script>
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=45"></script>
+    <script src="app.js?v=46"></script>
 </body>
 </html>

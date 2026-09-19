@@ -257,9 +257,15 @@ function currentModel() {
 /* ---------- BYOK (bring your own Ollama API key) ---------- */
 const ownKey = () => localStorage.getItem('ab.key') || '';
 
+// "Log in with Puter" — per-user token stored locally and passed along like a
+// BYOK key; Puter bills the user, so this app never touches their costs.
+const puterTok = () => localStorage.getItem('ab.puter') || '';
+const puterUser = () => localStorage.getItem('ab.puterUser') || '';
+
 function authHeaders(extra) {
   const h = { ...(extra || {}) };
   if (ownKey()) h['x-api-key'] = ownKey();
+  if (puterTok()) h['x-puter-token'] = puterTok();
   if (sessTok()) h['x-ab-sess'] = sessTok();
   return h;
 }
@@ -472,6 +478,57 @@ $('authSwitch').addEventListener('click', () => {
   pendingTfaSession = null;
 });
 paintAuth();
+
+/* ---------- Log in with Puter (more models, billed to the user) ---------- */
+function paintPuter() {
+  const tok = puterTok();
+  const name = puterUser();
+  const mini = $('puterMini');
+  if (mini) {
+    mini.classList.toggle('ok', Boolean(tok));
+    const lbl = $('puterMiniLbl');
+    if (lbl) lbl.textContent = tok ? (name ? `Puter · ${name}` : 'Puter connected') : 'Log in with Puter';
+    mini.title = tok ? 'Signed in with Puter — more models unlocked. Click to switch account.' : 'Log in with Puter for more models';
+  }
+  const ap = $('authPuter');
+  if (ap) {
+    ap.classList.toggle('ok', Boolean(tok));
+    const b = ap.querySelector('.apBody b');
+    if (b) b.textContent = tok ? `Signed in with Puter${name ? ' · ' + name : ''}` : 'Log in with Puter';
+  }
+}
+
+async function signInWithPuter(after) {
+  if (!window.puter || typeof puter.auth?.signIn !== 'function') {
+    alert('Puter.js could not load — check your connection and try again.');
+    return;
+  }
+  try {
+    const res = await puter.auth.signIn(puterTok() ? { request_auth: true } : undefined);
+    if (!res || !res.success || !res.token) throw new Error(res?.msg || 'puter sign-in failed');
+    localStorage.setItem('ab.puter', res.token);
+    localStorage.setItem('ab.puterUser', String(res.username || ''));
+    paintPuter();
+    if (typeof after === 'function') await after();
+  } catch (e) {
+    if (e?.error === 'popup_blocked') {
+      alert('Your browser blocked the Puter login popup — allow popups for this site and try again.');
+      return;
+    }
+    if (e?.error === 'auth_window_closed') return; // user cancelled — not an error
+    console.error('[putert]', e);
+    alert('Puter sign-in failed: ' + String(e?.msg || e?.message || e));
+  }
+}
+
+$('authPuter')?.addEventListener('click', () => signInWithPuter());
+$('puterMini')?.addEventListener('click', () => {
+  signInWithPuter(async () => {
+    await loadModels();
+    notify('Puter', 'Signed in — more models are now unlocked in the picker.');
+  });
+});
+paintPuter();
 
 const whoBtn = $('whoBtn');
 function setPub(published) {
