@@ -60,6 +60,26 @@ const jobId = () => 'kt_' + (crypto.randomUUID ? crypto.randomUUID().replace(/-/
 
 export async function execViaKaggle(pid, cmd, opts = {}) {
   if (!kaggleRelayEnabled()) return { kind: 'unavailable', error: 'kaggle relay not configured' };
+
+  // Fast-fail when no agent has been seen recently so run_command does not pay
+  // the full relay deadline only to fall back to the terminal daemon anyway.
+  try {
+    const aborter = new AbortController();
+    const probeTimer = setTimeout(() => aborter.abort(), 10000);
+    let st = null;
+    try {
+      const sRes = await fetch(`${URL()}/api/kterm/status`, { signal: aborter.signal });
+      st = await sRes.json().catch(() => null);
+    } finally {
+      clearTimeout(probeTimer);
+    }
+    if (!st || st.enabled !== true || Number(st.agentsOnline || 0) === 0) {
+      return { kind: 'unavailable', error: 'no kaggle agents online' };
+    }
+  } catch (e) {
+    return { kind: 'unavailable', error: `kaggle status probe failed: ${String(e?.message || e)}` };
+  }
+
   const timeoutMs = Math.max(1000, Number(opts.timeoutMs) || 30000);
   const body = {
     token: TOKEN(),
@@ -106,7 +126,19 @@ export async function execViaKaggle(pid, cmd, opts = {}) {
 
 export const kterm = new Hono();
 
-kterm.get('/status', (c) => c.json({ enabled: kaggleRelayEnabled() }));
+kterm.get('/status', async (c) => {
+  let agentsOnline = 0;
+  const db = ktermDb(c);
+  if (db) {
+    try {
+      const r = await db.prepare(
+        `SELECT COUNT(*) AS n FROM kterm_agents WHERE last_seen > ?`
+      ).bind(Date.now() - 120000).first();
+      agentsOnline = Number(r?.n || 0);
+    } catch { /* best effort */ }
+  }
+  return c.json({ enabled: kaggleRelayEnabled(), agentsOnline });
+});
 
 // Create a job and wait for the agent to finish it. Bound by timeoutMs + 15s.
 // Token-gated like the terminal daemon's own HTTP surface (no user session).
