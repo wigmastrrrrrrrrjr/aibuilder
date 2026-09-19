@@ -211,7 +211,7 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
 // and a signal that only aborts on explicit cancel. The loop body below keeps
 // its original indentation so the two hosts share one implementation.
 export async function runChat(ctx) {
-  const { body, message, pid, model, effort, fileCtx, key, signal, puter } = ctx;
+  const { body, message, pid, model, effort, fileCtx, key, signal, puter, temperature = TEMP_MIN } = ctx;
   const send = typeof ctx.emit === 'function' ? ctx.emit : () => {};
 
   send({ type: 'meta', projectId: pid, model, effort: EFFORT[effort].label });
@@ -414,7 +414,7 @@ export async function runChat(ctx) {
         let upstream;
         let providerUsed = null;
         try {
-          ({ upstream, provider } = await openUpstream(model, buildGenMessages(), key, signal, emit, EFFORT[effort], puter, prep.temperature));
+          ({ upstream, provider } = await openUpstream(model, buildGenMessages(), key, signal, emit, EFFORT[effort], puter, temperature));
         } catch (e) {
           if (!signal.aborted) send({ type: 'error', message: e.message });
           break;
