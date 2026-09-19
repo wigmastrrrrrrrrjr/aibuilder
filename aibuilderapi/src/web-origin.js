@@ -7,7 +7,6 @@ import { getVar } from './env.js';
 export const GITHUB_URL = 'https://github.com/wigmastrrrrrrrrjr/aibuilder';
 
 export const DEFAULT_ALLOWED_ORIGINS = [
-  'https://websim.com',
   'http://localhost',
   'http://127.0.0.1',
   'https://aibuilderapi.csomeone301.workers.dev',
