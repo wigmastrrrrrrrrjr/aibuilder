@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
-# One-time setup for the Kaggle remote terminal (kaggle agent).
+# One-time setup for the KAGGLE remote executor (aibuilder relay agent).
+#
+# NOTE (2026-09): on this account, Kaggle notebook kernels have NO outbound
+# internet at all (UI runs return HTTP 000; raw TCP to public IPs times out;
+# there is no "Internet" toggle in the UI). agent.py therefore cannot reach the
+# relay from inside a Kaggle kernel on this account. Use it on any OTHER
+# internet-connected host instead:
+#
+#   KTERM_TOKEN=<we> RELAY_URL=https://aibuilderapi.csomeone301.workers.dev \
+#     KTERM_ROOT=/srv/aibuilder-sandbox nohup python3 agent.py >> /tmp/aib-agent.log 2>&1 &
+#
+# The relay is enabled whenever the worker's KAGGLE_RELAY_URL var is set, and
+# /api/kterm/status -> agentsOnline shows whether an agent is currently polling
+# (last seen within 120s).
 #
 # Run on the DEVICE (where your Kaggle API token lives) to store the token and
-# print the steps to start the agent inside a Kaggle Notebook:
+# print the steps to start the agent on a remote host:
 #
 #   KAGGLE_API_TOKEN=KGAT_... bash kaggeld/setup.sh
 #
