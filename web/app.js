@@ -944,26 +944,34 @@ document.querySelectorAll('.copyBtn').forEach((btn) => {
 });
 
 async function loadModels() {
-  try {
-    const r = await fetch(`${API}/api/models`, { headers: authHeaders() });
-    const j = await r.json();
-    const names = Array.isArray(j.models) && j.models.length
-      ? j.models
-      : ['gemma4:31b', 'gpt-oss:120b', 'gpt-oss:20b'];
-    const recommended = typeof j.recommended === 'string' && names.includes(j.recommended)
-      ? j.recommended
-      : names[0];
-    modelSel.innerHTML = '';
-    for (const n of names) {
-      const o = document.createElement('option');
-      o.value = n; o.textContent = n;
-      modelSel.appendChild(o);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const r = await fetch(`${API}/api/models`, { headers: authHeaders() });
+      const j = await r.json();
+      const names = Array.isArray(j.models) && j.models.length
+        ? j.models
+        : ['gemma4:31b', 'gpt-oss:120b', 'gpt-oss:20b'];
+      const recommended = typeof j.recommended === 'string' && names.includes(j.recommended)
+        ? j.recommended
+        : names[0];
+      modelSel.innerHTML = '';
+      for (const n of names) {
+        const o = document.createElement('option');
+        o.value = n; o.textContent = n;
+        modelSel.appendChild(o);
+      }
+      const saved = localStorage.getItem('ab.model');
+      if (saved && names.includes(saved)) modelSel.value = saved;
+      else modelSel.value = recommended;
+      return;
+    } catch (e) {
+      if (attempt === 3) {
+        console.warn('loadModels: /api/models unreachable', e);
+        modelSel.innerHTML = `<option>gpt-oss:120b</option>`;
+        return;
+      }
+      await new Promise((res) => setTimeout(res, 1200 * attempt));
     }
-    const saved = localStorage.getItem('ab.model');
-    if (saved && names.includes(saved)) modelSel.value = saved;
-    else modelSel.value = recommended;
-  } catch {
-    modelSel.innerHTML = `<option>gpt-oss:120b</option>`;
   }
 }
 
