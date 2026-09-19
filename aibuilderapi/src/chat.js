@@ -121,12 +121,15 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
   // over the built-in platform key. It is used for this request only.
   const headerKey = typeof apiKey === 'string' ? apiKey : '';
   const bodyKey = typeof body?.apiKey === 'string' ? body.apiKey : '';
+  const puter = typeof puterToken === 'string' ? puterToken : extractPuterToken(apiKey, bodyKey);
+  // A Puter model without a connected Puter account can't run (Puter bills the
+  // user) — rather than nag for a login, fall back to the platform's default
+  // free model so the build still goes through.
+  if (typeof body?.model === 'string' && body.model.startsWith('puter/') && !puter) {
+    body = { ...body, model: 'gpt-oss:120b' };
+  }
   const isLocalModel = typeof body.model === 'string' && body.model.startsWith('local:');
   const isPuterModel = typeof body.model === 'string' && body.model.startsWith('puter/');
-  const puter = typeof puterToken === 'string' ? puterToken : extractPuterToken(apiKey, bodyKey);
-  if (isPuterModel && !puter) {
-    return { error: { error: 'that model requires a Puter login — click "Log in with Puter" near the model picker first' }, status: 401 };
-  }
   const ownKey = typeof forcedOwnKey === 'boolean' ? forcedOwnKey : Boolean(extractKey(headerKey, bodyKey));
   const key = forcedKey || extractKey(headerKey, bodyKey) || builtinKey();
   // Puter users supply the compute through their own account (user-pays), so
@@ -832,6 +835,11 @@ async function workspaceChat(c, body, message, user) {
   }
 
   const isLocalModel = typeof body.model === 'string' && body.model.startsWith('local:');
+  // No Puter account connected? Drop to the platform's default free model
+  // instead of nagging for a login (see prepareChat).
+  if (typeof body.model === 'string' && body.model.startsWith('puter/') && !extractPuterToken(c.req.header('x-puter-token'))) {
+    body = { ...body, model: 'gpt-oss:120b' };
+  }
   const isPuterModel = typeof body.model === 'string' && body.model.startsWith('puter/');
   const puter = extractPuterToken(c.req.header('x-puter-token'));
   const ownKey = Boolean(extractKey(
