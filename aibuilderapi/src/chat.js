@@ -757,7 +757,8 @@ async function openUpstream(model, messages, key, signal, emit, effortCfg, puter
   };
 
   // Puter models run through the user's Puter account (user-pays): the app
-  // passes that user's token along so Puter can bill them directly.
+  // passes that user's token along so Puter can bill them directly. Body
+  // matches the current drivers/call contract (interface/driver/method/args).
   const tryPuter = async () => {
     if (!puter) throw new Error('sign in with Puter to use puter models');
     const r = await fetch(PUTER_URL, {
@@ -765,10 +766,11 @@ async function openUpstream(model, messages, key, signal, emit, effortCfg, puter
       signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
       headers: { Authorization: `Bearer ${puter}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        interface: 'puter-chat-completions',
-        driver: 'openai-completion',
+        interface: 'puter-chat-completion',
+        driver: 'ai-chat',
+        method: 'complete',
         test_mode: false,
-        input: { model, messages, stream: true, temperature: 0.4, max_tokens: eff.tokens },
+        args: { messages, model, stream: true, temperature: 0.4, max_tokens: eff.tokens },
       }),
     });
     if (!r.ok) {
