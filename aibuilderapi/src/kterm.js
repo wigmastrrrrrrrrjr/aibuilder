@@ -226,6 +226,13 @@ kterm.get('/next', async (c) => {
   const db = ktermDb(c);
   if (!db) return c.json({ error: 'relay db not configured' }, 503);
   const now = Date.now();
+  // Heartbeat: remember this agent's last poll so operators can see it online.
+  const agentId = String(c.req.query('agent') || 'anonymous').slice(0, 120);
+  try {
+    await db.prepare(
+      `INSERT OR REPLACE INTO kterm_agents (agent, last_seen) VALUES (?,?)`
+    ).bind(agentId, now).run();
+  } catch { /* heartbeat is best-effort */ }
   // Atomic claim: flip pending -> running; only the winner gets the row.
   const candidate = await db.prepare(
     `SELECT id FROM kterm_jobs WHERE status='pending' ORDER BY created_at ASC LIMIT 1`
@@ -247,6 +254,21 @@ kterm.get('/next', async (c) => {
       timeout_ms: row.timeout_ms, files,
     },
   });
+});
+
+// Operator view: agents that have polled recently (heartbeat), newest first.
+kterm.get('/agents', async (c) => {
+  const db = ktermDb(c);
+  if (!db) return c.json({ error: 'relay db not configured' }, 503);
+  const rows = await db.prepare(
+    `SELECT agent, last_seen FROM kterm_agents ORDER BY last_seen DESC LIMIT 50`
+  ).all ? await db.prepare(
+    `SELECT agent, last_seen FROM kterm_agents ORDER BY last_seen DESC LIMIT 50`
+  ).all() : [];
+  const list = (Array.isArray(rows) ? rows : rows.results || []).map((r) => ({
+    agent: r.agent, lastSeen: r.last_seen, ageMs: Date.now() - Number(r.last_seen || 0),
+  }));
+  return c.json({ agents: list });
 });
 
 // Agent-side: report results for a job.

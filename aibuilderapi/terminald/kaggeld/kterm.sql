@@ -22,3 +22,8 @@ CREATE TABLE IF NOT EXISTS kterm_jobs (
   updated_at   INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_kterm_pending ON kterm_jobs (status, created_at);
+
+CREATE TABLE IF NOT EXISTS kterm_agents (
+  agent     TEXT PRIMARY KEY,
+  last_seen INTEGER NOT NULL
+);

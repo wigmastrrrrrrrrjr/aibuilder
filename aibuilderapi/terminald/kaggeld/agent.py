@@ -317,7 +317,7 @@ def main():
 
     while True:
         try:
-            claims = http_json("GET", "/api/kterm/next?token=" + urllib.parse.quote(TOKEN), timeout=POLL + 30)
+            claims = http_json("GET", "/api/kterm/next?token=" + urllib.parse.quote(TOKEN) + "&agent=" + urllib.parse.quote(AGENT), timeout=POLL + 30)
         except RuntimeError as exc:
             print("poll error: %s" % exc, file=sys.stderr, flush=True)
             time.sleep(POLL)
