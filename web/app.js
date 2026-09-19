@@ -257,10 +257,9 @@ function currentModel() {
 /* ---------- BYOK (bring your own Ollama API key) ---------- */
 const ownKey = () => localStorage.getItem('ab.key') || '';
 
-// "Log in with Puter" — per-user token stored locally and passed along like a
-// BYOK key; Puter bills the user, so this app never touches their costs.
+// Stored Puter token, passed to the API like a BYOK key so Puter models keep
+// working for anyone who already signed in; Puter bills the user directly.
 const puterTok = () => localStorage.getItem('ab.puter') || '';
-const puterUser = () => localStorage.getItem('ab.puterUser') || '';
 
 function authHeaders(extra) {
   const h = { ...(extra || {}) };
@@ -478,72 +477,6 @@ $('authSwitch').addEventListener('click', () => {
   pendingTfaSession = null;
 });
 paintAuth();
-
-/* ---------- Log in with Puter (more models, billed to the user) ---------- */
-function paintPuter() {
-  const tok = puterTok();
-  const name = puterUser();
-  const mini = $('puterMini');
-  if (mini) {
-    mini.classList.toggle('ok', Boolean(tok));
-    const lbl = $('puterMiniLbl');
-    if (lbl) lbl.textContent = tok ? (name ? `Puter · ${name}` : 'Puter connected') : 'Log in with Puter';
-    mini.title = tok ? 'Signed in with Puter — more models unlocked. Click to switch account.' : 'Log in with Puter for more models';
-  }
-  const ap = $('authPuter');
-  if (ap) {
-    ap.classList.toggle('ok', Boolean(tok));
-    const b = ap.querySelector('.apBody b');
-    if (b) b.textContent = tok ? `Signed in with Puter${name ? ' · ' + name : ''}` : 'Log in with Puter';
-  }
-}
-
-async function signInWithPuter(after) {
-  if (!window.puter || typeof puter.auth?.signIn !== 'function') {
-    alert('Puter.js could not load — check your connection and try again.');
-    return;
-  }
-  try {
-    const res = await puter.auth.signIn(puterTok() ? { request_auth: true } : undefined);
-    if (!res || !res.success || !res.token) throw new Error(res?.msg || 'puter sign-in failed');
-    localStorage.setItem('ab.puter', res.token);
-    localStorage.setItem('ab.puterUser', String(res.username || ''));
-    paintPuter();
-
-    if (!sessTok()) {
-      // Puter signs the user into aibuilder too, so the app gate lifts.
-      const r = await fetch(`${API}/api/auth/puter`, {
-        method: 'POST',
-        headers: authHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify({ token: res.token }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.error || `could not finish sign-in (HTTP ${r.status})`);
-      localStorage.setItem('ab.tok', d.token);
-      localStorage.setItem('ab.user', d.username);
-      if (!$('authGate')?.hidden) { location.reload(); return; }
-    }
-
-    if (typeof after === 'function') await after();
-  } catch (e) {
-    if (e?.error === 'popup_blocked') {
-      alert('Your browser blocked the Puter login popup — allow popups for this site and try again.');
-      return;
-    }
-    if (e?.error === 'auth_window_closed') return; // user cancelled — not an error
-    console.error('[putert]', e);
-    alert('Puter sign-in failed: ' + String(e?.msg || e?.message || e));
-  }
-}
-
-$('authPuter')?.addEventListener('click', () => signInWithPuter());
-$('puterMini')?.addEventListener('click', () => {
-  signInWithPuter(async () => {
-    await loadModels();
-    notify('Puter', 'Signed in — more models are now unlocked in the picker.');
-  });
-});
-paintPuter();
 
 const whoBtn = $('whoBtn');
 function setPub(published) {
