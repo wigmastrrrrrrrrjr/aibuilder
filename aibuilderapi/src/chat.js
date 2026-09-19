@@ -125,7 +125,7 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
   const isPuterModel = typeof body.model === 'string' && body.model.startsWith('puter/');
   const puter = typeof puterToken === 'string' ? puterToken : extractPuterToken(apiKey, bodyKey);
   if (isPuterModel && !puter) {
-    return { error: { error: 'that model needs a saved Puter token in this browser (sign in at puter.com, then send x-puter-token) — or pick a built-in model instead' }, status: 401 };
+    return { error: { error: 'that model requires a Puter login — click "Log in with Puter" near the model picker first' }, status: 401 };
   }
   const ownKey = typeof forcedOwnKey === 'boolean' ? forcedOwnKey : Boolean(extractKey(headerKey, bodyKey));
   const key = forcedKey || extractKey(headerKey, bodyKey) || builtinKey();
