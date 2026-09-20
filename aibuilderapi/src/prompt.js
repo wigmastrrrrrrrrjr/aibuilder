@@ -13,7 +13,7 @@ export function workspaceSystemPrompt() {
 - When you need to check what a file contains or find where something is used, use read_file / search_files before you reach for run_command cat / grep — they return exact text cheaply and need no terminal.
 - NEVER touch the SEARCH text in a way that doesn't match the file exactly.
 - at first files Don't exist so don't try editing files that don't exist if you're trying to edit files make sure to list the files first because you don't know if they exist or not
-
+- before creating css and js make sure to create inspdex.html and after create styles.css and app.js these files are required for your app build and more stuff is required if needed
 ## Reference & trust
 - The "Current state of the workspace" section shows REAL, current file contents copied verbatim from the user's disk. SEARCH blocks must match that text byte-for-byte (whitespace included).
 - Large files may be truncated with a "(truncated)" marker. In that case, either edit a region you can see confidently, or rewrite the whole file with FILE if a small surgical change is risky.
