@@ -1538,6 +1538,11 @@ async function send() {
           const phrase = ev.text || ACT_PHASES[dots];
           if (aiMsg) aiMsg.setStatus(phrase);
           activityText.textContent = phrase.charAt(0).toUpperCase() + phrase.slice(1);
+        } else if (ev.type === 'summary') {
+          if (aiMsg) { aiMsg.setStatus('done'); aiMsg.append(ev.text || ''); }
+          else { const b=makeAiMsg(ev.model||''); b.append(ev.text||''); b.setStatus('done'); }
+          activityText.textContent = 'Memory compacted — the build continues from the summary above.';
+          termLog('memory ' + String(ev.model||'').split('/').pop() + ' compacted', 's');
         } else if (ev.type === 'brief') {
           const html = briefCardHtml(ev.brief);
           if (aiMsg) aiMsg.card('brief', html);

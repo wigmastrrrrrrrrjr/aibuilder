@@ -375,7 +375,52 @@ export async function runChat(ctx) {
       // build only fully stops when a round finishes cleanly or the cap is hit.
       const MAX_ROUNDS = Math.max(1, Number(getVar('MAX_BUILD_ROUNDS') || 12) || 12);
       const histRef = await store.history(pid).then(ms => ms.map(m => ({ role: m.role, content: m.content })));
-      const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + fileCtx }, ...histRef];
+
+      // ---- memory compaction guard (start of build) -----------------------------
+      // Every build round feeds the whole stored chat history back into the
+      // model so it can keep working without re-reading files. But history is
+      // bounded by the effort level's context budget — and token/context
+      // windows are finite. When the running memory (system prompt + injected
+      // project context + stored history) approaches the effort's context
+      // budget, the model stops fitting everything and silently "forgets" the
+      // project's oldest context.
+      //
+      // Compaction is triggered at the START of the next build when the budget
+      // is nearly full: we ask the model (non-streaming, same provider cascade
+      // as the build) to write ONE dense PROJECT SUMMARY covering the whole
+      // project — goal, every file with its purpose/state, what works/what's
+      // broken, what remains, gotchas and the single next build step — show it
+      // to the user as an AI message, WIPE the stored chat memory, and continue
+      // the build from just that summary so context never silently degrades.
+      const memRatio = Math.max(0.35, Math.min(0.99, Number(getVar('MEMORY_COMPACT_RATIO') || 0.78) || 0.78));
+      const memBudget = (EFFORT[effort].ctx || 32000) * memRatio;
+      const memEstTokens = (txt) => Math.ceil(String(txt || '').length / 4);
+      const memFull = () =>
+        (memEstTokens(systemPrompt()) + memEstTokens(fileCtx) +
+          histRef.reduce((n, m) => n + memEstTokens(m.content), 0)) >= memBudget;
+      if (memFull() && histRef.length >= 4) {
+        // memory nearly full → compact once at the top of this build
+        const instructStr = typeof instruct === 'string' ? instruct : '';
+        const compactedText = await summarizeProject({
+          model, key, signal, effort,
+          effortLabel: EFFORT[effort].label,
+          effortCfg: EFFORT[effort],
+          fileCtx,
+          history: histRef.slice(),
+          instruct: instructStr,
+          emit: send,
+        });
+        if (compactedText) {
+          // WIPE stored chat memory and continue from just the project summary
+          try { await store.clearMessages(pid); } catch {}
+          try { await store.addMessage(pid, 'assistant', compactedText); } catch {}
+          histRef.length = 0;
+          histRef.push({ role: 'assistant', content: compactedText });
+          send({ type: 'summary', model, text: compactedText });
+          send({ type: 'note', message: 'Memory compacted — the build now continues from the project summary above.' });
+        }
+      }
+const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + fileCtx }, ...histRef];
       const repairPrompt = () => {
         const parts = [];
         if (diag.length) parts.push('FAILED OPERATIONS (exact errors — fix every one):\n' + diag.map((x) => ' - ' + x).join('\n'));
@@ -755,6 +800,131 @@ async function openUpstream(model, messages, key, signal, emit, effortCfg, tempe
 // content so the client can apply edits to its own disk. No server-side
 // project, no storage, no presence — the TUI is the source of truth.
 const CTX_BUDGET_WS = 30000;
+
+// ---- memory compaction ------------------------------------------------------
+//
+// Project builds grow their stored chat memory with every round. That memory
+// is fed back to the model each build, and each effort level has a fixed
+// context window (`EFFORT[e].ctx`). When the running context — system prompt +
+// injected project files + stored chat history — approaches that budget, the
+// model quietly stops seeing its own earlier decisions: it "forgets" the
+// project mid-build.
+//
+// We never want a build to silently lose the project's story, so when memory
+// is nearly full at the START of the next build we COMPACT: a single dense
+// PROJECT SUMMARY is generated (non-streaming, same provider cascade + model
+// + effort knob as the build itself), shown to the user as a normal AI message,
+// then the stored chat memory is wiped and replaced with that summary as the
+// new first message. The build then continues from just the summary — the
+// model "looks at it, clears its memory, and goes off the summary".
+
+const COMPACT_RATIO_DEFAULT = 0.78;            // trigger: estTokens(...) ratio of ctx budget
+const COMPACT_MIN_HISTORY = 3;                 // don't shrink a tiny fresh conversation
+const SUMMARY_TOKEN_BUDGET = 900;              // output cap for the summary (tokens)
+const SUMMARY_TEMP = 0.25;                     // low = tight, factual write
+
+// Rough-but-cheap token estimate; only used to decide "am I nearly out of
+// context?", so ±20% is fine (mistral–style: ~3.7 chars/token).
+const estimateTokens = (text) => Math.ceil(String(text || '').length / 3.7);
+
+// One-shot project summariser. Mirrors `openUpstream`'s provider cascade but
+// issues a NON-STREAMING completion so nothing leaks into the build's SSE
+// pipe, and returns the project summary text (or `''` when every provider is
+// down — the build then just continues with its memory intact).
+async function summarizeProject({ model, key, signal, effort, effortLabel, effortCfg, fileCtx, history, instruct, emit }) {
+  const mistralKey = String(getVar('MISTRAL_API_KEY') || '');
+  const orKey = openrouterKey();
+  const localOllama = await localOllamaUrl().catch(() => '');
+  const isLocalModel = typeof model === 'string' && model.startsWith('local:');
+  const isORModel = typeof model === 'string'
+    && (model.includes('/') || String(getVar('OPENROUTER_API_KEY') || '') || model.startsWith('openrouter/'));
+
+  const messages = [
+    { role: 'system', content:
+        'You are the memory keeper for an AI that builds web apps. The user ' +
+        'is about to let the AI continue working on the SAME project from a ' +
+        'clean slate, so you must write a PROJECT SUMMARY that captures the ' +
+        'ENTIRE project in ONE dense block so the AI can keep building ' +
+        'without needing the old chat log.\n\n' +
+        'Cover, in compact bullet-ish prose (fast to re-read):\n' +
+        ' 1. The app\'s single goal + who it is for.\n' +
+        ' 2. EVERY file: path → its purpose + current state (written / works / broken / half-done / untested), on its own bullet.\n' +
+        ' 3. ALL the architecture + data flow + naming conventions + how it is served/deployed.\n' +
+        ' 4. What already WORKS (be specific).\n' +
+        ' 5. What is BROKEN or INCOMPLETE right now — exact errors, missing pieces, gotchas.\n' +
+        ' 6. Remaining TODOs in priority order.\n' +
+        ' 7. Gotchas that have burned the AI before (encoding, CLI quirks, etc).\n' +
+        ' 8. The SINGLE next build step.\n\n' +
+        `EFFORT/context level: ${effortLabel}.\n` +
+        (instruct ? String(instruct) : '') },
+    ...(fileCtx
+      ? [{ role: 'user', content: 'Here is a compact snapshot of the current workspace files (paths + truncated contents):\n' + fileCtx }]
+      : []),
+    ...(history?.length
+      ? [{ role: 'user', content: 'Here is the entire chat memory (the AI\'s own working transcript). Summarize it into the PROJECT SUMMARY:\n\n' +
+          history.map(m => `### ${m.role}\n${m.content}`).join('\n\n') }]
+      : []),
+  ];
+
+  const pathFetch = async (url, headers, body) => {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`summary ${r.status}`);
+    return r.json();
+  };
+
+  const fromOpenRouter = async () => {
+    const j = await pathFetch(OPENROUTER_URL, {
+      Authorization: `Bearer ${orKey}`, 'Content-Type': 'application/json',
+    }, { model, messages, stream: false, max_tokens: SUMMARY_TOKEN_BUDGET, temperature: SUMMARY_TEMP });
+    return String(j?.choices?.[0]?.message?.content || '').trim();
+  };
+
+  const fromServingOllama = async () => {
+    const j = await pathFetch(OLLAMA_URL, {
+      Authorization: `Bearer ${key}`, 'Content-Type': 'application/json',
+    }, { model, messages, stream: false, think: effortCfg?.think !== false, options: { num_predict: SUMMARY_TOKEN_BUDGET, num_ctx: effortCfg?.ctx, temperature: SUMMARY_TEMP } });
+    return String(j?.message?.content || '').trim();
+  };
+
+  const fromMistral = async () => {
+    const j = await pathFetch(MISTRAL_URL, {
+      Authorization: `Bearer ${mistralKey}`, 'Content-Type': 'application/json',
+    }, { model: MISTRAL_MODEL, messages, stream: false, max_tokens: SUMMARY_TOKEN_BUDGET, temperature: SUMMARY_TEMP });
+    return String(j?.choices?.[0]?.message?.content || '').trim();
+  };
+
+  const fromLocalOllama = async () => {
+    if (!localOllama) throw new Error('no LOCAL_OLLAMA_URL');
+    const m = isLocalModel ? model.slice(6) : model;
+    const j = await pathFetch(localOllama, {
+      Authorization: `Bearer ${key}`, 'Content-Type': 'application/json',
+    }, { model: m, messages, stream: false, think: effortCfg?.think !== false, options: { num_predict: SUMMARY_TOKEN_BUDGET, num_ctx: effortCfg?.ctx, temperature: SUMMARY_TEMP } });
+    return String(j?.message?.content || '').trim();
+  };
+
+  const warn = (msg) => { if (emit) emit({ type: 'note', message: msg }); };
+  if (isORModel && orKey) return fromOpenRouter();
+  if (isLocalModel && localOllama) return fromLocalOllama();
+  try {
+    return await fromServingOllama();
+  } catch (e1) {
+    try {
+      return await fromMistral();
+    } catch (e2) {
+      try {
+        return await fromLocalOllama();
+      } catch (e3) {
+        warn(`couldn\'t summarise project memory (all providers down: ${e1.message} / ${e2.message} / ${e3.message}) — continuing with the memory I have.`);
+        return '';
+      }
+    }
+  }
+}
 
 function buildWorkspaceContext(files) {
   if (!files.length) return '';

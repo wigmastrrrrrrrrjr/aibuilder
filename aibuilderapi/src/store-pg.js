@@ -281,6 +281,10 @@ export function createPgStore() {
       for (const r of rows) r.content = await decryptText(r.content);
       return rows;
     },
+    async clearMessages(pid) {
+      const { error } = await client().from('messages').delete().eq('project_id', pid);
+      if (error) throw new Error(`db clear messages: ${error.message}`);
+    },
 
     // ---- plan & rename ------------------------------------------------------
     async setPlan(pid, plan) {

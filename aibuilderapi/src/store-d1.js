@@ -212,6 +212,9 @@ export function createD1Store(d1) {
       for (const r of results) r.content = await decryptText(r.content);
       return results;
     },
+    async clearMessages(pid) {
+      await d1.prepare('DELETE FROM messages WHERE project_id = ?').bind(pid).run();
+    },
 
     // ---- plan & rename --------------------------------------------------------
     async setPlan(pid, plan) {

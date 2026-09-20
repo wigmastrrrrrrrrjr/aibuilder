@@ -210,6 +210,10 @@ export const v2Messages = {
     for (const r of data || []) r.content = await decryptText(r.content);
     return data || [];
   },
+  async clear(projectId) {
+    const { error } = await client().from('v2_messages').delete().eq('project_id', projectId);
+    if (error) throw error;
+  },
 };
 
 export const v2Events = {
