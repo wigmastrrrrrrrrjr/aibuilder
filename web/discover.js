@@ -100,7 +100,15 @@ function card(app, featured) {
   remix.onclick = async () => {
     remix.disabled = true; remix.textContent = 'Remixing…';
     try {
-      const r = await fetch(`${API}/api/projects/${app.id}/remix`, { method: 'POST' });
+      // Remix is authenticated (and published-only) server-side. The builder
+      // stores its session on the same origin, so reuse it when present.
+      const tok = localStorage.getItem('ab.tok') || '';
+      const r = await fetch(`${API}/api/projects/${app.id}/remix`, {
+        method: 'POST',
+        headers: tok ? { 'x-ab-sess': tok } : {},
+      });
+      if (r.status === 401) throw new Error('Sign in to remix this app.');
+      if (r.status === 403) throw new Error('This app is no longer published.');
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const copy = await r.json();
       location.href = `index.html?project=${copy.id}`;

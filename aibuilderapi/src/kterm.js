@@ -27,6 +27,26 @@ export function kaggleRelayEnabled() {
   return Boolean(URL() && TOKEN());
 }
 
+// Relay auth. Fails CLOSED: if TERMINAL_TOKEN is not configured the relay
+// cannot authenticate anyone, so every route rejects rather than comparing
+// against an empty string (which a caller could satisfy by sending "").
+// This matters because /api/kterm/exec can execute a shell command and read
+// any project's files.
+function tokenOk(c, presented) {
+  const want = TOKEN();
+  if (!want) return false;
+  const got = String(presented == null ? '' : presented);
+  if (got.length !== want.length) return false;
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ got.charCodeAt(i);
+  return diff === 0;
+}
+
+const badToken = (c) => c.json(
+  { error: TOKEN() ? 'bad token' : 'relay not configured' },
+  TOKEN() ? 401 : 503,
+);
+
 // D1 comes from the request env in Workers. Local/tests can inject a mock via
 // setKtermDb (accepts the D1-style prepare()/run() API or a tiny shim).
 let injectedDb = null;
@@ -146,7 +166,7 @@ kterm.post('/exec', async (c) => {
   const { token, pid, cmd, cwd, timeoutMs } = await c.req.json().catch(() => ({}));
   const db = ktermDb(c);
   if (!db) return c.json({ kind: 'unavailable', error: 'relay db not configured' }, 503);
-  if (token !== TOKEN()) return c.json({ error: 'bad token' }, 401);
+  if (!tokenOk(c, token)) return badToken(c);
   const safeCmd = String(cmd || '');
   if (!safeCmd) return c.json({ error: 'cmd (string) is required' }, 400);
   if (!pid || typeof pid !== 'string') return c.json({ error: 'pid (string) is required' }, 400);
@@ -179,7 +199,7 @@ kterm.post('/exec', async (c) => {
 // Wait on an existing job id (used by /exec after creating it).
 kterm.get('/wait', async (c) => {
   const token = c.req.query('token');
-  if (token !== TOKEN()) return c.json({ error: 'bad token' }, 401);
+  if (!tokenOk(c, token)) return badToken(c);
   const db = ktermDb(c);
   if (!db) return c.json({ kind: 'unavailable', error: 'relay db not configured' }, 503);
   const id = String(c.req.query('id') || '');
@@ -254,7 +274,7 @@ async function finishJob(c, db, id, pid, row) {
 // Agent-side: claim (and run) the oldest pending job for this account.
 kterm.get('/next', async (c) => {
   const token = c.req.query('token');
-  if (token !== TOKEN()) return c.json({ error: 'bad token' }, 401);
+  if (!tokenOk(c, token)) return badToken(c);
   const db = ktermDb(c);
   if (!db) return c.json({ error: 'relay db not configured' }, 503);
   const now = Date.now();
@@ -290,6 +310,7 @@ kterm.get('/next', async (c) => {
 
 // Operator view: agents that have polled recently (heartbeat), newest first.
 kterm.get('/agents', async (c) => {
+  if (!tokenOk(c, c.req.query('token'))) return badToken(c);
   const db = ktermDb(c);
   if (!db) return c.json({ error: 'relay db not configured' }, 503);
   const rows = await db.prepare(
@@ -306,7 +327,7 @@ kterm.get('/agents', async (c) => {
 // Agent-side: report results for a job.
 kterm.post('/done', async (c) => {
   const { token, id, output, code, blocked, error, agent, result_files } = await c.req.json().catch(() => ({}));
-  if (token !== TOKEN()) return c.json({ error: 'bad token' }, 401);
+  if (!tokenOk(c, token)) return badToken(c);
   const db = ktermDb(c);
   if (!db) return c.json({ error: 'relay db not configured' }, 503);
   if (!id || typeof id !== 'string') return c.json({ error: 'id required' }, 400);

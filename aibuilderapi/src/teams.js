@@ -15,6 +15,7 @@
 import { Hono } from 'hono';
 import { store } from './store.js';
 import { requireUser } from './auth.js';
+import { requireWrite } from './authz.js';
 
 export const teams = new Hono();
 
@@ -89,11 +90,13 @@ teams.delete('/api/teams/:tid', requireUser, async (c) => {
 // Share a project with a team (owner only). team_id '' detaches it.
 teams.post('/api/projects/:pid/team', requireUser, async (c) => {
   const pid = c.req.param('pid');
-  const project = await store.getProject(pid);
-  if (!project) return c.json({ error: 'not found' }, 404);
-  if (project.owner && project.owner !== c.get('user').name) {
-    return c.json({ error: "you don't own this project" }, 403);
-  }
+  // requireWrite, not a local `project.owner && ...` test. That test skipped
+  // the check entirely when owner was empty (the column default), so anyone
+  // could attach an ownerless project to their own team -- and canWrite then
+  // grants team members write access, turning a shared-resource quirk into a
+  // write-access escalation.
+  const project = await requireWrite(c, pid);
+  if (project instanceof Response) return project;
   const { team_id } = await c.req.json().catch(() => ({}));
   const tid = String(team_id || '').trim();
   if (tid) {

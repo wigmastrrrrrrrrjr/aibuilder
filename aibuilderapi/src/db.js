@@ -140,6 +140,10 @@ useStore({
   async listProjects() {
     return db.prepare('SELECT * FROM projects ORDER BY created_at DESC').all();
   },
+  // Owner-scoped listing; see the note in store-pg.js about the unscoped one.
+  async listProjectsByOwner(owner) {
+    return db.prepare('SELECT * FROM projects WHERE owner = ? ORDER BY created_at DESC').all(owner);
+  },
   async getProject(pid) {
     return db.prepare('SELECT * FROM projects WHERE id = ?').get(pid) ?? null;
   },
@@ -505,11 +509,19 @@ useStore({
       'INSERT INTO messages (project_id, role, content, user, created_at) VALUES (?, ?, ?, ?, ?)'
     ).run(pid, role, content, user, Date.now());
   },
-  async history(pid, limit = 12) {
+    async history(pid, limit = 12) {
     return db.prepare(
       `SELECT role, content, user FROM messages WHERE project_id = ?
        ORDER BY created_at DESC LIMIT ?`
     ).all(pid, limit).reverse();
+  },
+
+  // Drop every stored chat message for a project. Used by memory compaction:
+  // when the conversation outgrows the context budget the app replaces the
+  // whole history with a single generated PROJECT SUMMARY message, so the next
+  // build continues from the summary instead of re-loading a stale window.
+  async clearMessages(pid) {
+    db.prepare('DELETE FROM messages WHERE project_id = ?').run(pid);
   },
 
   // ---- live event log (multiplayer) ---------------------------------------

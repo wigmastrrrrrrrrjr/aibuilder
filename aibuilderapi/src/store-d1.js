@@ -25,6 +25,13 @@ export function createD1Store(d1) {
       const { results } = await d1.prepare('SELECT * FROM projects ORDER BY created_at DESC').all();
       return results;
     },
+    // Owner-scoped listing; see the note in store-pg.js about the unscoped one.
+    async listProjectsByOwner(owner) {
+      const { results } = await d1.prepare(
+        'SELECT * FROM projects WHERE owner = ? ORDER BY created_at DESC'
+      ).bind(owner).all();
+      return results;
+    },
     async getProject(pid) {
       return await d1.prepare('SELECT * FROM projects WHERE id = ?').bind(pid).first();
     },
@@ -211,6 +218,9 @@ export function createD1Store(d1) {
       ).bind(pid, limit).all();
       for (const r of results) r.content = await decryptText(r.content);
       return results;
+    },
+    async clearMessages(pid) {
+      await d1.prepare('DELETE FROM messages WHERE project_id = ?').bind(pid).run();
     },
 
     // ---- plan & rename --------------------------------------------------------

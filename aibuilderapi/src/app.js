@@ -14,6 +14,10 @@ import { terminal, serverApi } from './terminal.js';
 import { kterm } from './kterm.js';
 import { agentBridge } from './agent-bridge.js';
 import { auth, requireUser, canWrite } from './auth.js';
+import {
+  requireVisible, requireRead, requireWrite, requirePublished,
+  mintPreviewToken, publicProjectView, canRead, actorOf,
+} from './authz.js';
 import { teams } from './teams.js';
 import { features } from './features.js';
 import { forum } from './forum.js';
@@ -149,24 +153,25 @@ app.get('/api/docs', (c) => {
       { method: 'GET', path: '/api/meta', auth: 'none', description: 'Model + key status' },
       { method: 'GET', path: '/api/models', auth: 'none', description: 'Model catalogue' },
 
-      { method: 'GET', path: '/api/projects', auth: 'none', description: 'List projects' },
+      { method: 'GET', path: '/api/projects', auth: 'user', description: 'List projects' },
       { method: 'POST', path: '/api/projects', auth: 'user', body: { name: 'string' }, description: 'Create a project' },
-      { method: 'GET', path: '/api/projects/:pid', auth: 'none', description: 'Project + files + recent messages' },
-      { method: 'GET', path: '/api/projects/:pid/export', auth: 'none', description: 'Raw files (for terminal client / tooling)' },
+      { method: 'GET', path: '/api/projects/:pid', auth: 'owner', description: 'Project + files + recent messages' },
+      { method: 'GET', path: '/api/projects/:pid/export', auth: 'owner', description: 'Raw files (for terminal client / tooling)' },
       { method: 'DELETE', path: '/api/projects/:pid', auth: 'owner', description: 'Delete a project' },
       { method: 'POST', path: '/api/projects/:pid/rename', auth: 'owner', body: { name: 'string' }, description: 'Rename' },
       { method: 'POST', path: '/api/projects/:pid/publish', auth: 'owner', body: { publish: 'boolean', description: 'string' }, description: 'Publish / unpublish to discovery feed' },
-      { method: 'POST', path: '/api/projects/:pid/remix', auth: 'user', description: 'Copy a published app into your own project' },
-      { method: 'GET', path: '/api/projects/:pid/versions?path=<file>&seq=<n>', auth: 'none', description: 'File revision list, or one revision with seq' },
+      { method: 'POST', path: '/api/projects/:pid/remix', auth: 'user', description: 'Copy a PUBLISHED app into your own project (403 for private projects)' },
+      { method: 'GET', path: '/api/projects/:pid/versions?path=<file>&seq=<n>', auth: 'owner', description: 'File revision list, or one revision with seq' },
       { method: 'POST', path: '/api/projects/:pid/restore-version', auth: 'owner', body: { path: 'string', seq: 'number' }, description: 'Undo/redo a single file' },
-      { method: 'GET', path: '/api/projects/:pid/snapshots', auth: 'none', description: 'List project snapshots' },
+      { method: 'GET', path: '/api/projects/:pid/snapshots', auth: 'owner', description: 'List project snapshots' },
       { method: 'POST', path: '/api/projects/:pid/snapshots', auth: 'owner', body: { label: 'string' }, description: 'Take a snapshot' },
-      { method: 'GET', path: '/api/projects/:pid/snapshots/:sid', auth: 'none', description: 'Snapshot + its files' },
+      { method: 'GET', path: '/api/projects/:pid/snapshots/:sid', auth: 'owner', description: 'Snapshot + its files' },
       { method: 'POST', path: '/api/projects/:pid/snapshots/:sid/restore', auth: 'owner', description: 'Roll the whole project back' },
       { method: 'POST', path: '/api/projects/:pid/upload', auth: 'owner', body: 'multipart "files" (repeatable)', description: 'Upload existing files (max 300, 2MB each)' },
       { method: 'POST', path: '/api/projects/:pid/presence', auth: 'user', body: { sid: 'string' }, description: 'Join presence (10-person cap)' },
+      { method: 'POST', path: '/api/projects/:pid/preview-token', auth: 'owner', description: 'Mint a ~15min read-only token so a PRIVATE project can be previewed in an iframe/new tab, which cannot send the session header' },
       { method: 'POST', path: '/api/projects/:pid/presence/leave', auth: 'user', body: { sid: 'string' }, description: 'Leave presence' },
-      { method: 'GET', path: '/api/projects/:pid/presence', auth: 'none', description: 'Who is currently building' },
+      { method: 'GET', path: '/api/projects/:pid/presence', auth: 'owner', description: 'Who is currently building' },
 
       { method: 'GET', path: '/api/discover', auth: 'none', description: 'Published-app discovery feed' },
 
@@ -197,22 +202,22 @@ app.get('/api/docs', (c) => {
       { method: 'POST', path: '/api/features/:id/vote', auth: 'user', body: { vote: 'number' }, description: 'Up/down vote' },
       { method: 'POST', path: '/api/features/:id/status', auth: 'owner', body: { status: 'string' }, description: 'Update feature status' },
 
-      { method: 'POST', path: '/api/projects/:pid/live/:room/push', auth: 'none', body: { data: 'any' }, description: 'Append realtime event' },
-      { method: 'GET', path: '/api/projects/:pid/live/:room?since=<seq>&limit=<n>', auth: 'none', description: 'Poll realtime events (browsers normally use SSE — see live.js)' },
-      { method: 'POST', path: '/api/projects/:pid/chat/send', auth: 'none', body: { room: 'string', text: 'string' }, description: 'Room chat message' },
-      { method: 'GET', path: '/api/projects/:pid/chat/list?room=<r>&since=<seq>&limit=<n>', auth: 'none', description: 'Room chat history' },
+      { method: 'POST', path: '/api/projects/:pid/live/:room/push', auth: 'owner | published', body: { data: 'any' }, description: 'Append realtime event' },
+      { method: 'GET', path: '/api/projects/:pid/live/:room?since=<seq>&limit=<n>', auth: 'owner | published', description: 'Poll realtime events (browsers normally use SSE — see live.js)' },
+      { method: 'POST', path: '/api/projects/:pid/chat/send', auth: 'owner | published', body: { room: 'string', text: 'string' }, description: 'Room chat message' },
+      { method: 'GET', path: '/api/projects/:pid/chat/list?room=<r>&since=<seq>&limit=<n>', auth: 'owner | published', description: 'Room chat history' },
 
-      { method: 'GET', path: '/api/baas/:pid/:coll', auth: 'none', description: 'BaaS list rows' },
-      { method: 'POST', path: '/api/baas/:pid/:coll', auth: 'none', body: 'row fields', description: 'BaaS insert' },
-      { method: 'GET', path: '/api/baas/:pid/:coll/:id', auth: 'none', description: 'BaaS get row' },
-      { method: 'PUT', path: '/api/baas/:pid/:coll/:id', auth: 'none', body: 'patch fields', description: 'BaaS merge-patch row' },
-      { method: 'DELETE', path: '/api/baas/:pid/:coll/:id', auth: 'none', description: 'BaaS delete row' },
+      { method: 'GET', path: '/api/baas/:pid/:coll', auth: 'owner | published', description: 'BaaS list rows' },
+      { method: 'POST', path: '/api/baas/:pid/:coll', auth: 'owner | published', body: 'row fields', description: 'BaaS insert' },
+      { method: 'GET', path: '/api/baas/:pid/:coll/:id', auth: 'owner | published', description: 'BaaS get row' },
+      { method: 'PUT', path: '/api/baas/:pid/:coll/:id', auth: 'owner | published', body: 'patch fields', description: 'BaaS merge-patch row' },
+      { method: 'DELETE', path: '/api/baas/:pid/:coll/:id', auth: 'owner | published', description: 'BaaS delete row' },
 
-      { method: 'GET', path: '/preview/:projectId/*', auth: 'none', description: 'Serve a generated app with the BaaS SDK injected' },
+      { method: 'GET', path: '/preview/:projectId/*', auth: 'owner | published | preview-token', description: 'Serve a generated app with the BaaS SDK injected' },
       { method: 'GET', path: '/__baas.js', auth: 'none', description: 'Client SDK for generated apps (window.creat.db)' },
 
       { method: 'GET', path: '/api/terminal/status', auth: 'none', description: 'Is the cloud terminal configured?' },
-      { method: 'POST', path: '/api/terminal/exec', auth: 'user', body: { pid: 'string', cmd: 'string', cwd: 'string', timeoutMs: 'number' }, description: 'Run a shell command on the project\'s cloud terminal' },
+      { method: 'POST', path: '/api/terminal/exec', auth: 'owner', body: { pid: 'string', cmd: 'string', cwd: 'string', timeoutMs: 'number' }, description: 'Run a shell command on the project\'s cloud terminal' },
     ],
   });
 });
@@ -354,8 +359,8 @@ app.post('/api/credits/grant', requireUser, async (c) => {
 // ---- teambuild: presence (who is building now + 10-person cap) -----------
 app.post('/api/projects/:pid/presence', requireUser, async (c) => {
   const pid = c.req.param('pid');
-  const project = await store.getProject(pid);
-  if (!project) return c.json({ error: 'not found' }, 404);
+  const project = await requireWrite(c, pid);
+  if (project instanceof Response) return project;
   const body = await c.req.json().catch(() => ({}));
   const sid = String(body.sid || '').trim().slice(0, 64) || `cli:${crypto.randomUUID().slice(0, 12)}`;
   const res = await store.touchPresence(pid, sid, c.get('user').name, Date.now());
@@ -364,17 +369,33 @@ app.post('/api/projects/:pid/presence', requireUser, async (c) => {
 
 app.post('/api/projects/:pid/presence/leave', requireUser, async (c) => {
   const pid = c.req.param('pid');
+  const project = await requireWrite(c, pid);
+  if (project instanceof Response) return project;
   const body = await c.req.json().catch(() => ({}));
   const sid = String(body.sid || '').slice(0, 64);
   if (sid) await store.leavePresence(pid, sid);
   return c.json({ ok: true });
 });
 
+// Owner/team only. This was auth:none, so anyone could poll it to learn who is
+// actively editing a private project and when.
 app.get('/api/projects/:pid/presence', async (c) => {
-  const pid = c.req.param('pid');
-  if (!(await store.getProject(pid))) return c.json({ error: 'not found' }, 404);
-  const users = await store.presenceUsers(pid);
+  const project = await requireRead(c, c.req.param('pid'));
+  if (project instanceof Response) return project;
+  const users = await store.presenceUsers(project.id);
   return c.json({ active: users.length, limit: 10, users });
+});
+
+// Mint a short-lived, project-scoped token so the owner can load a PRIVATE
+// preview in an <iframe> / new tab, which cannot send the x-ab-sess header.
+// Scoped to one project, ~15 min, and not a session: it grants read access to
+// that project only and cannot be refreshed or reused elsewhere.
+app.post('/api/projects/:pid/preview-token', requireUser, async (c) => {
+  const project = await requireWrite(c, c.req.param('pid'));
+  if (project instanceof Response) return project;
+  const token = await mintPreviewToken(project.id, c.get('user').name);
+  if (!token) return c.json({ error: 'preview tokens unavailable (no signing secret)' }, 503);
+  return c.json({ token, expiresIn: 900 });
 });
 
 
@@ -382,27 +403,43 @@ app.get('/api/projects/:pid/presence', async (c) => {
 app.route('/api/models', models);
 
 // ---- projects ----------------------------------------------------------------
-app.get('/api/projects', async (c) => c.json(await store.listProjects()));
+// Owner-scoped. This used to be `store.listProjects()` with no auth at all,
+// which returned every project in the database (SELECT *) -- any anonymous
+// caller could enumerate ids and then read each one. Public discovery lives at
+// /api/discover and is filtered to published projects server-side.
+app.get('/api/projects', requireUser, async (c) =>
+  c.json(await store.listProjectsByOwner(c.get('user').name)));
 
 app.post('/api/projects', requireUser, async (c) => {
   const { name } = await c.req.json().catch(() => ({}));
   return c.json(await store.createProject(name, c.get('user').name), 201);
 });
 
+// Published projects are publicly readable (that's the point of the discovery
+// feed); unpublished ones are owner/team only. This returned the file listing
+// AND the last 100 chat messages for ANY project id to anyone, which is how a
+// private app's source and its build conversation both leaked.
+//
+// The split matters: the chat log and the owner/team id columns stay behind the
+// owner check even for a published project, so publishing shares the app, not
+// the builder's conversation about it.
 app.get('/api/projects/:pid', async (c) => {
-  const project = await store.getProject(c.req.param('pid'));
-  if (!project) return c.json({ error: 'not found' }, 404);
+  const project = await requireVisible(c, c.req.param('pid'));
+  if (project instanceof Response) return project;
+  const isOwner = await canRead(project, await actorOf(c));
   return c.json({
-    project,
+    project: isOwner ? project : publicProjectView(project),
     files: await store.listFiles(project.id),
-    messages: await store.history(project.id, 100),
+    messages: isOwner ? await store.history(project.id, 100) : [],
   });
 });
 
 // raw file export for the terminal client (and external tooling) — full contents
+// Owner-only: this is the full decrypted source of the project. It was the
+// single most sensitive read in the API and required no credential at all.
 app.get('/api/projects/:pid/export', async (c) => {
-  const project = await store.getProject(c.req.param('pid'));
-  if (!project) return c.json({ error: 'not found' }, 404);
+  const project = await requireRead(c, c.req.param('pid'));
+  if (project instanceof Response) return project;
   const payload = {
     name: project.name,
     updated_at: project.updated_at || 0,
@@ -418,18 +455,16 @@ app.get('/api/projects/:pid/export', async (c) => {
 
 app.delete('/api/projects/:pid', requireUser, async (c) => {
   const pid = c.req.param('pid');
-  const project = await store.getProject(pid);
-  if (!project) return c.json({ error: 'not found' }, 404);
-  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
+  const project = await requireWrite(c, pid);
+  if (project instanceof Response) return project;
   await store.deleteProject(pid);
   return c.json({ ok: true });
 });
 
 app.post('/api/projects/:pid/rename', requireUser, async (c) => {
   const pid = c.req.param('pid');
-  const project = await store.getProject(pid);
-  if (!project) return c.json({ error: 'not found' }, 404);
-  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
+  const project = await requireWrite(c, pid);
+  if (project instanceof Response) return project;
   const body = await c.req.json().catch(() => ({}));
   const name = String(body.name || '').trim().slice(0, 60);
   if (!name) return c.json({ error: 'name required' }, 400);
@@ -443,9 +478,8 @@ app.post('/api/projects/:pid/rename', requireUser, async (c) => {
 // publish / unpublish to the discovery feed
 app.post('/api/projects/:pid/publish', requireUser, async (c) => {
   const pid = c.req.param('pid');
-  const project = await store.getProject(pid);
-  if (!project) return c.json({ error: 'not found' }, 404);
-  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
+  const project = await requireWrite(c, pid);
+  if (project instanceof Response) return project;
   const body = await c.req.json().catch(() => ({}));
   const publish = body.publish !== false;
   const description = typeof body.description === 'string' ? body.description.slice(0, 300) : undefined;
@@ -457,9 +491,13 @@ app.post('/api/projects/:pid/publish', requireUser, async (c) => {
 });
 
 // remix = copy a published app into a new editable project owned by the remixer
+// Published-only. remix copies every source file into a new project the
+// caller owns, so requiring only a session (as this did) meant ANY signed-in
+// user could exfiltrate ANY private project by remixing it -- a one-request
+// source-code leak that needed no enumeration first.
 app.post('/api/projects/:pid/remix', requireUser, async (c) => {
-  const src = await store.getProject(c.req.param('pid'));
-  if (!src) return c.json({ error: 'not found' }, 404);
+  const src = await requirePublished(c, c.req.param('pid'));
+  if (src instanceof Response) return src;
   return c.json(await store.remix(src.id, c.get('user').name), 201);
 });
 
@@ -467,11 +505,15 @@ app.post('/api/projects/:pid/remix', requireUser, async (c) => {
 // list revisions of one file                 GET  /api/projects/:pid/versions?path=index.html
 // fetch a specific revision's raw content    GET  /api/projects/:pid/versions?path=…&seq=N
 const versionPath = (c) => String(c.req.query('path') || '').trim();
+// Owner-only. Revision history is where rotated-away API keys and deleted
+// secrets survive, so it inherits full project privacy -- publishing does not
+// expose it.
 app.get('/api/projects/:pid/versions', async (c) => {
   const pid = c.req.param('pid');
   const fpath = versionPath(c);
   if (!fpath) return c.json({ error: 'path query required' }, 400);
-  if (!(await store.getProject(pid))) return c.json({ error: 'not found' }, 404);
+  const project = await requireRead(c, pid);
+  if (project instanceof Response) return project;
   const seq = Number(c.req.query('seq')) || 0;
   if (seq) {
     const v = await store.getFileVersion(pid, fpath, seq);
@@ -484,9 +526,8 @@ app.get('/api/projects/:pid/versions', async (c) => {
 // restore a specific revision of one file (undo/redo per file)
 app.post('/api/projects/:pid/restore-version', requireUser, async (c) => {
   const pid = c.req.param('pid');
-  const project = await store.getProject(pid);
-  if (!project) return c.json({ error: 'not found' }, 404);
-  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
+  const project = await requireWrite(c, pid);
+  if (project instanceof Response) return project;
   const body = await c.req.json().catch(() => ({}));
   const fpath = String(body.path || '').trim();
   const seq = Number(body.seq) || 0;
@@ -500,23 +541,26 @@ app.post('/api/projects/:pid/restore-version', requireUser, async (c) => {
 
 // ---- Phase 2: project snapshots --------------------------------------------
 app.get('/api/projects/:pid/snapshots', async (c) => {
-  const pid = c.req.param('pid');
-  if (!(await store.getProject(pid))) return c.json({ error: 'not found' }, 404);
-  return c.json(await store.listSnapshots(pid));
+  const project = await requireRead(c, c.req.param('pid'));
+  if (project instanceof Response) return project;
+  return c.json(await store.listSnapshots(project.id));
 });
 
 app.post('/api/projects/:pid/snapshots', requireUser, async (c) => {
   const pid = c.req.param('pid');
-  const project = await store.getProject(pid);
-  if (!project) return c.json({ error: 'not found' }, 404);
-  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
+  const project = await requireWrite(c, pid);
+  if (project instanceof Response) return project;
   const body = await c.req.json().catch(() => ({}));
   return c.json(await store.takeSnapshot(pid, String(body.label || '').trim()), 201);
 });
 
+// Owner-only, and note the original bug: it looked the snapshot up by
+// (pid, sid) with no project check at all, so it did not even verify the
+// snapshot belonged to a real project.
 app.get('/api/projects/:pid/snapshots/:sid', async (c) => {
-  const pid = c.req.param('pid');
-  const s = await store.getSnapshot(pid, c.req.param('sid'));
+  const project = await requireRead(c, c.req.param('pid'));
+  if (project instanceof Response) return project;
+  const s = await store.getSnapshot(project.id, c.req.param('sid'));
   if (!s) return c.json({ error: 'not found' }, 404);
   return c.json(s);
 });
@@ -524,9 +568,8 @@ app.get('/api/projects/:pid/snapshots/:sid', async (c) => {
 // restore a whole project to a prior snapshot (roll back a bad generation)
 app.post('/api/projects/:pid/snapshots/:sid/restore', requireUser, async (c) => {
   const pid = c.req.param('pid');
-  const project = await store.getProject(pid);
-  if (!project) return c.json({ error: 'not found' }, 404);
-  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
+  const project = await requireWrite(c, pid);
+  if (project instanceof Response) return project;
   try {
     return c.json(await store.restoreSnapshot(pid, c.req.param('sid')));
   } catch (e) {
@@ -539,9 +582,8 @@ app.get('/api/discover', async (c) => c.json(await store.discover()));
 
 // upload an existing app (multipart: repeatable field "files")
 app.post('/api/projects/:pid/upload', requireUser, async (c) => {
-  const project = await store.getProject(c.req.param('pid'));
-  if (!project) return c.json({ error: 'not found' }, 404);
-  if (!(await canWrite(project, c.get('user')))) return c.json({ error: "you don't own this project" }, 403);
+  const project = await requireWrite(c, c.req.param('pid'));
+  if (project instanceof Response) return project;
 
   let form;
   try {

@@ -118,6 +118,12 @@ export function createSplitStore(d1) {
       const [a, b] = await Promise.all([pg.listProjects(), d1s.listProjects()]);
       return mergeById(a, b);
     },
+    async listProjectsByOwner(owner) {
+      const [a, b] = await Promise.all([
+        pg.listProjectsByOwner(owner), d1s.listProjectsByOwner(owner),
+      ]);
+      return mergeById(a, b);
+    },
     async getProject(pid) { return (await pg.getProject(pid)) || d1s.getProject(pid); },
     async deleteProject(pid) {
       if (await pg.getProject(pid)) await pg.deleteProject(pid).catch(() => {});
@@ -155,6 +161,13 @@ export function createSplitStore(d1) {
     // ---- chat ---------------------------------------------------------------
     async addMessage(pid, role, content, user) { await ensureProj(pid); return pg.addMessage(pid, role, content, user); },
     async history(pid, limit) { return readBySrc(pid, () => pg.history(pid, limit), () => d1s.history(pid, limit)); },
+
+    // Clear a project's chat memory from BOTH stores. Messages now always land
+    // in pg (split addMessage), but older projects may still be reading from
+    // d1 (readBySrc), so compaction clears both to be safe.
+    async clearMessages(pid) {
+      await Promise.allSettled([pg.clearMessages(pid), d1s.clearMessages(pid)]);
+    },
 
     // ---- plan & rename ------------------------------------------------------
     async setPlan(pid, plan) { await ensureProj(pid); return pg.setPlan(pid, plan); },
