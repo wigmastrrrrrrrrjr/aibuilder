@@ -66,6 +66,15 @@ async function ensureColumns(d1) {
     feature_id TEXT NOT NULL, user TEXT NOT NULL, vote INTEGER NOT NULL,
     updated_at INTEGER NOT NULL, PRIMARY KEY (feature_id, user))`).run();
   await d1.prepare('CREATE INDEX IF NOT EXISTS idx_feature_votes ON feature_votes (feature_id)').run();
+  // kterm relay
+  await d1.prepare(`CREATE TABLE IF NOT EXISTS kterm_jobs (
+    id TEXT PRIMARY KEY, pid TEXT NOT NULL, cmd TEXT NOT NULL, cwd TEXT NOT NULL DEFAULT '',
+    timeout_ms INTEGER NOT NULL DEFAULT 30000, status TEXT NOT NULL DEFAULT 'pending',
+    output TEXT, code INTEGER, blocked INTEGER NOT NULL DEFAULT 0, error TEXT, agent TEXT,
+    files TEXT, result_files TEXT, created_at INTEGER NOT NULL, updated_at INTEGER
+  )`).run();
+  await d1.prepare('CREATE INDEX IF NOT EXISTS idx_kterm_pending ON kterm_jobs (status, created_at)').run();
+  await d1.prepare(`CREATE TABLE IF NOT EXISTS kterm_agents (agent TEXT PRIMARY KEY, last_seen INTEGER NOT NULL)`).run();
 }
 
 // One-time boot migrations — gate with a per-isolate flag so they stop
