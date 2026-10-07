@@ -30,7 +30,10 @@ import {
 
 export { DEFAULT_ALLOWED_ORIGINS };
 
+const V1_DISABLED = (getVar('V1_DISABLED') || '1') === '1';
+
 export const app = new Hono();
+
 
 // CORS: only approved origins may call this API from a browser — the GitHub
 // Pages site and the worker's own origin by default; loopback origins are kept
@@ -39,6 +42,14 @@ export const app = new Hono();
 // env var (comma-separated). Any OTHER Origin stays public but gets a very
 // strict rate limit below (10 requests/day) instead of a hard block.
 // (Policy lives in web-origin.js so the chat/preview workers share it.)
+
+app.use('*', async (c, next) => {
+  if (V1_DISABLED && !c.req.path.startsWith('/api/v2') && !c.req.path.startsWith('/preview') && !c.req.path.startsWith('/__baas.js') && !c.req.path.startsWith('/api/kterm') && !c.req.path.startsWith('/api/health')) {
+    // Only allow v2 + preview + infra paths. Legacy v1 API is retired.
+    return c.json({ error: 'v1 API retired; use /api/v2' }, 410);
+  }
+  return next();
+});
 
 app.use('*', cors(CORS_OPTIONS));
 
