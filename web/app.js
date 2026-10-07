@@ -271,10 +271,38 @@ function flashChip(path) {
   }
 }
 
-function refreshPreview(bust) {
+// Private previews are owner-only server-side, but an <iframe> src can't carry
+// the x-ab-sess header. Ask the API for a token scoped to THIS project
+// (~15 min, read-only, not a session) and put it in the preview URL.
+let previewTok = '';
+let previewTokFor = '';
+async function getPreviewToken() {
+  if (!projectId) return '';
+  if (previewTok && previewTokFor === projectId) return previewTok;
+  try {
+    const r = await fetch(`${API}/api/projects/${projectId}/preview-token`, {
+      method: 'POST', headers: authHeaders(),
+    });
+    if (!r.ok) return '';
+    const d = await r.json();
+    previewTok = d.token || ''; previewTokFor = projectId;
+    return previewTok;
+  } catch { return ''; }
+}
+// Published projects preview publicly, so a token is optional there.
+function previewUrl(extra) {
+  const q = new URLSearchParams();
+  if (previewTok) q.set('pt', previewTok);
+  if (extra) for (const [k, v] of Object.entries(extra)) q.set(k, v);
+  const s = q.toString();
+  return `${API}/preview/${projectId}/` + (s ? `?${s}` : '');
+}
+
+async function refreshPreview(bust) {
   if (!projectId) return;
   if (previewQuarantined) return; // disabled until the freeze is fixed
-  frame.src = `${API}/preview/${projectId}/` + (bust ? `?t=${Date.now()}` : '');
+  await getPreviewToken();
+  frame.src = previewUrl(bust ? { t: String(Date.now()) } : null);
 }
 
 function currentModel() {
@@ -932,7 +960,7 @@ async function loadModels() {
 }
 
 async function loadProjects(selectPid) {
-  const all = await (await fetch(`${API}/api/projects`)).json();
+  const all = await (await fetch(`${API}/api/projects`, { headers: authHeaders() })).json();
   // sidebar = my projects + every team project I'm a member of
   const me = sessName();
   const list = all.filter((p) => !p.owner || p.owner === me || (p.team_id && myTeamIds.has(p.team_id)));
@@ -960,7 +988,7 @@ async function loadProjects(selectPid) {
 
 async function selectProject(pid) {
   projectId = pid;
-  const data = await (await fetch(`${API}/api/projects/${pid}`)).json();
+  const data = await (await fetch(`${API}/api/projects/${pid}`, { headers: authHeaders() })).json();
   projName.textContent = data.project.name;
   document.title = `${data.project.name} — aibuilder`;
   publishBtn.disabled = false;
@@ -2012,11 +2040,11 @@ async function openFilePane(path) {
   fpPane.hidden = false;
   showFpEmpty('Loading…');
   try {
-    const list = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(path)}`)).json();
+    const list = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(path)}`, { headers: authHeaders() })).json();
     if (!Array.isArray(list) || !list.length) { showFpEmpty('No version history for this file yet.'); return; }
     fpVersionsList = list;
     fpCurrentSeq = list[0].seq;
-    const cur = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(path)}&seq=${fpCurrentSeq}`)).json();
+    const cur = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(path)}&seq=${fpCurrentSeq}`, { headers: authHeaders() })).json();
     fpCurrent = (cur && cur.content != null) ? cur.content : '';
     renderVersionList();
     renderRaw();
@@ -2051,7 +2079,7 @@ async function selectVersion(v) {
 async function versionContent(seq) {
   if (seq === fpCurrentSeq) return fpCurrent;
   try {
-    const j = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(fpPath)}&seq=${seq}`)).json();
+    const j = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(fpPath)}&seq=${seq}`, { headers: authHeaders() })).json();
     return (j && j.content != null) ? j.content : '';
   } catch { return ''; }
 }
@@ -2121,7 +2149,7 @@ async function loadSnapshots() {
   const takeBtn = $('snapTake');
   takeBtn.disabled = !canEdit || busy;
   try {
-    const list = await (await fetch(`${API}/api/projects/${projectId}/snapshots`)).json();
+    const list = await (await fetch(`${API}/api/projects/${projectId}/snapshots`, { headers: authHeaders() })).json();
     snapList.innerHTML = '';
     if (!Array.isArray(list) || !list.length) {
       snapList.innerHTML = '<div class="fpEmpty">No snapshots yet — one is captured automatically after every generation.</div>';
@@ -2210,7 +2238,7 @@ $('openBtn').onclick = () => {
     notify('Preview disabled', 'The page is quarantined (freeze risk) and can\'t be opened yet — ask the AI to fix it first.');
     return;
   }
-  window.open(`${API}/preview/${projectId}/`, '_blank');
+  getPreviewToken().then(() => window.open(previewUrl(), '_blank'));
 };
 
 /* ---------- device preview switcher ---------- */
@@ -2231,7 +2259,20 @@ setDevice(localStorage.getItem('ab.dev') || 'desktop');
 /* ---------- download project files ---------- */
 $('dlBtn').onclick = async () => {
   if (!projectId) { notify('No project', 'Open or build a project first.'); return; }
-  window.open(`${API}/api/projects/${projectId}/export?download=1`, '_blank');
+  // Export is owner-only now, and window.open() can't send the session header
+  // -- fetch with credentials and save the blob instead.
+  try {
+    const r = await fetch(`${API}/api/projects/${projectId}/export?download=1`, { headers: authHeaders() });
+    if (!r.ok) { notify('Export failed', r.status === 403 ? 'You do not own this project.' : `Server said ${r.status}`); return; }
+    const blob = await r.blob();
+    const name = (/filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '') || [])[1]
+      || `${(projName.textContent || 'project').replace(/[^a-z0-9_\-]+/gi, '_')}.json`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) { notify('Export failed', String(e.message || e)); }
 };
 
 promptBox.addEventListener('keydown', (e) => {
@@ -2246,8 +2287,8 @@ function cmdkCommands() {
     { label: 'New project', hint: 'Start fresh', icon: 'plus', run: () => resetToNew() },
     { label: 'Toggle dark / light mode', hint: 'Appearance', icon: 'sun', run: () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark') },
     { label: 'Refresh preview', hint: 'Reload the app on the right', icon: 'refresh', run: () => refreshPreview(true) },
-    { label: 'Open preview in a new tab', hint: 'Full screen', icon: 'external', run: () => { if (projectId) window.open(`${API}/preview/${projectId}/`, '_blank'); } },
-    { label: 'Download project files', hint: 'Export everything', icon: 'download', run: () => { if (projectId) window.open(`${API}/api/projects/${projectId}/export?download=1`, '_blank'); } },
+    { label: 'Open preview in a new tab', hint: 'Full screen', icon: 'external', run: () => { if (projectId) getPreviewToken().then(() => window.open(previewUrl(), '_blank')); } },
+    { label: 'Download project files', hint: 'Export everything', icon: 'download', run: () => { if (projectId) $('dlBtn').onclick(); } },
     { label: 'Snapshots', hint: 'Roll back in time', icon: 'clock', run: () => $('snapBtn').click() },
     { label: 'Cloud terminal', hint: 'Run commands', icon: 'terminal', run: () => $('termBtn').click() },
     { label: 'Build plan', hint: 'Toggle the plan panel', icon: 'checklist', run: () => $('planBtn').click() },

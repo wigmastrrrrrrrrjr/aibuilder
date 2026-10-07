@@ -140,6 +140,10 @@ useStore({
   async listProjects() {
     return db.prepare('SELECT * FROM projects ORDER BY created_at DESC').all();
   },
+  // Owner-scoped listing; see the note in store-pg.js about the unscoped one.
+  async listProjectsByOwner(owner) {
+    return db.prepare('SELECT * FROM projects WHERE owner = ? ORDER BY created_at DESC').all(owner);
+  },
   async getProject(pid) {
     return db.prepare('SELECT * FROM projects WHERE id = ?').get(pid) ?? null;
   },

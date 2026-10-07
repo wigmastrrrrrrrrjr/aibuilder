@@ -118,6 +118,12 @@ export function createSplitStore(d1) {
       const [a, b] = await Promise.all([pg.listProjects(), d1s.listProjects()]);
       return mergeById(a, b);
     },
+    async listProjectsByOwner(owner) {
+      const [a, b] = await Promise.all([
+        pg.listProjectsByOwner(owner), d1s.listProjectsByOwner(owner),
+      ]);
+      return mergeById(a, b);
+    },
     async getProject(pid) { return (await pg.getProject(pid)) || d1s.getProject(pid); },
     async deleteProject(pid) {
       if (await pg.getProject(pid)) await pg.deleteProject(pid).catch(() => {});

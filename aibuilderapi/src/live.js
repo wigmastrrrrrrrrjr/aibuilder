@@ -10,6 +10,7 @@
 import { Hono } from 'hono';
 import { store } from './store.js';
 import { getUser } from './auth.js';
+import { canWriteProjectData, loadProject } from './authz.js';
 import { getVar } from './env.js';
 import { createClient } from '@supabase/supabase-js';
 
@@ -53,11 +54,29 @@ async function identity(c) {
   return anon;
 }
 
+// ---- room authorization ----------------------------------------------------
+// Rooms inherit their project's visibility: a private project's rooms are
+// owner/team (or its own signed app token) only, a published project's rooms
+// stay open so deployed apps can still do realtime. Applies to reads AND
+// writes -- an injected event into someone's private room is an integrity
+// break, not just a disclosure.
+async function roomAccess(c, pid) {
+  if (!(await loadProject(pid))) return c.json({ error: 'unknown project' }, 404);
+  if (await canWriteProjectData(c, pid)) return null;
+  const u = await getUser(c);
+  return u ? c.json({ error: "you don't own this project" }, 403)
+    : c.json({ error: 'unknown project' }, 404);
+}
+
 // ---- Multiplayer rooms ------------------------------------------------------
 // POST push: persist to the room's event log AND broadcast to live listeners.
 live.post('/api/projects/:pid/live/:room/push', async (c) => {
   const { pid, room } = c.req.param();
   if (!ROOM_RE.test(room)) return c.json({ error: 'bad room' }, 400);
+  // This route never verified the project existed, so anyone could append
+  // events to an arbitrary (or nonexistent) pid's log.
+  const denied = await roomAccess(c, pid);
+  if (denied) return denied;
   const evt = await c.req.json().catch(() => ({}));
   const who = await identity(c, evt);
   const data = {
@@ -78,6 +97,8 @@ live.post('/api/projects/:pid/live/:room/push', async (c) => {
 live.get('/api/projects/:pid/live/:room', async (c) => {
   const { pid, room } = c.req.param();
   if (!ROOM_RE.test(room)) return c.json({ error: 'bad room' }, 400);
+  const denied = await roomAccess(c, pid);
+  if (denied) return denied;
   const since = Math.max(0, Number(c.req.query('since')) || 0);
   const limit = Math.min(200, Math.max(1, Number(c.req.query('limit')) || 60));
   const cur = await store.currentSeq(pid, room);
@@ -89,7 +110,8 @@ live.get('/api/projects/:pid/live/:room', async (c) => {
 // Room validation lives on the project; default room is the project lobby.
 live.post('/api/projects/:pid/chat/send', async (c) => {
   const { pid } = c.req.param();
-  if (!(await store.getProject(pid))) return c.json({ error: 'unknown project' }, 404);
+  const denied = await roomAccess(c, pid);
+  if (denied) return denied;
   const body = await c.req.json().catch(() => ({}));
   const text = String(body.text || '').trim().slice(0, 500);
   if (!text) return c.json({ error: 'empty message' }, 400);
@@ -105,7 +127,8 @@ live.post('/api/projects/:pid/chat/send', async (c) => {
 // GET list: fetch chat history. ?since=ID returns only newer messages (monotonic id).
 live.get('/api/projects/:pid/chat/list', async (c) => {
   const { pid } = c.req.param();
-  if (!(await store.getProject(pid))) return c.json({ error: 'unknown project' }, 404);
+  const denied = await roomAccess(c, pid);
+  if (denied) return denied;
   const room = CHAT_ROOM_RE.test(c.req.query('room') || '') ? String(c.req.query('room')) : 'main';
   const since = Math.max(0, Number(c.req.query('since')) || 0);
   const limit = Math.min(200, Math.max(1, Number(c.req.query('limit')) || 50));

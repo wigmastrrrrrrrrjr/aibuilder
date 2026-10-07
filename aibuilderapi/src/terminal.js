@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { getVar } from './env.js';
 import { requireUser } from './auth.js';
+import { requireWrite } from './authz.js';
 import { store } from './store.js';
 import { execViaKaggle, kaggleRelayEnabled } from './kterm.js';
 
@@ -401,6 +402,14 @@ terminal.post('/exec', requireUser, async (c) => {
   if (!terminalEnabled()) return c.json({ error: 'terminal not configured', enabled: false }, 503);
   if (!cmd || typeof cmd !== 'string') return c.json({ error: 'cmd (string) is required' }, 400);
   if (!pid || typeof pid !== 'string') return c.json({ error: 'pid (string) is required' }, 400);
+  // Authorize BEFORE mirrorToTerminal(). This route used to require only a
+  // session, so any signed-in user could name a victim's project and have its
+  // files pulled into that project's sandbox, a command run against them, and
+  // the resulting writes synced back into the victim's project -- both a
+  // confidentiality and an integrity break. The check must precede every
+  // side effect below, not just the exec.
+  const owned = await requireWrite(c, pid);
+  if (owned instanceof Response) return owned;
   // Mirror the project's stored files into its sandbox so the shell sees exactly
   // the current project, run the command, then reconcile the DB with anything it
   // created/changed/deleted (so in-app terminal edits persist like the AI's do).
@@ -495,6 +504,14 @@ function cleanRelPath(p) {
 
 export const serverApi = new Hono();
 serverApi.use('*', requireUser);
+// Every /api/server route acts on someone else's project (start/stop a
+// process, stream its logs, or reverse-proxy into it over HTTP + WebSocket).
+// requireUser alone meant any signed-in user could drive any project's
+// servers, so each route proves ownership of :pid first.
+serverApi.use('/:pid/*', async (c, next) => {
+  const r = await requireWrite(c, c.req.param('pid'));
+  return r instanceof Response ? r : next();
+});
 
 serverApi.get('/:pid', async (c) => {
   const r = await daemonServe('GET', '/serve', { query: { pid: c.req.param('pid') } });

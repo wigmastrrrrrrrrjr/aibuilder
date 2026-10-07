@@ -88,9 +88,13 @@ export async function requireUser(c, next) {
   return next();
 }
 
+// Write authorization. FAILS CLOSED: a project row whose owner is missing or
+// empty (the column default is '') is NOT world-writable. Previously an
+// ownerless row returned true for every caller, which turned any legacy or
+// not-yet-owned project into an open write target for any signed-in user.
+// Such a project is now admin-only and must be claimed or deleted deliberately.
 export async function canWrite(project, user) {
-  if (!project || !project.owner) return true;
-  if (!user) return false;
+  if (!project || !project.owner || !user) return false;
   if (user.name === project.owner) return true;
   // teambuild: every member of the project's team can build on it too.
   if (project.team_id) {
@@ -222,27 +226,28 @@ auth.post('/api/auth/signup', async (c) => {
   if (await store.findUserByName(name))
     return c.json({ error: 'username already taken' }, 409);
 
-  // Check IP limit
   const tag = await ipTag(c);
-  if (tag) {
+  const maxPerIp = parseInt(String(getVar('MAX_ACCOUNTS_PER_IP') || '0'));
+  if (maxPerIp > 0 && tag) {
     const takenBy = await store.ipUsed(tag);
     if (takenBy) return c.json({
-      error: `A maximum of ${3} accounts may be created from one network. Log in as "${takenBy}" instead, or reset its password with the "Forgot password" option.`,
+      error: `A maximum of ${maxPerIp} accounts may be created from one network. Log in as "${takenBy}" instead, or reset its password with the "Forgot password" option.`,
     }, 403);
   }
 
-  // Create the account directly (no email code step for now)
+  // Start email verification: create a 6-digit code, store hashed, send email
+  const email = String((await c.req.json().catch(() => ({}))).email || '').trim();
   const phash = await hashPassword(password);
-  let user;
+  const code = generateCode();
+  const codeHash = await hashCode(code);
+  const pending = { phash, ip: tag, email, codeHash, createdAt: Date.now() };
+  await store.metaSet(`signup:${name}`, JSON.stringify(pending));
   try {
-    user = await store.createUser({ name, phash, ip: tag, email: '' });
-  } catch {
-    return c.json({ error: 'username already taken' }, 409);
+    await sendCodeEmail(email || tag || 'user', code, 'aibuilder');
+  } catch (e) {
+    console.error('[signup] email send failed:', e.message);
   }
-  await store.verifyUser(name);
-
-  const token = await store.createSession(user.id);
-  return c.json({ token, username: user.name }, 201);
+  return c.json({ verifyRequired: true, message: 'Check your email for the verification code' }, 201);
 });
 
 // Permanently delete the signed-in account and all of its data.
@@ -300,7 +305,8 @@ auth.post('/api/auth/verify-email', async (c) => {
 // ---- LOGIN -----------------------------------------------------------------
 auth.post('/api/auth/login', async (c) => {
   const { username, password } = await c.req.json().catch(() => ({}));
-  const user = await store.findUserByName(String(username || '').trim());
+  const name = String(username || '').trim();
+  const user = await store.findUserByName(name);
   if (!user || !(await verifyPassword(String(password || ''), user.phash)))
     return c.json({ error: 'wrong username or password' }, 401);
 

@@ -71,6 +71,15 @@ export function createPgStore() {
       if (error) throw new Error(`db list projects: ${error.message}`);
       return data || [];
     },
+    // Owner-scoped listing. The unscoped listProjects() above is only safe for
+    // operator/debug paths -- it returns every row including other users'
+    // private projects, so it must never back a public endpoint.
+    async listProjectsByOwner(owner) {
+      const { data, error } = await client().from('projects').select('*')
+        .eq('owner', owner).order('created_at', { ascending: false });
+      if (error) throw new Error(`db list projects by owner: ${error.message}`);
+      return data || [];
+    },
     async getProject(pid) {
       const { data, error } = await client().from('projects').select('*').eq('id', pid).maybeSingle();
       if (error) throw new Error(`db get project: ${error.message}`);

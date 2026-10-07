@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { store } from './store.js';
 import { fromBase64 } from './base64.js';
 import { getUser, ipTag } from './auth.js';
+import { requireVisible, previewCookieHeader, verifyPreviewTokenFor } from './authz.js';
 
 export const preview = new Hono();
 
@@ -757,6 +758,22 @@ ${list ? '<br>' + list : ''}. It has been quarantined so it can't run again unti
 async function serveFile(c, pid, rawPath) {
   const p = safePath(rawPath);
   if (p === null) return c.text('bad path', 400);
+
+  // Visibility gate, before any file lookup. This path had NO authorization at
+  // all: unpublished projects were served to anyone who knew the id, so a
+  // private app's source was one URL away. requireVisible allows a published
+  // project (public discovery + public preview), the owner/team, or the
+  // owner's short-lived signed preview token (the iframe / new-tab case, which
+  // cannot send the x-ab-sess header).
+  const vis = await requireVisible(c, pid);
+  if (vis instanceof Response) return new Response('not found', {
+    status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' },
+  });
+
+  // Don't let the token leak outward through the Referer header to any
+  // third-party asset the generated page happens to load.
+  c.header('referrer-policy', 'no-referrer');
+
   let target = p === '' ? 'index.html' : p;
 
   let row = await store.getFile(pid, target);
@@ -766,8 +783,11 @@ async function serveFile(c, pid, rawPath) {
   if (!row) {
     if (!(await store.getProject(pid))) return c.text('unknown project', 404);
     if (target === 'index.html') {
-      // Serving the project's page (placeholder here) counts as a view.
-      try { await store.recordInteraction(pid, await visitorKey(c)); } catch {}
+      // Serving the project's page (placeholder here) counts as a view --
+      // published projects only, same as the real-page path below.
+      try {
+        if (vis && vis.published) await store.recordInteraction(pid, await visitorKey(c));
+      } catch {}
       return notYet(c, pid);
     }
     return c.text('not found', 404);
@@ -787,10 +807,21 @@ async function serveFile(c, pid, rawPath) {
   const body = type.startsWith('text/html')
     ? inject(content, pid)
     : content;
+  // An <iframe> entry request can carry ?pt=, but the page's own asset requests
+  // cannot repeat it. Re-issue the same signed token as a path-scoped,
+  // short-lived, HttpOnly cookie so those sub-resources authorize too.
+  const pt = c.req.query('pt');
+  if (pt && type.startsWith('text/html') && await verifyPreviewTokenFor(pid, pt)) {
+    c.header('set-cookie', previewCookieHeader(pid, pt));
+  }
   if (type.startsWith('text/html')) {
-    // Credit exchange: a fresh visitor served a page of a published project
-    // earns its owner +1 credit (once per visitor per project per day).
-    try { await store.recordInteraction(pid, await visitorKey(c)); } catch {}
+    // Credit exchange: a fresh visitor served a page earns its owner +1 credit
+    // (once per visitor per project per day). Only PUBLISHED projects count --
+    // this previously fired for private previews too, so anonymous traffic to
+    // a private app minted credits for its owner.
+    try {
+      if (vis && vis.published) await store.recordInteraction(pid, await visitorKey(c));
+    } catch {}
   }
   return c.body(body, 200, { 'content-type': type, 'cache-control': 'no-store' });
 }
