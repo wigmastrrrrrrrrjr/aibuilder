@@ -461,6 +461,9 @@ const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + file
           let lineBuf = '';
           let raw = '';
           let finish = '';
+          let tokenQ = [];
+          let tokenLast = 0;
+          let tokenTimer = null;
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -490,7 +493,28 @@ const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + file
               }
               if (!tok) continue;
               raw += tok;
-              send({ type: 'token', v: tok });
+              // throttle token streaming to ~5 events/sec to reduce UI churn
+              tokenQ = tokenQ || [];
+              tokenQ.push(tok);
+              const now = Date.now();
+              if (!tokenTimer || now - tokenLast >= 200) {
+                // flush
+                if (tokenQ.length) {
+                  send({ type: 'token', v: tokenQ.join('') });
+                  tokenQ = [];
+                }
+                tokenLast = now;
+                tokenTimer = null;
+              } else {
+                if (!tokenTimer) tokenTimer = setTimeout(() => {
+                  if (tokenQ.length) {
+                    send({ type: 'token', v: tokenQ.join('') });
+                    tokenQ = [];
+                  }
+                  tokenLast = Date.now();
+                  tokenTimer = null;
+                }, 200 - (now - tokenLast));
+              }
               for (const ev of parser.feed(tok)) {
                 await handleGen(ev);
               }
@@ -1102,6 +1126,9 @@ async function workspaceChat(c, body, message, user) {
           const reader = upstream.body.getReader();
           const dec = new TextDecoder();
           let lineBuf = '';
+          let tokenQ = [];
+          let tokenLast = 0;
+          let tokenTimer = null;
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -1130,7 +1157,18 @@ async function workspaceChat(c, body, message, user) {
               }
               if (!tok) continue;
               raw += tok;
-              send({ type: 'token', v: tok });
+              let tokenQ = tokenQ || [];
+              tokenQ.push(tok);
+              const now = Date.now();
+              if (!tokenTimer || now - tokenLast >= 200) {
+                if (tokenQ.length) { send({ type: 'token', v: tokenQ.join('') }); tokenQ = []; }
+                tokenLast = now; tokenTimer = null;
+              } else if (!tokenTimer) {
+                tokenTimer = setTimeout(() => {
+                  if (tokenQ.length) { send({ type: 'token', v: tokenQ.join('') }); tokenQ = []; }
+                  tokenLast = Date.now(); tokenTimer = null;
+                }, 200 - (now - tokenLast));
+              }
               for (const ev of parser.feed(tok)) await handleGen(ev);
             }
           }
