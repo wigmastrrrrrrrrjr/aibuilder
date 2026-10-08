@@ -30,7 +30,7 @@ import {
 
 export { DEFAULT_ALLOWED_ORIGINS };
 
-const V1_DISABLED = (getVar('V1_DISABLED') || '1') === '1';
+const V1_DISABLED = (getVar('V1_DISABLED') || '0') === '1';
 
 export const app = new Hono();
 
