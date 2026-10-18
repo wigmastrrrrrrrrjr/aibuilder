@@ -30,7 +30,7 @@ import {
 
 export { DEFAULT_ALLOWED_ORIGINS };
 
-const V1_DISABLED = (getVar('V1_DISABLED') || '0') === '1';
+const V1_DISABLED = false;
 
 export const app = new Hono();
 
@@ -157,7 +157,7 @@ app.get('/api/docs', (c) => {
       storage: 'Supabase (schema: supabase-v2.sql) — the v1 API persists in Cloudflare D1; v2 lives in Postgres with Realtime.',
     },
     streams: [
-      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'workspace'", temperature: 'number (1 to what the model supports)' }, events: ['meta', 'token', 'think', 'file', 'edit', 'delete', 'rename', 'asset', 'plan', 'name', 'delegate', 'subagent', 'refactor', 'seed', 'cmd', 'warn', 'error', 'done'] },
+      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'w[...]
     ],
     endpoints: [
       { method: 'GET', path: '/api/docs', auth: 'none', description: 'This documentation' },
@@ -180,7 +180,7 @@ app.get('/api/docs', (c) => {
       { method: 'POST', path: '/api/projects/:pid/snapshots/:sid/restore', auth: 'owner', description: 'Roll the whole project back' },
       { method: 'POST', path: '/api/projects/:pid/upload', auth: 'owner', body: 'multipart "files" (repeatable)', description: 'Upload existing files (max 300, 2MB each)' },
       { method: 'POST', path: '/api/projects/:pid/presence', auth: 'user', body: { sid: 'string' }, description: 'Join presence (10-person cap)' },
-      { method: 'POST', path: '/api/projects/:pid/preview-token', auth: 'owner', description: 'Mint a ~15min read-only token so a PRIVATE project can be previewed in an iframe/new tab, which cannot send the session header' },
+      { method: 'POST', path: '/api/projects/:pid/preview-token', auth: 'owner', description: 'Mint a ~15min read-only token so a PRIVATE project can be previewed in an iframe/new tab, which cannot send the x-ab-sess header.' },
       { method: 'POST', path: '/api/projects/:pid/presence/leave', auth: 'user', body: { sid: 'string' }, description: 'Leave presence' },
       { method: 'GET', path: '/api/projects/:pid/presence', auth: 'owner', description: 'Who is currently building' },
 
@@ -228,7 +228,7 @@ app.get('/api/docs', (c) => {
       { method: 'GET', path: '/__baas.js', auth: 'none', description: 'Client SDK for generated apps (window.creat.db)' },
 
       { method: 'GET', path: '/api/terminal/status', auth: 'none', description: 'Is the cloud terminal configured?' },
-      { method: 'POST', path: '/api/terminal/exec', auth: 'owner', body: { pid: 'string', cmd: 'string', cwd: 'string', timeoutMs: 'number' }, description: 'Run a shell command on the project\'s cloud terminal' },
+      { method: 'POST', path: '/api/terminal/exec', auth: 'owner', body: { pid: 'string', cmd: 'string', cwd: 'string', timeoutMs: 'number' }, description: 'Run a shell command on the project\'s cloud workspace' },
     ],
   });
 });
@@ -660,7 +660,7 @@ app.notFound((c) => {
   if (accept.includes('text/html')) {
     return c.html(
       `<!doctype html><meta charset="utf-8"><title>aibuilder — not found</title>` +
-      `<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui;background:#0d1117;color:#e6edf3;display:grid;place-items:center;min-height:100vh;padding:2rem}div{text-align:center}h1{font-size:1.6rem;margin-bottom:.6rem}p{color:#8b949e}a{color:#58a6ff;text-decoration:none}</style>` +
+      `<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui;background:#0d1117;color:#e6edf3;display:grid;place-items:center;min-height:100vh;padding:2rem}div{text-align:center;font-size:1.2rem}a{color:#6ea8fe;text-decoration:none}a:hover{text-decoration:underline}</style>` +
       `<div><h1>404 — not found</h1><p>Nothing lives at this path.</p><a href="${GITHUB_URL}">GitHub</a></div>`,
       404,
     );
