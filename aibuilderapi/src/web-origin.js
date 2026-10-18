@@ -35,13 +35,25 @@ export function allowedOrigins() {
 export function originAllowed(origin) {
   if (!origin) return true;
   const set = allowedOrigins();
+  // Exact match (includes entries that might contain a path component)
   if (set.has(origin)) return true;
   let host = origin;
   try {
     const u = new URL(origin);
     host = `${u.protocol}//${u.hostname}`;
   } catch { /* keep raw value */ }
-  return set.has(host);
+  // Allow host-only entries
+  if (set.has(host)) return true;
+  // New: allow host when the allowlist contains a more specific entry that
+  // includes a path component. Browsers send only scheme+host in the Origin
+  // header, so to permit a specific page like
+  // "https://websim.com/@Dougmen/freeai12" you can add that full URL to
+  // ALLOWED_ORIGINS — this check will accept the request because we see an
+  // allowlist entry that starts with the request host + '/'.
+  for (const e of set) {
+    if (typeof e === 'string' && e.startsWith(host + '/')) return true;
+  }
+  return false;
 }
 
 export const CORS_OPTIONS = {
