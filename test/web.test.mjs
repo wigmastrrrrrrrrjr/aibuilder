@@ -115,6 +115,39 @@ test('the composer exposes the three chat modes and sends the chosen one', () =>
   assert.ok(/MODES\s*=\s*\{/.test(APP_JS), 'the SPA must define the mode labels/hints');
 });
 
+test('the composer offers the full five-step effort ladder', () => {
+  const group = INDEX_HTML.match(/id="effortSel"[\s\S]{0,900}?<\/div>/);
+  assert.ok(group, 'index.html must render #effortSel');
+  const levels = [...group[0].matchAll(/data-effort="(\d)"/g)].map((m) => Number(m[1]));
+  assert.deepEqual(levels, [1, 2, 3, 4, 5], 'effort levels must be 1..5 in order');
+  assert.ok(/data-effort="5"[^>]*>Max</.test(group[0]), 'the top level is labelled Max');
+  // The SPA must accept the top level instead of clamping to 4.
+  assert.ok(/Math\.min\(5,\s*Math\.max\(1,\s*Number\(localStorage\.getItem\('ab\.effort'\)\)/.test(APP_JS),
+    'app.js must clamp effort to 1..5');
+  assert.ok(/5:\s*'Max/.test(APP_JS), 'app.js must describe the Max level');
+});
+
+test('the composer is laid out in rows, not one crowded line', () => {
+  const top = INDEX_HTML.match(/id="composerTop"[\s\S]*?<div id="composerMain">/);
+  assert.ok(top, 'index.html must render #composerTop');
+  const rows = (top[0].match(/class="composerRow"/g) || []).length;
+  assert.equal(rows, 2, 'the composer controls must sit on two rows');
+  // Mode + Effort govern the turn; Model + Temp tune the run.
+  assert.ok(/data-mode="build"[\s\S]*?data-effort="5"/.test(top[0]), 'Mode and Effort share the first row');
+  assert.ok(/id="modelSel"[\s\S]*?id="tempSel"/.test(top[0]), 'Model and Temp share the second row');
+});
+
+test('the design system stays flat: no grain, no serif display face', () => {
+  const CSS = fs.readFileSync(path.join(WEB, 'style.css'), 'utf8');
+  assert.ok(/--grain:\s*none/.test(CSS), 'paper grain must be disabled');
+  assert.ok(!/'Fraunces'/.test(CSS), 'the serif display face must be gone');
+  assert.ok(/--ease-spring:\s*cubic-bezier\(\.2,\s*\.7,\s*\.3,\s*1\)/.test(CSS), 'no overshoot easing');
+  // Restrained geometry: nothing in the token block above 16px.
+  const radii = [...CSS.matchAll(/--r-(?:xs|sm|md|lg|xl):\s*(\d+)px/g)].map((m) => Number(m[1]));
+  assert.ok(radii.length >= 5, 'radii tokens must exist');
+  assert.ok(Math.max(...radii) <= 16, `radii must stay restrained (saw ${Math.max(...radii)}px)`);
+});
+
 test('index.html loads the current app.js build', () => {
   const asset = (html, re) => (html.match(re) || [])[1];
   const appV = Number(asset(INDEX_HTML, /app\.js\?v=(\d+)/));
@@ -122,5 +155,5 @@ test('index.html loads the current app.js build', () => {
   assert.ok(Number.isFinite(appV) && appV > 0, 'index.html must cache-bust app.js');
   assert.ok(Number.isFinite(cssV) && cssV > 0, 'index.html must cache-bust style.css');
   // A stale ?v= serves the previous bundle from the CDN cache after a deploy.
-  assert.ok(appV >= 56, `app.js?v= must be bumped after changing the SPA (saw v=${appV})`);
+  assert.ok(appV >= 57, `app.js?v= must be bumped after changing the SPA (saw v=${appV})`);
 });

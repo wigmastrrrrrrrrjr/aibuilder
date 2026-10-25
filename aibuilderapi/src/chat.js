@@ -4,6 +4,7 @@ import { FileStreamer } from './parser.js';
 import { systemPrompt, workspaceSystemPrompt, askSystemPrompt, explainSystemPrompt } from './prompt.js';
 import { VisibleStream } from './stream-filter.js';
 import { chatMode, modeAllowsTool, MODE_LABEL } from './modes.js';
+import { verifyProject, verifyDiag, verifySignature, verifyEvent, maxPageTests } from './verify.js';
 import { extractKey, builtinKey, localOllamaUrl, openrouterKey } from './keys.js';
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
@@ -88,7 +89,7 @@ async function termSyncToStore(store, pid, snapshot) {
 
 export const chat = new Hono();
 
-// Charge the user's credit balance for paid effort tiers (Deep/Deepest).
+// Charge the user's credit balance for paid effort tiers (Deep/Deepest/Max).
 // Returns null on success, or a { error, credits } rejection body. BYOK and
 // local-tunnel requests are free — the user supplies the compute themselves.
 async function chargeEffort(user, model, effort) {
@@ -186,7 +187,7 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
   }
   await store.setModel(pid, model);
 
-  // Effort: the user picks how hard the AI works. Deep/Deepest charge credits
+  // Effort: the user picks how hard the AI works. Deep/Deepest/Max charge credits
   // (Standard and Fast stay free); platform-paid requests only — BYOK/local
   // requests get the longer generation for free since the user owns the compute.
   const effort = effortLevel(body.effort);
@@ -401,6 +402,13 @@ export async function runChat(ctx) {
       // MAX_ROUNDS is a soft cap on total rounds per request (env-tunable); the
       // build only fully stops when a round finishes cleanly or the cap is hit.
       const MAX_ROUNDS = Math.max(1, Number(getVar('MAX_BUILD_ROUNDS') || 12) || 12);
+      // Page-test budget for THIS request. Each test can trigger one repair
+      // round, so it is capped independently of MAX_ROUNDS (and can be turned
+      // off entirely with PAGE_TEST=off).
+      const MAX_VERIFY = maxPageTests();
+      let verifyRuns = 0;
+      let lastVerifySig = '';
+      let lastVerify = null;
       const histRef = await store.history(pid).then(ms => ms.map(m => ({ role: m.role, content: m.content })));
 
       // ---- memory compaction guard (start of build) -----------------------------
@@ -601,6 +609,25 @@ const buildGenMessages = () => [{ role: 'system', content: basePrompt + fileCtx 
               send({ type: 'sync', created: synced.created.map((f) => f.path), updated: synced.updated.map((f) => f.path), deleted: synced.deleted });
             }
           }
+          // ---- verify what was just built ----------------------------------
+          // The model cannot see its own output rendered. Resolve every file
+          // reference and syntax-check every script the way the preview would,
+          // and feed anything broken straight into the repair round so the
+          // build ends valid instead of ending "done" and broken.
+          if (MAX_VERIFY > 0 && verifyRuns < MAX_VERIFY && !signal.aborted && ops > opsAtStart) {
+            verifyRuns++;
+            const report = await verifyProject(store, pid);
+            if (report) {
+              lastVerify = report;
+              send(verifyEvent(report));
+              const sig = verifySignature(report);
+              if (!report.ok && sig && sig !== lastVerifySig) {
+                lastVerifySig = sig;       // identical failure twice → stop asking
+                const entry = verifyDiag(report);
+                if (entry) diag.push(entry);
+              }
+            }
+          }
           // Record the round WITH every new error so it reaches the AI before
           // the stream stops.
           if (diag.length > diagAtStart) wantRepair = true;
@@ -659,7 +686,8 @@ const buildGenMessages = () => [{ role: 'system', content: basePrompt + fileCtx 
           if (providerUsed) { try { active[providerUsed]--; } catch {} }
         }
       }
-  send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, seeds, model });
+  send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, seeds, model,
+    verify: lastVerify ? { ok: Boolean(lastVerify.ok), errors: (lastVerify.errors || []).length } : null });
   // co-build: tell everyone else watching this project that it changed
   try {
     const sbUrl = getVar('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co';

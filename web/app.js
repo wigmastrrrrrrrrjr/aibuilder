@@ -150,12 +150,13 @@ if (modeSel) {
   });
 }
 
-let effort = Math.min(4, Math.max(1, Number(localStorage.getItem('ab.effort')) || 2));
+let effort = Math.min(5, Math.max(1, Number(localStorage.getItem('ab.effort')) || 2));
 const EFFORT_HINT = {
   1: 'Fast — free',
   2: 'Standard — free',
   3: 'Deep — 2× credits, works longer',
   4: 'Deepest — 4× credits, works hardest',
+  5: 'Max — 8× credits, longest run, thinking on',
 };
 effortSel.querySelectorAll('button[data-effort]').forEach((b) => b.classList.toggle('on', Number(b.dataset.effort) === effort));
 effortSel.addEventListener('click', (e) => {
@@ -1817,9 +1818,16 @@ async function send() {
           notify('Generator warning', ev.message);
           if (aiMsg) aiMsg.card('', actCards.warn(ev.message || ''));
         } else if (ev.type === 'test') {
+          // Automatic page tests run inside the build and usually repair
+          // themselves in the same turn — show the result quietly. A manual
+          // test (no `auto`) still announces itself.
           if (aiMsg) aiMsg.card('test' + (ev.ok ? '' : ' fail'), actCards.test(ev));
-          if (!ev.auto) activityText.textContent = ev.ok ? 'Page test passed' : 'Page test failed — see card';
-          if (!ev.ok) notify('Page test failed', (ev.errors || []).slice(0, 3).map((e) => `${e.file}${e.ref ? ' → ' + e.ref : ''}${e.message ? ' · ' + e.message : ''}`).join('\n'));
+          if (ev.auto) {
+            termLog(ev.ok ? 'page test passed' : `page test found ${(ev.errors || []).length} issue(s) — repairing`, ev.ok ? 's' : 'e');
+          } else {
+            activityText.textContent = ev.ok ? 'Page test passed' : 'Page test failed — see card';
+            if (!ev.ok) notify('Page test failed', (ev.errors || []).slice(0, 3).map((e) => `${e.file}${e.ref ? ' → ' + e.ref : ''}${e.message ? ' · ' + e.message : ''}`).join('\n'));
+          }
         } else if (ev.type === 'note') {
           notify('Heads up', ev.message);
         } else if (ev.type === 'freeze') {
@@ -1849,6 +1857,13 @@ async function send() {
           if (ev.renamed?.length) bitsEnd.push(`${ev.renamed.length} renamed`);
           if (ev.seeds?.length) bitsEnd.push(`${ev.seeds.length} seeded`);
           if (ev.assets?.length) bitsEnd.push(`${ev.assets.length} asset${ev.assets.length === 1 ? '' : 's'}`);
+          // A build can end with the page test still failing (the repair
+          // budget ran out). Say so instead of letting a broken preview be a
+          // surprise.
+          if (ev.verify && !ev.verify.ok) {
+            termLog(`page test still failing — ${ev.verify.errors} issue(s)`, 'e');
+            notify('Build finished with issues', `The page test still reports ${ev.verify.errors} problem(s). Ask the AI to fix them — the details are in the last test card.`);
+          }
           if (ev.mode === 'ask' || ev.mode === 'explain') {
             termLog(ev.mode === 'ask' ? 'reply complete' : 'explanation complete', 'done');
           } else {
