@@ -100,6 +100,15 @@ test('prose that merely contains <<< is preserved', () => {
   }
 });
 
+test('a stripped payload leaves one blank line, not a screenful', () => {
+  const text = 'Done.\n\n>>>tool\n{"name":"write_file","arguments":{"path":"a.js","content":"x"}}\n<<<\n\nNext.';
+  for (const size of [1, 3, 7, text.length]) {
+    assert.equal(streamed(text, size), 'Done.\n\nNext.', `chunk size ${size}`);
+  }
+  // Real paragraph breaks survive — only runs of three or more collapse.
+  assert.equal(stripBlocks('one\n\ntwo\n\n\n\nthree'), 'one\n\ntwo\n\nthree');
+});
+
 test('modes normalise and only build writes', () => {
   assert.deepEqual(CHAT_MODES, ['build', 'ask', 'explain']);
   assert.equal(chatMode('ask'), 'ask');

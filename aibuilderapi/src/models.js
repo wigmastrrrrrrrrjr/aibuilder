@@ -65,13 +65,20 @@ const CODING_RANK = [
 export const FREE_DAILY_CREDITS = 30;
 
 // Effort levels: higher tiers make the model spend longer and consume credits.
-// Standard (default, level 2) is free as before. Deep/Deepest charge a
+// Standard (default, level 2) is free as before. Deep/Deepest/Max charge a
 // multiplier of the base model cost from the user's daily grant + earnings.
+//
+// `tokens` is the output budget passed to the provider (num_predict /
+// max_tokens) and `ctx` is the context budget used by memory compaction — so
+// each step up buys a longer uninterrupted run AND more remembered project.
+// Max is the deliberate "leave it running" tier: 8× the base cost, thinking
+// on, and big enough that a large app usually finishes in one pass.
 export const EFFORT = {
-  1: { label: 'Fast',      creditMult: 0, tokens: 4096,  think: false, ctx: 12000 },
-  2: { label: 'Standard',  creditMult: 0, tokens: 16384, think: false, ctx: 32000 },
-  3: { label: 'Deep',      creditMult: 2, tokens: 49152, think: true,  ctx: 96000 },
-  4: { label: 'Deepest',   creditMult: 4, tokens: 98304, think: true,  ctx: 128000 },
+  1: { label: 'Fast',      creditMult: 0, tokens: 4096,   think: false, ctx: 12000 },
+  2: { label: 'Standard',  creditMult: 0, tokens: 16384,  think: false, ctx: 32000 },
+  3: { label: 'Deep',      creditMult: 2, tokens: 49152,  think: true,  ctx: 96000 },
+  4: { label: 'Deepest',   creditMult: 4, tokens: 98304,  think: true,  ctx: 128000 },
+  5: { label: 'Max',       creditMult: 8, tokens: 131072, think: true,  ctx: 160000 },
 };
 export const DEFAULT_EFFORT = 2;
 export function effortLevel(v) {

@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#e8501a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="style.css?v=51">
+<link rel="stylesheet" href="style.css?v=52">
 <script>(function(){try{var t=localStorage.getItem('ab.theme')||((window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light');document.documentElement.dataset.theme=t}catch(e){}})();</script>
 </head>
 <body>
@@ -132,8 +132,8 @@
       <div id="messages">
         <div class="empty">
           <div class="emptyMark"><span class="ms" data-ic="spark"></span></div>
-          <h1>Describe it.<br>Watch it <em>become real.</em></h1>
-          <p>Tell aibuilder what you want to build. It drafts a blueprint, writes the code, and keeps a live, editable preview open the whole way through.</p>
+          <h1>What do you want to <em>build?</em></h1>
+          <p>Describe an app in a sentence. It writes the code, keeps a live preview open, and iterates with you — every file saved as you go.</p>
           <div class="emptySteps">
             <div class="step"><div class="n">01</div><div class="t">Describe</div><div class="s">“A billing dashboard with charts and CSV export.”</div></div>
             <div class="step"><div class="n">02</div><div class="t">Iterate</div><div class="s">Refine with follow-up prompts in the same thread.</div></div>
@@ -152,25 +152,30 @@
       <div id="composer">
         <div id="templates"></div>
         <div id="composerTop">
-          <span class="fieldLabel">Mode</span>
-          <div class="effortSel modeSel" id="modeSel" role="group" aria-label="Chat mode">
-            <button type="button" data-mode="build" class="on" title="Build — writes the files and builds the app">Build</button>
-            <button type="button" data-mode="ask" title="Chat — answers only, no tools and no file changes">Chat</button>
-            <button type="button" data-mode="explain" title="Explain — reads your project and explains it, never changes it">Explain</button>
+          <div class="composerRow">
+            <span class="fieldLabel">Mode</span>
+            <div class="effortSel modeSel" id="modeSel" role="group" aria-label="Chat mode">
+              <button type="button" data-mode="build" class="on" title="Build — writes the files and builds the app">Build</button>
+              <button type="button" data-mode="ask" title="Chat — answers only, no tools and no file changes">Chat</button>
+              <button type="button" data-mode="explain" title="Explain — reads your project and explains it, never changes it">Explain</button>
+            </div>
+            <span class="fieldLabel">Effort</span>
+            <div class="effortSel" id="effortSel" role="group" aria-label="Effort level">
+              <button type="button" data-effort="1" title="Fast — quickest, free">Fast</button>
+              <button type="button" data-effort="2" class="on" title="Standard — free">Standard</button>
+              <button type="button" data-effort="3" title="Deep — 2× credits, works longer">Deep</button>
+              <button type="button" data-effort="4" title="Deepest — 4× credits, works hardest">Deepest</button>
+              <button type="button" data-effort="5" title="Max — 8× credits, longest run, thinking on">Max</button>
+            </div>
           </div>
-          <span class="fieldLabel">Model</span>
-          <select id="modelSel" title="Model used for generation"></select>
-          <span class="fieldLabel">Effort</span>
-          <div class="effortSel" id="effortSel" role="group" aria-label="Effort level">
-            <button type="button" data-effort="1" title="Fast — quickest, free">Fast</button>
-            <button type="button" data-effort="2" class="on" title="Standard — free">Standard</button>
-            <button type="button" data-effort="3" title="Deep — 2× credits, works longer">Deep</button>
-            <button type="button" data-effort="4" title="Deepest — 4× credits, works hardest">Deepest</button>
+          <div class="composerRow">
+            <span class="fieldLabel">Model</span>
+            <select id="modelSel" title="Model used for generation"></select>
+            <span class="fieldLabel">Temp</span>
+            <input type="range" id="tempSel" min="1" max="2" step="0.05" value="1" title="Sampling temperature — from 1 (minimum) up to whatever the model supports (2 for OpenAI/OpenRouter, 1 for Ollama)">
+            <output id="tempVal" class="tempVal">1.00</output>
+            <span class="promptHint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
           </div>
-          <span class="fieldLabel">Temp</span>
-          <input type="range" id="tempSel" min="1" max="2" step="0.05" value="1" title="Sampling temperature — from 1 (minimum) up to whatever the model supports (2 for OpenAI/OpenRouter, 1 for Ollama)">
-          <output id="tempVal" class="tempVal">1.00</output>
-          <span class="promptHint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
         </div>
         <div id="composerMain">
           <textarea id="promptBox" rows="3" placeholder="Describe the app you want to build…"></textarea>
@@ -427,6 +432,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=56"></script>
+    <script src="app.js?v=57"></script>
 </body>
 </html>

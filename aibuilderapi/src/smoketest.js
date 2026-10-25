@@ -87,13 +87,25 @@ function lexStats(src) {
   return { balanced, moduleish };
 }
 
+// Dynamic codegen (new Function) is how a classic script gets a real syntax
+// check. Hardened runtimes and CSP-locked pages refuse it — and a refusal must
+// NOT be reported as a syntax error in the script, or every build would look
+// broken and the repair loop would chase a phantom. Probe once, then fall back
+// to the structural scan.
+let CAN_COMPILE = null;
+function canCompile() {
+  if (CAN_COMPILE !== null) return CAN_COMPILE;
+  try { new Function('return 1'); CAN_COMPILE = true; } catch { CAN_COMPILE = false; }
+  return CAN_COMPILE;
+}
+
 function jsError(src) {
   const stats = lexStats(src);
-  if (stats.moduleish) {
+  if (stats.moduleish || !canCompile()) {
     // ES module syntax (import/export) can't go through new Function, so fall
     // back to the brace/paren balance scan. The scan is naive about regex
-    // literals, so use it ONLY here — never for classic scripts, where the real
-    // parser below is authoritative and regex-aware.
+    // literals, so use it ONLY here — never for classic scripts that can be
+    // compiled for real.
     return stats.balanced ? null : new Error('unbalanced braces/parens/brackets');
   }
   try { new Function(src); return null; } catch (e) { return e; }

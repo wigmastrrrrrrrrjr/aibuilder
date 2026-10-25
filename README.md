@@ -43,6 +43,36 @@ the browser no longer has to hide a file's contents as it scrolls past.
 The mode travels in the `POST /api/chat` body as `mode: "build" | "ask" | "explain"`
 and is persisted in `localStorage` under `ab.mode`.
 
+## Effort
+
+Effort is how hard (and how long) the model works on one turn. Every step buys
+more output and a bigger context window, so it can finish more of the app before
+it has to stop.
+
+| level | label | cost | output | context |
+|---|---|---|---|---|
+| 1 | Fast | free | 4k | 12k |
+| 2 | Standard (default) | free | 16k | 32k |
+| 3 | Deep | 2× base | 49k | 96k |
+| 4 | Deepest | 4× base | 98k | 128k |
+| 5 | Max | 8× base | 131k | 160k |
+
+Deep and above also turn on the model's thinking traces, and they are billed
+from the daily credit grant (BYOK and local models are free either way).
+
+## Builds verify themselves
+
+The last thing a build round does is test what it just wrote. `src/smoketest.js`
+resolves every `href`/`src`/`url()` the way the preview server does, syntax
+checks every referenced script, and flags loops that would freeze the page.
+`src/verify.js` runs it after each round that changed files and feeds anything
+broken back into the repair loop, so a missing `styles.css` is written before
+the turn ends instead of showing up as a broken preview.
+
+The result is streamed as a `test` event (`auto: true`) and summarised on
+`done`. `PAGE_TEST=off` disables it; `MAX_PAGE_TESTS` (default 2) caps how many
+tests one request may run.
+
 ## How generated apps store data
 
 Every generated app gets `window.creat.db` (auto-injected, backed by the
@@ -117,7 +147,8 @@ aibuilderapi/  the API — deployable standalone to Cloudflare Workers (wrangler
   src/prompt.js    system prompts: build, chat (ask) and explain modes
   src/modes.js     the mode vocabulary + which tools each mode may run
   src/stream-filter.js  drops tool/file payloads before they reach the SSE wire
-  src/models.js    model catalogue proxy (/api/models)
+  src/models.js    model catalogue proxy (/api/models) + the effort ladder
+  src/verify.js    post-build page test: what the preview would load, checked
   src/preview.js   serves published/generated apps + injects BaaS SDK
   src/baas.js      generic CRUD backend for generated apps
   src/store.js     storage interface (async)

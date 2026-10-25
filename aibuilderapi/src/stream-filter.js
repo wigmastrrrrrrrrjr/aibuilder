@@ -30,6 +30,25 @@ export class VisibleStream {
     this.buf = '';
     this.depth = 0;   // open legacy <<<…>>> blocks
     this.tool = null; // state while inside a >>>tool … <<< call
+    this.nlRun = 0;   // trailing newline run, to collapse the gap a payload leaves
+  }
+
+  // A dropped block leaves the newlines that surrounded it behind ("Done.\n\n"
+  // + "\n\nNext."), which would render as a page of blank lines. Collapse any
+  // run of three or more newlines to two (one blank line), across pushes.
+  #gap(text) {
+    if (!text) return '';
+    let out = '';
+    for (const ch of text) {
+      if (ch === '\n') {
+        this.nlRun++;
+        if (this.nlRun <= 2) out += ch;
+      } else {
+        this.nlRun = 0;
+        out += ch;
+      }
+    }
+    return out;
   }
 
   /** Feed a chunk; returns the prose that is safe to show right now. */
@@ -76,7 +95,7 @@ export class VisibleStream {
       if (CLOSE_KINDS.has(kind)) this.depth = Math.max(0, this.depth - 1);
       else if (PAYLOAD_KINDS.has(kind)) this.depth += 1;
     }
-    return out;
+    return this.#gap(out);
   }
 
   /** Whatever is still buffered when the model stops. */
@@ -84,7 +103,7 @@ export class VisibleStream {
     if (this.depth > 0 || this.tool) { this.buf = ''; return ''; }
     const rest = this.buf;
     this.buf = '';
-    return rest;
+    return this.#gap(rest);
   }
 
   // Length of the longest tail that is a prefix of an opening marker.
