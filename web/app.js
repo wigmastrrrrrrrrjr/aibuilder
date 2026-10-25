@@ -61,6 +61,7 @@ const activityEl = $('activity'), activityText = $('activityText'), rawStream = 
 const fileChips = $('fileChips'), frame = $('previewFrame'), projName = $('projName');
 const modelSel = $('modelSel'), publishBtn = $('publishBtn');
 const effortSel = $('effortSel');
+const modeSel = $('modeSel');
 const tempSel = $('tempSel'), tempVal = $('tempVal');
 
 /* freeze quarantine: when a build has a non-terminating loop we hide the
@@ -94,6 +95,61 @@ function setStatus(text) {
   if (dot) dot.dataset.state = text;
 }
 const saveBtn = $('saveBtn'), saveLbl = $('saveLbl');
+
+/* ---- chat mode -------------------------------------------------------------
+   Build writes the app, Chat only talks, Explain only reads. The server owns
+   the real behaviour (prompts + tool gating + prose-only streaming); this is
+   the switch, the labels and the placeholder that go with it. */
+const MODES = {
+  build: {
+    label: 'Build',
+    status: 'Building',
+    placeholder: 'Describe the app you want to build…',
+    hint: 'Build mode writes the files and builds the app.',
+  },
+  ask: {
+    label: 'Chat',
+    status: 'Thinking',
+    placeholder: 'Ask anything — ideas, copy, design, trade-offs…',
+    hint: 'Chat mode just answers: no tools, no file changes.',
+  },
+  explain: {
+    label: 'Explain',
+    status: 'Reading',
+    placeholder: 'Ask what the code does, where something lives, or why it breaks…',
+    hint: 'Explain mode reads your project and explains it — it never changes a file.',
+  },
+};
+let chatMode = Object.prototype.hasOwnProperty.call(MODES, localStorage.getItem('ab.mode'))
+  ? localStorage.getItem('ab.mode') : 'build';
+function applyMode(m) {
+  chatMode = Object.prototype.hasOwnProperty.call(MODES, m) ? m : 'build';
+  if (modeSel) {
+    modeSel.querySelectorAll('button[data-mode]').forEach((b) => {
+      const on = b.dataset.mode === chatMode;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+  if (promptBox) promptBox.placeholder = MODES[chatMode].placeholder;
+  if (sendBtn) sendBtn.title = MODES[chatMode].label + ' — ' + MODES[chatMode].hint;
+}
+applyMode(chatMode);
+if (modeSel) {
+  modeSel.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-mode]');
+    if (!b) return;
+    const next = b.dataset.mode;
+    if (next === chatMode) return;
+    applyMode(next);
+    try { localStorage.setItem('ab.mode', chatMode); } catch { /* ignore */ }
+    // Every turn after this one uses the new mode; a turn in flight keeps the
+    // mode it started with (the server was already told).
+    notify(MODES[chatMode].label + ' mode', MODES[chatMode].hint);
+    if (promptBox) promptBox.focus();
+  });
+}
+
 let effort = Math.min(4, Math.max(1, Number(localStorage.getItem('ab.effort')) || 2));
 const EFFORT_HINT = {
   1: 'Fast — free',
@@ -1500,8 +1556,10 @@ async function send() {
   if (!message || busy) return;
   busy = true; sendBtn.disabled = true;
   promptBox.value = '';
-  setStatus('Building');
-  if (!projectId) showBuildSplash();
+  const turnMode = chatMode; // pinned for this turn
+  const turnMeta = MODES[turnMode] || MODES.build;
+  setStatus(turnMeta.status);
+  if (!projectId && turnMode === 'build') showBuildSplash();
 
   const emptyHero = messagesEl.querySelector('.empty');
   if (emptyHero) emptyHero.remove();
@@ -1563,6 +1621,7 @@ async function send() {
         effort,
         temperature: temp,
         runId,
+        mode: turnMode,
       }),
     });
     if (!res.ok) {
@@ -1607,14 +1666,18 @@ async function send() {
           else { try { localStorage.removeItem('ab.run.last'); } catch {} }
         } else if (ev.type === 'meta') {
           if (!projectId) {
-            showBuildSplash();
+            if (ev.mode === 'build') showBuildSplash();
             projectId = ev.projectId; canEdit = true;
             publishBtn.disabled = false;
             if (saveBtn) saveBtn.disabled = false;
           }
           projName.textContent = message.slice(0, 60);
           aiMsg = makeAiMsg(ev.model);
-          activityText.textContent = `${ev.model} is working…`;
+          activityText.textContent = ev.mode === 'ask'
+            ? `${ev.model} is replying…`
+            : ev.mode === 'explain'
+              ? `${ev.model} is reading the project…`
+              : `${ev.model} is working…`;
         } else if (ev.type === 'think') {
           dots = (dots + 1) % ACT_PHASES.length;
           const phrase = ev.text || ACT_PHASES[dots];
@@ -1786,9 +1849,13 @@ async function send() {
           if (ev.renamed?.length) bitsEnd.push(`${ev.renamed.length} renamed`);
           if (ev.seeds?.length) bitsEnd.push(`${ev.seeds.length} seeded`);
           if (ev.assets?.length) bitsEnd.push(`${ev.assets.length} asset${ev.assets.length === 1 ? '' : 's'}`);
-          termLog('build complete — ' + (bitsEnd.join(', ') || 'no changes'), 'done');
-          if (bitsEnd.length) celebrate();
-          schedulePreview(); // live preview refreshes once more now the build ended
+          if (ev.mode === 'ask' || ev.mode === 'explain') {
+            termLog(ev.mode === 'ask' ? 'reply complete' : 'explanation complete', 'done');
+          } else {
+            termLog('build complete — ' + (bitsEnd.join(', ') || 'no changes'), 'done');
+            if (bitsEnd.length) celebrate();
+            schedulePreview(); // live preview refreshes once more now the build ended
+          }
           if (aiMsg) {
             aiMsg.setStatus('done');
             const rest = filter.drain();

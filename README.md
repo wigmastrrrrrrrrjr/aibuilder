@@ -24,6 +24,25 @@ cp .env.example .env               # then edit: add your keys
 npm start                          # http://localhost:8787  (runs aibuilderapi/)
 ```
 
+## Chat modes
+
+The composer has three modes. A mode decides what a turn is allowed to **do** —
+the model and effort knobs still control how it thinks.
+
+| mode | what it does | streams |
+|---|---|---|
+| **Build** | the full agent: writes files, edits, runs commands | only its commentary — tool calls and file payloads never leave the server |
+| **Chat** | answers a question, plans, brainstorms, writes copy | the reply and nothing else: no tools, no file writes |
+| **Explain** | reads and searches the project, then explains it | prose plus read-only activity; every write tool is refused server-side |
+
+Build mode's `>>>tool` calls carry whole files. Those payloads are parsed and
+executed inside the API (`src/stream-filter.js`) and dropped before the SSE
+stream, so the transcript only ever receives the words meant for the person —
+the browser no longer has to hide a file's contents as it scrolls past.
+
+The mode travels in the `POST /api/chat` body as `mode: "build" | "ask" | "explain"`
+and is persisted in `localStorage` under `ab.mode`.
+
 ## How generated apps store data
 
 Every generated app gets `window.creat.db` (auto-injected, backed by the
@@ -95,7 +114,9 @@ aibuilderapi/  the API — deployable standalone to Cloudflare Workers (wrangler
   src/chat.js      SSE chat proxy with Ollama/Mistral failover (per-project model selection)
   src/parser.js    streaming >>>tool call parser (legacy blocks normalized)
   src/tools.js     tool registry: names, argument validation, execution, results
-  src/prompt.js    system prompt for the generator model
+  src/prompt.js    system prompts: build, chat (ask) and explain modes
+  src/modes.js     the mode vocabulary + which tools each mode may run
+  src/stream-filter.js  drops tool/file payloads before they reach the SSE wire
   src/models.js    model catalogue proxy (/api/models)
   src/preview.js   serves published/generated apps + injects BaaS SDK
   src/baas.js      generic CRUD backend for generated apps

@@ -1063,6 +1063,18 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 .effortSel button.on[data-effort='3'],
 .effortSel button.on[data-effort='4'] { color: var(--accent-deep); }
 
+/* Mode switch — what this turn is allowed to do. Same segmented control as
+   Effort, but the active mode carries the accent so the current job is
+   readable at a glance. */
+.modeSel button.on[data-mode='build'] { color: var(--accent-deep); }
+.modeSel button.on[data-mode='ask'] { color: var(--ink); }
+.modeSel button.on[data-mode='explain'] { color: var(--ink); }
+.modeSel button { min-width: 44px; }
+@media (max-width: 720px) {
+  .modeSel { order: -1; }
+  .modeSel button { padding: 4px 9px; font-size: 11px; }
+}
+
 #composerTop .promptHint {
   margin-left: auto;
   font-size: 11px;
