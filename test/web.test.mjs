@@ -102,6 +102,19 @@ test('the SPA top-level code loads without a TDZ / ReferenceError', () => {
   assert.equal(failure, null, `app.js crashed while loading: ${failure}`);
 });
 
+test('the composer exposes the three chat modes and sends the chosen one', () => {
+  // The mode is only real if the switch exists, is labelled, and is actually
+  // put in the request body — a UI that forgets to send it silently builds.
+  const group = INDEX_HTML.match(/id="modeSel"[\s\S]{0,600}?<\/div>/);
+  assert.ok(group, 'index.html must render the #modeSel switch');
+  for (const mode of ['build', 'ask', 'explain']) {
+    assert.ok(group[0].includes(`data-mode="${mode}"`), `missing ${mode} button`);
+  }
+  assert.ok(/mode:\s*turnMode/.test(APP_JS), 'the send() body must carry the chosen mode');
+  assert.ok(/localStorage\.setItem\('ab\.mode'/.test(APP_JS), 'the mode must persist across reloads');
+  assert.ok(/MODES\s*=\s*\{/.test(APP_JS), 'the SPA must define the mode labels/hints');
+});
+
 test('index.html loads the current app.js build', () => {
   const asset = (html, re) => (html.match(re) || [])[1];
   const appV = Number(asset(INDEX_HTML, /app\.js\?v=(\d+)/));
@@ -109,5 +122,5 @@ test('index.html loads the current app.js build', () => {
   assert.ok(Number.isFinite(appV) && appV > 0, 'index.html must cache-bust app.js');
   assert.ok(Number.isFinite(cssV) && cssV > 0, 'index.html must cache-bust style.css');
   // A stale ?v= serves the previous bundle from the CDN cache after a deploy.
-  assert.ok(appV >= 55, `app.js?v= must be bumped after changing the SPA (saw v=${appV})`);
+  assert.ok(appV >= 56, `app.js?v= must be bumped after changing the SPA (saw v=${appV})`);
 });

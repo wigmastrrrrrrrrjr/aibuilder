@@ -1,7 +1,9 @@
 import { Hono } from 'hono';
 import { store } from './store.js';
 import { FileStreamer } from './parser.js';
-import { systemPrompt, workspaceSystemPrompt } from './prompt.js';
+import { systemPrompt, workspaceSystemPrompt, askSystemPrompt, explainSystemPrompt } from './prompt.js';
+import { VisibleStream } from './stream-filter.js';
+import { chatMode, modeAllowsTool, MODE_LABEL } from './modes.js';
 import { extractKey, builtinKey, localOllamaUrl, openrouterKey } from './keys.js';
 import { getVar } from './env.js';
 import { getUser, canWrite } from './auth.js';
@@ -140,6 +142,8 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
     }
   }
 
+  const mode = chatMode(body?.mode);
+
   let pid = body.projectId;
   let project = null;
   if (pid) {
@@ -191,10 +195,13 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
     if (chargeErr) return { error: chargeErr, status: 402 };
   }
 
-  const fileCtx = await buildFileContext(pid);
+  // Chat mode talks about the project but does not read the code into the
+  // prompt: a file index (paths only) is enough context there, and it keeps the
+  // conversation cheap. Build and Explain need the actual contents.
+  const fileCtx = mode === 'ask' ? await buildFileIndex(pid) : await buildFileContext(pid);
   await store.addMessage(pid, 'user', message, user.name);
 
-  return { pid, model, effort, temperature: clampedTemp(body?.temperature, model), fileCtx, key, ownKey, isLocalModel, project };
+  return { pid, model, effort, mode, temperature: clampedTemp(body?.temperature, model), fileCtx, key, ownKey, isLocalModel, project };
 }
 
 // Run one generation turn: emits `meta`, streams tokens and tool events, and
@@ -205,12 +212,23 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
 export async function runChat(ctx) {
   const { body, message, pid, model, effort, fileCtx, key, signal, temperature = TEMP_MIN } = ctx;
   const send = typeof ctx.emit === 'function' ? ctx.emit : () => {};
+  const mode = chatMode(ctx.mode || body?.mode);
 
-  send({ type: 'meta', projectId: pid, model, effort: EFFORT[effort].label });
+  // Chat mode is a different shape of turn (one reply, no session loop), so it
+  // leaves here before any build machinery is set up. Both hosts — the Worker
+  // route and the terminal daemon — come through runChat, so dispatching here
+  // keeps them identical.
+  if (mode === 'ask') return runAnswer({ ...ctx, mode });
+
+  send({ type: 'meta', projectId: pid, model, effort: EFFORT[effort].label, mode, modeLabel: MODE_LABEL[mode] });
   const orKey = openrouterKey();
 
   let provider = 'ollama';
   const emit = (ev) => send(ev);
+
+      // Token throttling is installed per round; tool handlers call this so a
+      // file/command card never overtakes the sentence that introduced it.
+      let flushTokens = () => {};
 
       const written = [];
       const edited = [];
@@ -237,7 +255,16 @@ export async function runChat(ctx) {
       const handleGen = async (call) => {
         if (!call || call.type !== 'tool') return true;
         const name = call.name;
+        // Explain mode may look, never touch. A stray write is refused here —
+        // before it reaches the store — and fed back so the model corrects
+        // itself in the repair round instead of pretending it worked.
+        if (!modeAllowsTool(mode, name)) {
+          send({ type: 'warn', message: `${name} is unavailable in Explain mode — it only reads and explains.` });
+          diag.push(`${name} is disabled in Explain mode. Do not attempt it again: explain what would change in prose and tell the user to switch to Build mode to apply it.`);
+          return false;
+        }
         const args = call.arguments && typeof call.arguments === 'object' ? call.arguments : {};
+        flushTokens();
         if (name === 'batch') {
           for (const sub of (Array.isArray(args.tools) ? args.tools : [])) {
             if (!(await handleGen({ ...(sub || {}), type: 'tool' }))) break;
@@ -394,9 +421,10 @@ export async function runChat(ctx) {
       // the build from just that summary so context never silently degrades.
       const memRatio = Math.max(0.35, Math.min(0.99, Number(getVar('MEMORY_COMPACT_RATIO') || 0.78) || 0.78));
       const memBudget = (EFFORT[effort].ctx || 32000) * memRatio;
+      const basePrompt = mode === 'explain' ? explainSystemPrompt() : systemPrompt();
       const memEstTokens = (txt) => Math.ceil(String(txt || '').length / 4);
       const memFull = () =>
-        (memEstTokens(systemPrompt()) + memEstTokens(fileCtx) +
+        (memEstTokens(basePrompt) + memEstTokens(fileCtx) +
           histRef.reduce((n, m) => n + memEstTokens(m.content), 0)) >= memBudget;
       if (memFull() && histRef.length >= 4) {
         // memory nearly full → compact once at the top of this build
@@ -420,12 +448,18 @@ export async function runChat(ctx) {
           send({ type: 'note', message: 'Memory compacted — the build now continues from the project summary above.' });
         }
       }
-const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + fileCtx }, ...histRef];
+const buildGenMessages = () => [{ role: 'system', content: basePrompt + fileCtx }, ...histRef];
       const repairPrompt = () => {
-        const parts = [];
-        if (diag.length) parts.push('FAILED OPERATIONS (exact errors — fix every one):\n' + diag.map((x) => ' - ' + x).join('\n'));
-        return parts.length
-          ? 'The build still has failing operations. Do NOT stop and do NOT restate the problem — apply the exact fixes below, then keep building the app.\n\n' + parts.join('\n\n')
+        const list = diag.map((x) => ' - ' + x).join('\n');
+        // Explain mode has no writes to repair: the only correction is to stop
+        // reaching for one and answer the question in prose.
+        if (mode === 'explain') {
+          return diag.length
+            ? 'Explain mode cannot modify the project, so there is nothing to repair. Do NOT retry the write: finish any reads you still need, then answer the question in prose and tell the user to switch to Build mode for the change.\n\nREJECTED OPERATIONS:\n' + list
+            : 'Explain mode cannot modify the project. Read whatever you still need and answer the question in prose.';
+        }
+        return diag.length
+          ? 'The build still has failing operations. Do NOT stop and do NOT restate the problem — apply the exact fixes below, then keep building the app.\n\nFAILED OPERATIONS (exact errors — fix every one):\n' + list
           : 'The build hit an error. Re-check the recent work and fix whatever is wrong, then keep building the app.';
       };
 
@@ -464,6 +498,17 @@ const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + file
           let tokenQ = [];
           let tokenLast = 0;
           let tokenTimer = null;
+          // Everything the model writes passes through the filter. Only prose
+          // (the part a person is meant to read) is queued for the client;
+          // tool calls and legacy FILE/EDIT payloads carry whole files and are
+          // dropped here, before the wire. The parser below still sees the raw
+          // text, so every operation still runs exactly as before.
+          const visible = new VisibleStream();
+          flushTokens = () => {
+            if (tokenTimer) { clearTimeout(tokenTimer); tokenTimer = null; }
+            if (tokenQ.length) { send({ type: 'token', v: tokenQ.join('') }); tokenQ = []; }
+            tokenLast = Date.now();
+          };
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -495,7 +540,8 @@ const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + file
               raw += tok;
               // throttle token streaming to ~5 events/sec to reduce UI churn
               tokenQ = tokenQ || [];
-              tokenQ.push(tok);
+              const show = visible.push(tok);
+              if (show) tokenQ.push(show);
               const now = Date.now();
               if (!tokenTimer || now - tokenLast >= 200) {
                 // flush
@@ -520,6 +566,11 @@ const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + file
               }
             }
           }
+          // Whatever prose the filter is still holding (a partial marker tail,
+          // or text that trailed a tool call) goes out before the round ends.
+          const tail = visible.flush();
+          if (tail) tokenQ.push(tail);
+          flushTokens();
           for (const ev of parser.flush()) {
             await handleGen(ev);
           }
@@ -566,7 +617,9 @@ const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + file
           }
           if (wantRepair) send({ type: 'note', message: wasCut
             ? 'Output limit reached — continuing so the AI can finish the build; it resumes exactly where it stopped.'
-            : 'The build still has errors — continuing in this session so the AI can fix them right now.' });
+            : mode === 'explain'
+              ? 'Explain mode only reads — continuing so the AI can finish the explanation instead of changing files.'
+              : 'The build still has errors — continuing in this session so the AI can fix them right now.' });
           const roundDiag = diag.slice(diagAtStart);
           if (raw.trim()) {
             let recorded = raw;
@@ -615,6 +668,115 @@ const buildGenMessages = () => [{ role: 'system', content: systemPrompt() + file
       const sb = createClient(sbUrl, sbKey);
       const ch = sb.channel('build:' + pid);
       await ch.send({ type: 'broadcast', event: 'evt', payload: { type: 'refresh', sid: body.sid || '', files: written } });
+      setTimeout(() => { try { sb.removeChannel(ch); } catch {} }, 100);
+    }
+  } catch { /* live layer is best-effort */ }
+}
+
+// ---- Chat mode (ask) ---------------------------------------------------------
+// One conversational turn: a single model call with no tool parser and no
+// session loop. The reply IS the output — nothing else exists in this mode, so
+// the stream is exactly the text the person is meant to read. Payload syntax is
+// still filtered out before the wire, in case the model reaches for it anyway.
+async function runAnswer(ctx) {
+  const { body, message, pid, model, effort, fileCtx, key, signal, temperature = TEMP_MIN } = ctx;
+  const send = typeof ctx.emit === 'function' ? ctx.emit : () => {};
+  const emit = (ev) => send(ev);
+
+  send({ type: 'meta', projectId: pid, model, effort: EFFORT[effort].label, mode: 'ask', modeLabel: MODE_LABEL.ask });
+
+  let histRef = [];
+  try {
+    histRef = await store.history(pid).then((ms) => ms.map((m) => ({ role: m.role, content: m.content })));
+  } catch { /* start from scratch */ }
+  if (!histRef.length || histRef[histRef.length - 1].role !== 'user') {
+    histRef.push({ role: 'user', content: message });
+  }
+  const messages = [{ role: 'system', content: askSystemPrompt() + fileCtx }, ...histRef];
+
+  let upstream;
+  let providerUsed = null;
+  try {
+    ({ upstream, provider: providerUsed } = await openUpstream(model, messages, key, signal, emit, EFFORT[effort], temperature));
+  } catch (e) {
+    if (!signal.aborted) send({ type: 'error', message: e.message });
+    send({ type: 'done', projectId: pid, files: [], edited: [], deleted: [], renamed: [], assets: [], seeds: [], model, mode: 'ask' });
+    return;
+  }
+  active[providerUsed]++;
+
+  let text = '';   // raw model output, for diagnostics
+  let shown = '';  // exactly what the person saw — this is what gets stored
+  try {
+    const reader = upstream.body.getReader();
+    const dec = new TextDecoder();
+    let lineBuf = '';
+    let tokenQ = [];
+    let tokenLast = 0;
+    let tokenTimer = null;
+    // Same guard as a build turn: if the model reaches for payload syntax even
+    // here (a stray >>>tool block), the call is dropped before the wire rather
+    // than shown to the person as raw JSON.
+    const visible = new VisibleStream();
+    const flush = () => {
+      if (tokenTimer) { clearTimeout(tokenTimer); tokenTimer = null; }
+      if (tokenQ.length) { send({ type: 'token', v: tokenQ.join('') }); tokenQ = []; }
+      tokenLast = Date.now();
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      lineBuf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = lineBuf.indexOf('\n')) !== -1) {
+        const line = lineBuf.slice(0, nl).trim();
+        lineBuf = lineBuf.slice(nl + 1);
+        if (!line || line === 'data: [DONE]') continue;
+        let j;
+        try {
+          const payload = line.startsWith('data: ') ? line.slice(6) : line;
+          j = JSON.parse(payload);
+        } catch { continue; }
+        let tok = '';
+        if (providerUsed === 'mistral' || providerUsed === 'openrouter') {
+          tok = j?.choices?.[0]?.delta?.content ?? '';
+        } else {
+          // Thinking traces are internal reasoning, not part of the reply — in
+          // this mode only what the person reads is streamed.
+          tok = j?.message?.content ?? '';
+        }
+        if (!tok) continue;
+        text += tok;
+        const show = visible.push(tok);
+        if (show) { tokenQ.push(show); shown += show; }
+        const now = Date.now();
+        if (!tokenTimer || now - tokenLast >= 200) flush();
+        else if (!tokenTimer) {
+          tokenTimer = setTimeout(flush, 200 - (now - tokenLast));
+        }
+      }
+    }
+    const tail = visible.flush();
+    if (tail) { tokenQ.push(tail); shown += tail; }
+    flush();
+  } catch (e) {
+    if (!signal.aborted) send({ type: 'error', message: String(e?.message || e) });
+  } finally {
+    try { active[providerUsed]--; } catch { /* ignore */ }
+  }
+
+  const answer = shown.trim() || text.trim();
+  if (answer) {
+    try { await store.addMessage(pid, 'assistant', answer); } catch { /* history is best-effort */ }
+  }
+  send({ type: 'done', projectId: pid, files: [], edited: [], deleted: [], renamed: [], assets: [], seeds: [], model, mode: 'ask' });
+  try {
+    const sbUrl = getVar('SUPABASE_URL') || 'https://trwxpgmkpaddnyktbleg.supabase.co';
+    const sbKey = getVar('SUPABASE_SERVICE_KEY') || '';
+    if (sbUrl && sbKey) {
+      const sb = createClient(sbUrl, sbKey);
+      const ch = sb.channel('build:' + pid);
+      await ch.send({ type: 'broadcast', event: 'evt', payload: { type: 'refresh', sid: body?.sid || '', files: [] } });
       setTimeout(() => { try { sb.removeChannel(ch); } catch {} }, 100);
     }
   } catch { /* live layer is best-effort */ }
@@ -1252,6 +1414,17 @@ async function workspaceChat(c, body, message, user) {
 // Give the model eyes on the current project: full file list plus contents
 // of the most important files within a token budget.
 const CTX_BUDGET = 20000;
+
+// Chat mode gets a map of the project, not the code itself: enough to talk
+// about the app by name without paying for every file in the prompt.
+async function buildFileIndex(pid) {
+  let files = [];
+  try { files = await store.listFiles(pid); } catch { return ''; }
+  if (!files || !files.length) return '';
+  const lines = files.slice(0, 80).map((f) => `- ${f.path}`);
+  const more = files.length > lines.length ? `\n…and ${files.length - lines.length} more` : '';
+  return `\n\n## This project\nFiles in this app (names only — their contents are not loaded in this mode):\n${lines.join('\n')}${more}`;
+}
 
 async function buildFileContext(pid) {
   // One query instead of listFiles + one getFile per file (N+1).

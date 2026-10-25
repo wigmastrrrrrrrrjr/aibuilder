@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#e8501a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="style.css?v=50">
+<link rel="stylesheet" href="style.css?v=51">
 <script>(function(){try{var t=localStorage.getItem('ab.theme')||((window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light');document.documentElement.dataset.theme=t}catch(e){}})();</script>
 </head>
 <body>
@@ -152,6 +152,12 @@
       <div id="composer">
         <div id="templates"></div>
         <div id="composerTop">
+          <span class="fieldLabel">Mode</span>
+          <div class="effortSel modeSel" id="modeSel" role="group" aria-label="Chat mode">
+            <button type="button" data-mode="build" class="on" title="Build — writes the files and builds the app">Build</button>
+            <button type="button" data-mode="ask" title="Chat — answers only, no tools and no file changes">Chat</button>
+            <button type="button" data-mode="explain" title="Explain — reads your project and explains it, never changes it">Explain</button>
+          </div>
           <span class="fieldLabel">Model</span>
           <select id="modelSel" title="Model used for generation"></select>
           <span class="fieldLabel">Effort</span>
@@ -421,6 +427,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=55"></script>
+    <script src="app.js?v=56"></script>
 </body>
 </html>
