@@ -86,6 +86,8 @@ let BAAS_SDK_RAW = `(function () {
       }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (res) {
           if (!res.ok) throw new Error(res.j.error || ('HTTP error'));
+          if (res.j.verifyRequired) throw new Error(res.j.message || 'Check your email for a verification code, then log in.');
+          if (!res.j.token) throw new Error('sign-in failed — the server did not return a session');
           setTok(res.j.token, res.j.username);
           d.remove();
           (onDone || function () { location.reload(); })();

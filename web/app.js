@@ -113,6 +113,11 @@ effortSel.addEventListener('click', (e) => {
   if (label) notify('Effort', label + (effort >= 3 ? ` · model "${cur}"` : ''));
 });
 
+// Declared before the temperature block: applyTempMax() -> currentModel()
+// reads it while the script is still executing, and a `let` declared further
+// down would throw (TDZ) and abort the whole SPA.
+let defaultModel = 'gpt-oss:120b';
+
 // Sampling temperature — the UI floor is always 1, the ceiling is whatever
 // the selected model supports (2 for OpenAI/OpenRouter, 1 for Ollama).
 let temp = Number(localStorage.getItem('ab.temp')) || 1;
@@ -149,7 +154,6 @@ const SID = (() => {
 })();
 let displayText = '';
 let canEdit = false; // may the signed-in user modify the open project?
-let defaultModel = 'gpt-oss:120b';
 
 /* ---------- strip generator blocks (FILE/EDIT/DELETE/PLAN) from output ---------- */
 function BlockFilter() {
@@ -276,16 +280,23 @@ function flashChip(path) {
 // (~15 min, read-only, not a session) and put it in the preview URL.
 let previewTok = '';
 let previewTokFor = '';
+let previewTokExp = 0;   // ms epoch — tokens last 15 min, so they must be renewed
 async function getPreviewToken() {
   if (!projectId) return '';
-  if (previewTok && previewTokFor === projectId) return previewTok;
+  // Reuse only an unexpired token for this project. The old check never looked
+  // at the expiry, so after ~15 minutes every private preview load (and every
+  // "Open in new tab") started returning the 404 placeholder until a reload.
+  if (previewTok && previewTokFor === projectId && Date.now() < previewTokExp) return previewTok;
   try {
     const r = await fetch(`${API}/api/projects/${projectId}/preview-token`, {
       method: 'POST', headers: authHeaders(),
     });
-    if (!r.ok) return '';
+    if (!r.ok) { previewTok = ''; previewTokFor = ''; previewTokExp = 0; return ''; }
     const d = await r.json();
-    previewTok = d.token || ''; previewTokFor = projectId;
+    previewTok = d.token || '';
+    previewTokFor = projectId;
+    const ttlMs = Math.max(0, (Number(d.expiresIn) || 900) * 1000);
+    previewTokExp = previewTok ? Date.now() + Math.max(0, ttlMs - 60_000) : 0;
     return previewTok;
   } catch { return ''; }
 }
@@ -320,7 +331,13 @@ function authHeaders(extra) {
 }
 
 /* ---------- account / sign-up gate ---------- */
-const sessTok = () => localStorage.getItem('ab.tok') || '';
+// Older builds stored the literal string "undefined" when signup failed to
+// return a token; treat that (and "null") as signed out so those sessions can
+// recover instead of sending a permanently-invalid header on every request.
+const sessTok = () => {
+  const t = localStorage.getItem('ab.tok') || '';
+  return t === 'undefined' || t === 'null' ? '' : t;
+};
 const sessName = () => localStorage.getItem('ab.user') || '';
 
 let authMode = 'signup';
@@ -338,6 +355,11 @@ function okToSignUp(dob) {
 }
 
 function finishAndEnter(d, after) {
+  // A session token is required: storing an undefined one used to leave the UI
+  // "signed in" with a header that every API call rejected.
+  if (!d || !d.token || !d.username) {
+    throw new Error('sign-in did not complete — no session was returned. Try logging in.');
+  }
   try {
     localStorage.setItem('ab.tok', d.token);
     localStorage.setItem('ab.user', d.username);
@@ -370,6 +392,20 @@ async function doAuth(e) {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || `server error ${r.status}`);
+      // Some deployments still gate signup behind an emailed 6-digit code.
+      // Show the verification step instead of storing a token that isn't there.
+      if (d.verifyRequired) {
+        pendingVerifyUser = username;
+        $('authForm').hidden = true;
+        $('verifyForm').hidden = false;
+        $('verifyErr').textContent = '';
+        const sub = $('verifySub');
+        if (sub) sub.textContent = d.message || 'We sent a 6-digit code to verify your email.';
+        $('verifyCode').value = '';
+        $('verifyCode').focus();
+        finish();
+        return;
+      }
       finishAndEnter(d, () => location.reload());
       return;
     }
@@ -960,7 +996,15 @@ async function loadModels() {
 }
 
 async function loadProjects(selectPid) {
-  const all = await (await fetch(`${API}/api/projects`, { headers: authHeaders() })).json();
+  // A signed-out/stale session returns { error } rather than an array; the old
+  // code then threw "all.filter is not a function" on every page load.
+  let all = null;
+  try {
+    const r = await fetch(`${API}/api/projects`, { headers: authHeaders() });
+    if (r.status === 401) { showSignedOut(); return; }
+    all = await r.json();
+  } catch { return; }
+  if (!Array.isArray(all)) return;
   // sidebar = my projects + every team project I'm a member of
   const me = sessName();
   const list = all.filter((p) => !p.owner || p.owner === me || (p.team_id && myTeamIds.has(p.team_id)));
@@ -988,7 +1032,17 @@ async function loadProjects(selectPid) {
 
 async function selectProject(pid) {
   projectId = pid;
-  const data = await (await fetch(`${API}/api/projects/${pid}`, { headers: authHeaders() })).json();
+  const r = await fetch(`${API}/api/projects/${pid}`, { headers: authHeaders() });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.project) {
+    // Deleted project, lost access, or a stale token — don't leave the UI
+    // showing a half-loaded project built from an error body.
+    if (r.status === 401) showSignedOut();
+    else notify('Open project', data.error || `HTTP ${r.status}`);
+    projectId = null;
+    resetToNew();
+    return;
+  }
   projName.textContent = data.project.name;
   document.title = `${data.project.name} — aibuilder`;
   publishBtn.disabled = false;
@@ -1807,6 +1861,19 @@ async function send() {
   }
 }
 
+/* ---------- lost / invalid session ---------- */
+function showSignedOut() {
+  try {
+    localStorage.removeItem('ab.tok');
+    localStorage.removeItem('ab.user');
+  } catch { /* ignore */ }
+  const gate = $('authGate');
+  if (gate) {
+    gate.hidden = false;
+    paintAuth();
+  }
+}
+
 /* ---------- rename project (the owner names it — not the prompt) ---------- */
 async function doRename() {
   if (!projectId || busy) return;
@@ -1943,10 +2010,13 @@ async function uploadFiles(files) {
     });
     if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
     const out = await res.json();
-    if (out.skipped.length) notify('Upload', `${out.skipped.length} files skipped (${out.skipped.slice(0, 3).join(', ')}…)`);
+    const skipped = Array.isArray(out.skipped) ? out.skipped : [];
+    const saved = Array.isArray(out.saved) ? out.saved : [];
+    if (skipped.length) notify('Upload', `${skipped.length} file${skipped.length === 1 ? '' : 's'} skipped (${skipped.slice(0, 3).join(', ')}…)`);
     if (intoExisting) await selectProject(projectId);
     else { resetToNew(); await selectProject(pid); }
-    for (const n of (out.uploaded || [])) flashChip(n);
+    // The API reports the files it stored as `saved` (there is no `uploaded`).
+    for (const n of saved) flashChip(n);
   } catch (err) {
     notify('Upload failed', err.message);
     alert(`⚠ ${err.message}`);
@@ -2029,6 +2099,27 @@ function showFpEmpty(text) {
   fpCode.appendChild(d);
 }
 
+// Uploaded (and encode_payload) files are stored base64-encoded. The versions
+// API returns that stored form plus `encoding`, so the viewer has to decode it
+// or the whole file pane/diff shows nothing but a base64 blob.
+const BINARY_PATH_RE = /\.(png|jpe?g|gif|webp|ico|bmp|avif|woff2?|ttf|otf|eot|mp3|mp4|webm|ogg|wav|pdf|zip|gz|wasm)$/i;
+function isBinaryPath(p) { return BINARY_PATH_RE.test(String(p || '')); }
+function b64ToText(b64) {
+  try {
+    const bin = atob(String(b64));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  } catch { return String(b64); }
+}
+function versionText(v) {
+  if (!v || v.content == null) return '';
+  return v.encoding === 'base64' ? b64ToText(v.content) : String(v.content);
+}
+function versionIsBinary(v) {
+  return Boolean(v && v.encoding === 'base64' && isBinaryPath(fpPath));
+}
+
 async function openFilePane(path) {
   if (!projectId || !path) return;
   fpPath = path;
@@ -2045,7 +2136,7 @@ async function openFilePane(path) {
     fpVersionsList = list;
     fpCurrentSeq = list[0].seq;
     const cur = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(path)}&seq=${fpCurrentSeq}`, { headers: authHeaders() })).json();
-    fpCurrent = (cur && cur.content != null) ? cur.content : '';
+    fpCurrent = versionText(cur);
     renderVersionList();
     renderRaw();
   } catch (e) {
@@ -2080,7 +2171,7 @@ async function versionContent(seq) {
   if (seq === fpCurrentSeq) return fpCurrent;
   try {
     const j = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(fpPath)}&seq=${seq}`, { headers: authHeaders() })).json();
-    return (j && j.content != null) ? j.content : '';
+    return versionText(j);
   } catch { return ''; }
 }
 
@@ -2095,6 +2186,7 @@ function showFpRaw(text) {
 async function renderRaw() {
   const v = fpSelected || fpVersionsList[0];
   if (!v) return;
+  if (versionIsBinary(v)) { showFpEmpty('Binary file — not shown as text.'); return; }
   const text = await versionContent(v.seq);
   if (v.deleted && text === '') showFpEmpty('This version deleted the file.');
   else showFpRaw(text);
@@ -2103,6 +2195,7 @@ async function renderRaw() {
 async function renderDiff() {
   if (!fpSelected) { showFpEmpty('Select a previous version to see the diff against the current file.'); return; }
   if (fpSelected.seq === fpCurrentSeq) { showFpEmpty('This is the current version — nothing has changed.'); return; }
+  if (versionIsBinary(fpSelected)) { showFpEmpty('Binary file — diffs are only available for text files.'); return; }
   const before = await versionContent(fpSelected.seq);
   const after = await versionContent(fpCurrentSeq);
   fpCode.innerHTML = '';

@@ -8,7 +8,7 @@ import { preview, BAAS_SDK_JS } from './preview.js';
 import { models, FREE_DAILY_CREDITS, creditsToUnits, unitsToCredits } from './models.js';
 import { getVar } from './env.js';
 import { builtinKey } from './keys.js';
-import { toBase64 } from './base64.js';
+import { toBase64, fromBase64 } from './base64.js';
 import { live } from './live.js';
 import { terminal, serverApi } from './terminal.js';
 import { kterm } from './kterm.js';
@@ -157,7 +157,7 @@ app.get('/api/docs', (c) => {
       storage: 'Supabase (schema: supabase-v2.sql) — the v1 API persists in Cloudflare D1; v2 lives in Postgres with Realtime.',
     },
     streams: [
-      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'w[...]
+      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'workspace' (optional)", sid: 'string', effort: 'number', temperature: 'number', runId: 'string' } },
     ],
     endpoints: [
       { method: 'GET', path: '/api/docs', auth: 'none', description: 'This documentation' },
@@ -206,7 +206,7 @@ app.get('/api/docs', (c) => {
       { method: 'POST', path: '/api/teams/:tid/join', auth: 'user', body: { code: 'string' }, description: 'Join via invite code' },
       { method: 'POST', path: '/api/teams/:tid/leave', auth: 'user', description: 'Leave team' },
       { method: 'DELETE', path: '/api/teams/:tid', auth: 'owner', description: 'Delete team' },
-      { method: 'POST', path: '/api/projects/:pid/team', auth: 'owner', body: { teamId: 'string' }, description: 'Assign project to a team' },
+      { method: 'POST', path: '/api/projects/:pid/team', auth: 'owner', body: { team_id: 'string ("" detaches)', teamId: 'alias' }, description: 'Assign project to a team' },
 
       { method: 'GET', path: '/api/features', auth: 'none', description: 'Feature list + votes' },
       { method: 'POST', path: '/api/features', auth: 'user', body: { title: 'string', description: 'string' }, description: 'Propose a feature' },
@@ -256,7 +256,7 @@ app.get('/api/credits', requireUser, async (c) => {
   return c.json({
     credits: {
       total: bal.totalCredits,
-      used: unitsToCredits(bal.spent) + unitsToCredits(bal.earned),
+      used: unitsToCredits(bal.spent),   // total - left == spent; earned is added to BOTH total and left
       left: bal.leftCredits,
       day,
     },
@@ -291,7 +291,7 @@ app.post('/api/credits/gift', requireUser, async (c) => {
       error: `You only have ${bal.leftCredits} credits available right now. Earn more by getting visits to published apps, or bring your own Ollama API key (🔑) for unlimited use.`,
       credits: {
         total: bal.totalCredits,
-        used: unitsToCredits(bal.spent) + unitsToCredits(bal.earned),
+        used: unitsToCredits(bal.spent),   // total - left == spent; earned is added to BOTH total and left
         left: bal.leftCredits,
         day,
       },
@@ -314,7 +314,7 @@ app.post('/api/credits/gift', requireUser, async (c) => {
     gift: { to: recipient.name, amount: unitsToCredits(units), day },
     credits: {
       total: after.totalCredits,
-      used: unitsToCredits(after.spent) + unitsToCredits(after.earned),
+      used: unitsToCredits(after.spent),   // see note above: used == spent
       left: after.leftCredits,
       day,
     },
@@ -359,7 +359,7 @@ app.post('/api/credits/grant', requireUser, async (c) => {
     granted: unitsToCredits(units),
     credits: {
       total: bal.totalCredits,
-      used: unitsToCredits(bal.spent) + unitsToCredits(bal.earned),
+      used: unitsToCredits(bal.spent),   // total - left == spent; earned is added to BOTH total and left
       left: bal.leftCredits,
       day,
     },
@@ -418,8 +418,24 @@ app.route('/api/models', models);
 // which returned every project in the database (SELECT *) -- any anonymous
 // caller could enumerate ids and then read each one. Public discovery lives at
 // /api/discover and is filtered to published projects server-side.
-app.get('/api/projects', requireUser, async (c) =>
-  c.json(await store.listProjectsByOwner(c.get('user').name)));
+// Own projects + every project shared with a team the caller belongs to. The
+// sidebar already treated team projects as visible, but this endpoint returned
+// owner rows only — so a teammate never saw an app shared with their team.
+app.get('/api/projects', requireUser, async (c) => {
+  const me = c.get('user').name;
+  const own = await store.listProjectsByOwner(me);
+  let shared = [];
+  try {
+    const teamIds = await store.myTeamIds(me);
+    if (teamIds.length) shared = await store.listProjectsByTeams(teamIds);
+  } catch (e) {
+    console.error('team project list:', e.message);   // own list still works
+  }
+  const seen = new Set(own.map((p) => p.id));
+  for (const p of shared) if (!seen.has(p.id)) { seen.add(p.id); own.push(p); }
+  own.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  return c.json(own);
+});
 
 app.post('/api/projects', requireUser, async (c) => {
   const { name } = await c.req.json().catch(() => ({}));
@@ -448,13 +464,31 @@ app.get('/api/projects/:pid', async (c) => {
 // raw file export for the terminal client (and external tooling) — full contents
 // Owner-only: this is the full decrypted source of the project. It was the
 // single most sensitive read in the API and required no credential at all.
+// Binary assets cannot travel as UTF-8 text, so they stay base64 with
+// encoding:'base64'. Everything else is decoded back to its real text — the
+// README promises raw file contents (decoded from base64 when stored that
+// way), and a consumer writing `content` verbatim used to save base64 gibberish
+// for every uploaded file.
+const BINARY_EXT_RE = /\.(png|jpe?g|gif|webp|ico|bmp|avif|woff2?|ttf|otf|eot|mp3|mp4|webm|ogg|wav|pdf|zip|gz|wasm)$/i;
+function exportFiles(files) {
+  return (files || []).map((f) => {
+    if (!f || f.encoding !== 'base64' || BINARY_EXT_RE.test(String(f.path || ''))) return f;
+    try {
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(fromBase64(String(f.content || '')));
+      return { ...f, content: text, encoding: 'utf8' };
+    } catch {
+      return f;   // not valid UTF-8 — keep the base64 form
+    }
+  });
+}
+
 app.get('/api/projects/:pid/export', async (c) => {
   const project = await requireRead(c, c.req.param('pid'));
   if (project instanceof Response) return project;
   const payload = {
     name: project.name,
     updated_at: project.updated_at || 0,
-    files: await store.listFilesWithContent(project.id),
+    files: exportFiles(await store.listFilesWithContent(project.id)),
   };
   if (c.req.query('download') === '1') {
     const filename = `${project.name.replace(/[^a-z0-9_\-]+/gi, '_') || 'project'}.json`;

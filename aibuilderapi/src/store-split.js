@@ -124,6 +124,12 @@ export function createSplitStore(d1) {
       ]);
       return mergeById(a, b);
     },
+    async listProjectsByTeams(tids) {
+      const ids = (tids || []).filter(Boolean);
+      if (!ids.length) return [];
+      const [a, b] = await Promise.all([pg.listProjectsByTeams(ids), d1s.listProjectsByTeams(ids)]);
+      return mergeById(a, b);
+    },
     async getProject(pid) { return (await pg.getProject(pid)) || d1s.getProject(pid); },
     async deleteProject(pid) {
       if (await pg.getProject(pid)) await pg.deleteProject(pid).catch(() => {});

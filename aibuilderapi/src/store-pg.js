@@ -80,6 +80,14 @@ export function createPgStore() {
       if (error) throw new Error(`db list projects by owner: ${error.message}`);
       return data || [];
     },
+    async listProjectsByTeams(tids) {
+      const ids = (tids || []).filter(Boolean);
+      if (!ids.length) return [];
+      const { data, error } = await client().from('projects').select('*')
+        .in('team_id', ids).order('created_at', { ascending: false });
+      if (error) throw new Error(`db list projects by teams: ${error.message}`);
+      return data || [];
+    },
     async getProject(pid) {
       const { data, error } = await client().from('projects').select('*').eq('id', pid).maybeSingle();
       if (error) throw new Error(`db get project: ${error.message}`);

@@ -33,3 +33,11 @@ export async function resolveSession(token) {
 export function clearSession(token) {
   if (token) cache.delete(token);
 }
+
+// Purge every cached token belonging to a user — used when the account is
+// deleted, so other devices don't keep acting as the deleted user until the
+// 30s TTL happens to expire.
+export function clearUser(userId) {
+  if (!userId) return;
+  for (const [k, v] of cache) if (v && v.u && v.u.id === userId) cache.delete(k);
+}

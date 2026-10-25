@@ -101,7 +101,7 @@ async function chargeEffort(user, model, effort) {
       error: `${cfg.label} mode costs ${cost} credit${cost === 1 ? '' : 's'} and you have ${bal.leftCredits} left. Standard mode is free — or earn credits by publishing apps and getting visits, or bring your own Ollama API key (🔑).`,
       credits: {
         total: bal.totalCredits,
-        used: unitsToCredits(bal.spent) + unitsToCredits(bal.earned),
+        used: unitsToCredits(bal.spent),   // total - left == spent; earned is added to BOTH total and left
         left: bal.leftCredits,
         day,
       },

@@ -32,6 +32,14 @@ export function createD1Store(d1) {
       ).bind(owner).all();
       return results;
     },
+    async listProjectsByTeams(tids) {
+      const ids = (tids || []).filter(Boolean);
+      if (!ids.length) return [];
+      const { results } = await d1.prepare(
+        `SELECT * FROM projects WHERE team_id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at DESC`
+      ).bind(...ids).all();
+      return results;
+    },
     async getProject(pid) {
       return await d1.prepare('SELECT * FROM projects WHERE id = ?').bind(pid).first();
     },
