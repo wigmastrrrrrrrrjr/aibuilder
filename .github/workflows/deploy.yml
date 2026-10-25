@@ -33,7 +33,23 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      # The site itself is the main worker: deploy it FIRST. The dedicated
+      # chat/preview workers are an optional optimisation — the router in
+      # src/worker.js falls back to handling those routes locally when the
+      # service bindings are missing (see wrangler.toml). Previously this step
+      # came first and was fatal, so one optional worker failing blocked every
+      # release: main stayed on an old build while the schema/seed steps had
+      # already run (that is exactly what happened to the last two pushes).
+      - name: Deploy Worker + assets
+        working-directory: aibuilderapi
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Deploy dedicated workers (chat + preview)
+        id: dedicated
+        continue-on-error: true
         working-directory: aibuilderapi
         run: |
           npx wrangler deploy -c wrangler.chat.toml
@@ -42,12 +58,12 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Deploy Worker + assets
-        working-directory: aibuilderapi
-        run: npx wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Note dedicated-worker status
+        if: steps.dedicated.outcome == 'failure'
+        run: |
+          echo "::warning::Dedicated chat/preview workers did not deploy."
+          echo "The main worker is live and is serving those routes itself"
+          echo "(src/worker.js falls back when the service bindings are absent)."
 
       - name: Mirror secrets to dedicated workers
         working-directory: aibuilderapi
