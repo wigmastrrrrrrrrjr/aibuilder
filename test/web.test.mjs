@@ -148,6 +148,20 @@ test('the design system stays flat: no grain, no serif display face', () => {
   assert.ok(Math.max(...radii) <= 16, `radii must stay restrained (saw ${Math.max(...radii)}px)`);
 });
 
+test('the empty state has exactly one home — index.html', () => {
+  // resetToNew() used to carry its own copy of this markup, so an edit to the
+  // hero in index.html was silently overwritten at runtime by the stale copy
+  // in the script. The state now lives only in the HTML and is captured once.
+  assert.ok(/EMPTY_STATE_HTML/.test(APP_JS), 'app.js must capture the delivered empty state');
+  assert.ok(/messagesEl\.innerHTML = EMPTY_STATE_HTML;/.test(APP_JS), 'resetToNew() must restore it');
+  assert.ok(!/become real|Describe it\./.test(APP_JS), 'app.js must not hold a second copy of the hero copy');
+  assert.ok(/class="empty"/.test(INDEX_HTML), 'index.html must carry the empty state markup');
+  const quickStarts = (INDEX_HTML.match(/class="qt" data-prompt=/g) || []).length;
+  assert.equal(quickStarts, 4, 'the HTML empty state carries the quick starts');
+  assert.ok(/messagesEl\.querySelectorAll\('\.emptyQuick \.qt'\)/.test(APP_JS),
+    'quick-start clicks must still be bound after a reset');
+});
+
 test('index.html loads the current app.js build', () => {
   const asset = (html, re) => (html.match(re) || [])[1];
   const appV = Number(asset(INDEX_HTML, /app\.js\?v=(\d+)/));
@@ -155,5 +169,5 @@ test('index.html loads the current app.js build', () => {
   assert.ok(Number.isFinite(appV) && appV > 0, 'index.html must cache-bust app.js');
   assert.ok(Number.isFinite(cssV) && cssV > 0, 'index.html must cache-bust style.css');
   // A stale ?v= serves the previous bundle from the CDN cache after a deploy.
-  assert.ok(appV >= 57, `app.js?v= must be bumped after changing the SPA (saw v=${appV})`);
+  assert.ok(appV >= 58, `app.js?v= must be bumped after changing the SPA (saw v=${appV})`);
 });

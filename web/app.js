@@ -57,6 +57,11 @@ function applyTheme(theme) {
 }
 applyTheme(localStorage.getItem(THEME_KEY) || '');
 const messagesEl = $('messages'), promptBox = $('promptBox'), sendBtn = $('sendBtn');
+// The empty state lives in index.html. Keep the markup as delivered so
+// resetToNew() can restore the SAME thing — it used to carry its own copy,
+// which silently drifted from the HTML (the hero was edited in one place and
+// the app kept rendering the other).
+const EMPTY_STATE_HTML = messagesEl ? messagesEl.innerHTML : '';
 const activityEl = $('activity'), activityText = $('activityText'), rawStream = $('rawStream');
 const fileChips = $('fileChips'), frame = $('previewFrame'), projName = $('projName');
 const modelSel = $('modelSel'), publishBtn = $('publishBtn');
@@ -1148,24 +1153,7 @@ function resetToNew() {
   $('renameBtn').hidden = true;
   if (saveBtn) saveBtn.disabled = true;
   setStatus('Ready');
-  messagesEl.innerHTML = `
-    <div class="empty">
-      <div class="emptyMark"><span class="ms" data-ic="spark"></span></div>
-      <h1>Describe it.<br>Watch it <em>become real.</em></h1>
-      <p>Tell aibuilder what you want to build. It drafts a blueprint, writes the code, and keeps a live, editable preview open the whole way through.</p>
-      <div class="emptySteps">
-        <div class="step"><div class="n">01</div><div class="t">Describe</div><div class="s">“A billing dashboard with charts and CSV export.”</div></div>
-        <div class="step"><div class="n">02</div><div class="t">Iterate</div><div class="s">Refine with follow-up prompts in the same thread.</div></div>
-        <div class="step"><div class="n">03</div><div class="t">Publish</div><div class="s">Ship it to the discovery feed in one click.</div></div>
-      </div>
-      <div class="emptyQuick">
-        <span class="eqLabel">Quick starts</span>
-        <button class="qt" data-prompt="Build a to-do list app. Users can add, edit, check off and delete tasks, and it saves everything to the built-in database so it survives refresh. Make it look polished with a nice card layout, dark-mode friendly and fully responsive.">✓ To-do list</button>
-        <button class="qt" data-prompt="Build a modern one-page landing page for a fictional startup. Include a hero with a headline and call-to-action, a features grid, a pricing section with three tiers, a testimonials row and a footer. Use clean gradients and make it fully responsive.">🚀 Landing page</button>
-        <button class="qt" data-prompt="Build a billing dashboard. Show a KPI header (revenue, MRR, churn, active customers), a line chart of revenue over the last 12 months, a recent transactions table, and export the visible table to CSV. Style it like a professional SaaS admin.">📊 Billing dashboard</button>
-        <button class="qt" data-prompt="Build a small quiz game. Show one question at a time with four options, highlight correct/wrong answers, track a score, and show a results screen at the end with a play-again button. Add a clean modern theme.">🧠 Quiz game</button>
-      </div>
-    </div>`;
+  messagesEl.innerHTML = EMPTY_STATE_HTML;
   mountIcons(messagesEl);
   setChips([]);
   frame.src = 'about:blank';
