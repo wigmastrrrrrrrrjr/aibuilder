@@ -244,8 +244,8 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
   height: var(--topbar);
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 0 14px;
+  gap: 10px;
+  padding: 0 12px;
   background: color-mix(in srgb, var(--surface) 82%, transparent);
   backdrop-filter: saturate(1.4) blur(12px);
   -webkit-backdrop-filter: saturate(1.4) blur(12px);
@@ -321,6 +321,28 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
 .cmdK .ms { width: 15px; height: 15px; }
 
 #app { display: flex; height: calc(100vh - var(--topbar)); min-height: 0; }
+
+/* Collapsed sidebar: icon rail. Only above the mobile breakpoint — on phones
+   the sidebar is a drawer and a 58px rail would be wrong. */
+@media (min-width: 761px) {
+  body.rail { --sidebar: 58px; }
+  body.rail #sidebar { padding: 12px 8px; align-items: center; gap: 2px; }
+  body.rail .navSection,
+  body.rail .navDivider,
+  body.rail #projectList,
+  body.rail #metaBar,
+  body.rail #accountFoot .afBody { display: none; }
+  body.rail .navItem {
+    width: 40px;
+    justify-content: center;
+    gap: 0;
+    padding: 9px 0;
+    font-size: 0;      /* hides the label text; the icon keeps its own size */
+  }
+  body.rail .navItem .ms { width: 18px; height: 18px; }
+  body.rail #accountFoot { margin-top: auto; }
+  body.rail #footWho { justify-content: center; padding: 6px 0; }
+}
 
 /* ---- sidebar rail ---- */
 #sidebar {
@@ -469,7 +491,8 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
 #main { display: flex; flex: 1; min-width: 0; min-height: 0; }
 #chatPane {
   width: var(--chat);
-  min-width: 380px;
+  min-width: 320px;
+  flex: none;
   display: flex;
   flex-direction: column;
   background:
@@ -478,6 +501,32 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
   border-right: 1px solid var(--line);
   position: relative;
 }
+/* drag handle between the panes (double-click resets) */
+#splitter {
+  flex: none;
+  width: 7px;
+  margin-left: -3px;
+  margin-right: -3px;
+  cursor: col-resize;
+  position: relative;
+  z-index: 6;
+  touch-action: none;
+}
+#splitter::after {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity .12s var(--ease);
+}
+#splitter:hover::after, body.splitting #splitter::after { opacity: 1; }
+body.splitting { cursor: col-resize; user-select: none; }
+body.splitting iframe { pointer-events: none; }
+
+/* full-width preview */
+body.focusPreview #chatPane, body.focusPreview #splitter { display: none; }
+
 #previewPane {
   flex: 1;
   min-width: 0;
@@ -493,7 +542,10 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
    5. Panes / headers
    -------------------------------------------------------------------------- */
 
-#chatHeader, #previewHeader {
+/* One bar for the app and the open project. The old #chatHeader used to sit
+   underneath this one purely to repeat the project name and its actions, which
+   cost 50px of vertical space on every screen. */
+#previewHeader {
   height: 50px;
   min-height: 50px;
   display: flex;
@@ -506,11 +558,19 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
   border-bottom: 1px solid var(--line);
   position: relative;
   z-index: 4;
+  justify-content: space-between;
 }
-#chatHeader { justify-content: space-between; }
-#previewHeader { justify-content: space-between; }
 
-#headerTitle { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }
+#headerTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+#headerTitle #projName { min-width: 0; flex: 0 1 auto; }
+#projectActions { flex: none; }
 
 #projName {
   font-weight: 700;
@@ -589,7 +649,8 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
 #publishBtn:disabled, .iconBtn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 #delBtn .ms { color: var(--bad); }
 #delBtn:hover { border-color: var(--bad); color: var(--bad); }
-#menuBtn { display: none; }
+/* the ☰ toggles the sidebar: collapse-to-rail on desktop, drawer on mobile */
+#menuBtn { flex: none; }
 
 #planCount {
   font-style: normal;
@@ -1002,23 +1063,40 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
   gap: 9px;
 }
 
-#templates { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 0; }
-.tplLabel {
-  font-size: 9.5px; font-weight: 700; letter-spacing: .12em;
-  text-transform: uppercase; color: var(--dim); margin-right: 2px;
-}
-.tpl {
-  font-size: 11.5px; font-weight: 600; color: var(--muted);
-  padding: 4px 10px;
-  border: 1px dashed var(--line-strong);
-  border-radius: 99px;
-  transition: var(--t-fast);
-}
-.tpl:hover { color: var(--accent-deep); border-color: var(--accent); background: var(--accent-softer); }
-
 /* Two rows: what the turn may do (Mode/Effort), then how it runs
    (Model/Temp). One crowded line was the main thing that read "unfinished". */
 #composerTop { display: flex; flex-direction: column; gap: 8px; }
+
+/* the one-line summary that replaces three permanent controls */
+.runCfg {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  transition: var(--t-fast);
+  max-width: 60%;
+  min-width: 0;
+}
+.runCfg:hover { color: var(--ink); border-color: var(--line-strong); }
+.runCfg[aria-expanded='true'] { color: var(--ink); border-color: var(--accent); background: var(--accent-softer); }
+.runCfg .ms { width: 13px; height: 13px; opacity: .7; }
+.runCfgText { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; overflow: hidden; }
+.runCfgText b { font-weight: 600; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runCfgSep { color: var(--dim); }
+.runCfgPanel {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  animation: fade .12s var(--ease);
+}
 .composerRow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 26px; }
 #composerTop .fieldLabel { min-width: 0; }
 #composerTop .fieldLabel {
@@ -2152,7 +2230,18 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
   .authBrand { display: none; }
 }
 
+/* The merged bar carries more than the old one, so shed the labels (not the
+   controls) as it narrows. */
+@media (max-width: 900px) {
+  #saveLbl { display: none; }
+  #headerTitle #projName { max-width: 22ch; }
+}
 @media (max-width: 760px) {
+  #pubLbl, #statusDot em { display: none; }
+  #statusDot { padding: 3px 6px; }
+  #menuBtn { padding: 0 8px; }
+  #focusBtn { display: none; }        /* the phone shell already swaps panes */
+  #splitter { display: none; }        /* one pane at a time below this width */
   #sidebar {
     position: fixed;
     left: 0;

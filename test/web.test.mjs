@@ -127,14 +127,72 @@ test('the composer offers the full five-step effort ladder', () => {
   assert.ok(/5:\s*'Max/.test(APP_JS), 'app.js must describe the Max level');
 });
 
-test('the composer is laid out in rows, not one crowded line', () => {
+test('the composer shows only what a turn needs; the rest folds away', () => {
   const top = INDEX_HTML.match(/id="composerTop"[\s\S]*?<div id="composerMain">/);
   assert.ok(top, 'index.html must render #composerTop');
-  const rows = (top[0].match(/class="composerRow"/g) || []).length;
-  assert.equal(rows, 2, 'the composer controls must sit on two rows');
-  // Mode + Effort govern the turn; Model + Temp tune the run.
-  assert.ok(/data-mode="build"[\s\S]*?data-effort="5"/.test(top[0]), 'Mode and Effort share the first row');
-  assert.ok(/id="modelSel"[\s\S]*?id="tempSel"/.test(top[0]), 'Model and Temp share the second row');
+  const block = top[0];
+
+  // Mode stays visible: it changes what the turn actually does.
+  assert.ok(/id="modeSel"/.test(block), 'the mode switch stays in the composer');
+
+  // Model / Effort / Temp live inside one collapsed panel behind a summary
+  // chip. (They used to be three permanent controls in a crowded row.)
+  const panel = block.match(/id="runCfg"[^>]*/);
+  assert.ok(panel, 'the run-settings panel must exist');
+  assert.ok(/\bhidden\b/.test(panel[0]), 'the panel must start collapsed');
+  const chip = block.match(/<button[^>]*id="runCfgBtn"[^>]*>/);
+  assert.ok(chip, 'a summary chip must open the panel');
+  assert.ok(/aria-expanded="false"/.test(chip[0]), 'the chip must advertise the collapsed state');
+  assert.ok(/aria-controls="runCfg"/.test(chip[0]), 'the chip must point at the panel');
+  assert.ok(/id="runCfgModel"/.test(block) && /id="runCfgEffort"/.test(block),
+    'the chip must summarise model and effort');
+  for (const id of ['modelSel', 'effortSel', 'tempSel']) {
+    const at = block.indexOf(`id="${id}"`);
+    assert.ok(at > block.indexOf('id="runCfg"'), `${id} must live inside the panel`);
+  }
+
+  // The duplicated "Start with…" row is gone: the same prompts already exist
+  // in the empty-state quick starts and the ⌘K palette.
+  assert.ok(!/id="templates"/.test(INDEX_HTML), 'the duplicate template row must be removed');
+  assert.ok(!/renderTemplates\(/.test(APP_JS), 'the template renderer must be gone');
+});
+
+test('the app and the open project share one top bar', () => {
+  // #chatHeader repeated the project name and its actions under .topbar and
+  // cost 50px of chrome on every screen.
+  assert.ok(!/id="chatHeader"/.test(INDEX_HTML), 'the second bar must be gone');
+  const bar = INDEX_HTML.match(/<header class="topbar">[\s\S]*?<\/header>/);
+  assert.ok(bar, 'the top bar must exist');
+  for (const id of ['menuBtn', 'projName', 'statusTxt', 'saveBtn', 'publishBtn', 'cmdkBtn', 'themeBtn']) {
+    assert.ok(new RegExp(`id="${id}"`).test(bar[0]), `${id} must live in the single top bar`);
+  }
+  // Project actions sit before the global ones so the right edge stays stable.
+  assert.ok(bar[0].indexOf('id="publishBtn"') < bar[0].indexOf('id="cmdkBtn"'),
+    'project actions come before global actions');
+});
+
+test('the sidebar can be collapsed on desktop, not just on phones', () => {
+  const CSS = fs.readFileSync(path.join(WEB, 'style.css'), 'utf8');
+  // It used to be display:none above the mobile breakpoint, so the 236px rail
+  // was permanent on a desktop.
+  assert.ok(!/#menuBtn\s*\{\s*display:\s*none/.test(CSS), '#menuBtn must not be hidden on desktop');
+  assert.ok(/body\.rail\s*\{[^}]*--sidebar:/.test(CSS), 'a collapsed rail must exist');
+  assert.ok(/body\.rail \.navItem/.test(CSS), 'rail mode must shrink the nav items');
+  assert.ok(/@media \(min-width: 761px\)/.test(CSS), 'the rail is desktop-only (phones use the drawer)');
+  assert.ok(/applyRail\(/.test(APP_JS), 'app.js must own the rail state');
+  assert.ok(/RAIL_KEY/.test(APP_JS) && /localStorage\.setItem\(RAIL_KEY/.test(APP_JS), 'the rail must persist');
+  assert.ok(/matchMedia\('\(max-width: 760px\)'\)/.test(APP_JS), '☰ must fall back to the drawer on phones');
+});
+
+test('the chat pane can be resized and the preview taken full width', () => {
+  const CSS = fs.readFileSync(path.join(WEB, 'style.css'), 'utf8');
+  assert.ok(/id="splitter"/.test(INDEX_HTML), 'a drag handle must sit between the panes');
+  assert.ok(INDEX_HTML.indexOf('id="splitter"') > INDEX_HTML.indexOf('id="chatPane"'), 'splitter follows the chat pane');
+  assert.ok(INDEX_HTML.indexOf('id="splitter"') < INDEX_HTML.indexOf('id="previewPane"'), 'splitter precedes the preview pane');
+  assert.ok(/cursor:\s*col-resize/.test(CSS), 'the handle must look draggable');
+  assert.ok(/body\.focusPreview #chatPane/.test(CSS), 'full-width preview must hide the chat');
+  assert.ok(/id="focusBtn"/.test(INDEX_HTML), 'a full-width preview toggle must exist');
+  assert.ok(/setSplit\(/.test(APP_JS) && /SPLIT_KEY/.test(APP_JS), 'the split must be tracked and persisted');
 });
 
 test('the design system stays flat: no grain, no serif display face', () => {
@@ -169,5 +227,5 @@ test('index.html loads the current app.js build', () => {
   assert.ok(Number.isFinite(appV) && appV > 0, 'index.html must cache-bust app.js');
   assert.ok(Number.isFinite(cssV) && cssV > 0, 'index.html must cache-bust style.css');
   // A stale ?v= serves the previous bundle from the CDN cache after a deploy.
-  assert.ok(appV >= 58, `app.js?v= must be bumped after changing the SPA (saw v=${appV})`);
+  assert.ok(appV >= 59, `app.js?v= must be bumped after changing the SPA (saw v=${appV})`);
 });
