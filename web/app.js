@@ -67,6 +67,7 @@ const fileChips = $('fileChips'), frame = $('previewFrame'), projName = $('projN
 const modelSel = $('modelSel'), publishBtn = $('publishBtn');
 const effortSel = $('effortSel');
 const modeSel = $('modeSel');
+const runCfgBtn = $('runCfgBtn'), runCfg = $('runCfg'), runCfgModel = $('runCfgModel'), runCfgEffort = $('runCfgEffort');
 const tempSel = $('tempSel'), tempVal = $('tempVal');
 
 /* freeze quarantine: when a build has a non-terminating loop we hide the
@@ -173,6 +174,7 @@ effortSel.addEventListener('click', (e) => {
   const cur = currentModel();
   const label = EFFORT_HINT[effort] || '';
   if (label) notify('Effort', label + (effort >= 3 ? ` · model "${cur}"` : ''));
+  syncRunCfg();
 });
 
 // Declared before the temperature block: applyTempMax() -> currentModel()
@@ -200,8 +202,43 @@ function renderTemp() {
     tempVal.textContent = temp.toFixed(2);
   }
 }
+/* ---------- run configuration -------------------------------------------
+   Model, Effort and Temp used to sit permanently in the composer — three
+   controls most turns never touch. They now live behind one summary chip
+   ("gpt-oss:120b · Standard") that expands on demand. Mode stays visible
+   because it changes what the turn actually does. */
+const EFFORT_LABEL = (n) => (EFFORT_HINT[n] || 'Standard').split(' — ')[0];
+function syncRunCfg() {
+  if (runCfgModel) {
+    const m = currentModel();
+    runCfgModel.textContent = m.length > 22 ? m.slice(0, 20) + '…' : m;
+    runCfgModel.title = m;
+  }
+  if (runCfgEffort) runCfgEffort.textContent = EFFORT_LABEL(effort);
+  if (runCfgBtn) runCfgBtn.title = `${currentModel()} · ${EFFORT_LABEL(effort)} · temp ${Number(temp).toFixed(2)}`;
+}
+function setRunCfg(open) {
+  if (!runCfg) return;
+  runCfg.hidden = !open;
+  if (runCfgBtn) runCfgBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) syncRunCfg();
+}
+if (runCfgBtn) {
+  runCfgBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setRunCfg(runCfg.hidden);
+  });
+  document.addEventListener('click', (e) => {
+    if (!runCfg || runCfg.hidden) return;
+    if (runCfg.contains(e.target) || runCfgBtn.contains(e.target)) return;
+    setRunCfg(false);
+  });
+}
+syncRunCfg();
+
 tempSel.addEventListener('input', () => {
   renderTemp();
+  syncRunCfg();
   try { localStorage.setItem('ab.temp', String(temp)); } catch { /* ignore */ }
 });
 applyTempMax();
@@ -1051,6 +1088,7 @@ async function loadModels() {
       ? worker.recommended
       : names[0];
     modelSel.value = saved && names.includes(saved) ? saved : recommended;
+    if (typeof syncRunCfg === 'function') syncRunCfg();
     applyTempMax();
   } else {
     modelSel.innerHTML = `<option>gpt-oss:120b</option>`;
@@ -1120,6 +1158,7 @@ async function selectProject(pid) {
     modelSel.value = data.project.model;
   }
   applyTempMax();
+  syncRunCfg();
   messagesEl.innerHTML = '';
   for (const m of data.messages) {
     if (m.role === 'user') addUserBubble(m.content, whoLabel(m.user));
@@ -2103,23 +2142,6 @@ const PROMPT_TEMPLATES = [
   { label: 'Chat app', prompt: 'Build a chat UI with a conversation list sidebar, message bubbles, read receipts, and a working composer that echoes messages locally.' },
   { label: 'Travel planner', prompt: 'Build a travel itinerary planner: day-by-day timeline, budget tracker with categories, and a packing checklist saved to localStorage.' },
 ];
-function renderTemplates() {
-  const row = $('templates');
-  row.innerHTML = '<span class="tplLabel">Start with</span>';
-  for (const t of PROMPT_TEMPLATES) {
-    const b = document.createElement('button');
-    b.className = 'tpl';
-    b.textContent = t.label;
-    b.title = t.prompt;
-    b.onclick = () => {
-      promptBox.value = t.prompt;
-      promptBox.focus();
-      promptBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    };
-    row.appendChild(b);
-  }
-}
-
 /* ---------- Phase 2: file viewer (version history, diff, selective revert) ---------- */
 const fpPane = $('filePane'), fpTitle = $('fpTitle'), fpCode = $('fpCode'),
   fpVersions = $('fpVersions'), fpRawBtn = $('fpRawBtn'), fpDiffBtn = $('fpDiffBtn'),
@@ -2378,7 +2400,6 @@ async function restoreSnapshot(s) {
 }
 
 /* ---------- wire up ---------- */
-renderTemplates();
 $('fpClose').onclick = () => { fpPane.hidden = true; };
 fpRawBtn.onclick = async () => { fpRawBtn.classList.add('on'); fpDiffBtn.classList.remove('on'); await renderRaw(); };
 fpDiffBtn.onclick = async () => { fpDiffBtn.classList.add('on'); fpRawBtn.classList.remove('on'); await renderDiff(); };
@@ -2392,7 +2413,7 @@ $('snapBtn').onclick = () => {
   loadSnapshots();
 };
 sendBtn.onclick = send;
-modelSel.addEventListener('change', () => { localStorage.setItem('ab.model', modelSel.value); applyTempMax(); });
+modelSel.addEventListener('change', () => { localStorage.setItem('ab.model', modelSel.value); applyTempMax(); syncRunCfg(); });
 $('newBtn').onclick = () => { if (!busy) resetToNew(); };
 $('refreshBtn').onclick = () => refreshPreview(true);
 $('openBtn').onclick = () => {
@@ -2449,6 +2470,9 @@ function cmdkCommands() {
   const cmds = [
     { label: 'New project', hint: 'Start fresh', icon: 'plus', run: () => resetToNew() },
     { label: 'Toggle dark / light mode', hint: 'Appearance', icon: 'sun', run: () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark') },
+    { label: document.body.classList.contains('rail') ? 'Expand sidebar' : 'Collapse sidebar', hint: '⌘B', icon: 'menu', run: () => applyRail(!document.body.classList.contains('rail')) },
+    { label: document.body.classList.contains('focusPreview') ? 'Show the chat' : 'Full-width preview', hint: '⌘J', icon: 'expand', run: () => applyFocus(!document.body.classList.contains('focusPreview')) },
+    { label: 'Model, effort & temperature', hint: 'Run settings', icon: 'gear', run: () => { setRunCfg(true); } },
     { label: 'Refresh preview', hint: 'Reload the app on the right', icon: 'refresh', run: () => refreshPreview(true) },
     { label: 'Open preview in a new tab', hint: 'Full screen', icon: 'external', run: () => { if (projectId) getPreviewToken().then(() => window.open(previewUrl(), '_blank')); } },
     { label: 'Download project files', hint: 'Export everything', icon: 'download', run: () => { if (projectId) $('dlBtn').onclick(); } },
@@ -2538,14 +2562,100 @@ const wanted = new URLSearchParams(location.search).get('project');
 if (wanted) selectProject(wanted);
 else resetToNew();
 
-/* ---------- mobile drawer: swipe from left edge (or tap ☰) for history ---------- */
+/* ---------- sidebar: collapsible rail on desktop, drawer on mobile ---------- */
 const sidebar = $('sidebar'), scrim = $('scrim'), menuBtn = $('menuBtn');
+const RAIL_KEY = 'ab.rail';
+// Guarded: not every embedded webview (or test DOM) implements matchMedia, and
+// the ☰ breaking on a missing API would take the whole sidebar with it.
+const narrow = () => Boolean(window.matchMedia && window.matchMedia('(max-width: 760px)').matches);
+
 function setDrawer(open) {
   sidebar.classList.toggle('open', open);
   scrim.hidden = !open;
 }
-menuBtn.onclick = () => setDrawer(!sidebar.classList.contains('open'));
+function applyRail(on) {
+  document.body.classList.toggle('rail', Boolean(on));
+  try { localStorage.setItem(RAIL_KEY, on ? '1' : '0'); } catch { /* ignore */ }
+  if (menuBtn) menuBtn.title = (on ? 'Expand' : 'Collapse') + ' sidebar (⌘B)';
+}
+applyRail(localStorage.getItem(RAIL_KEY) === '1');
+menuBtn.onclick = () => {
+  if (narrow()) setDrawer(!sidebar.classList.contains('open'));
+  else applyRail(!document.body.classList.contains('rail'));
+};
 scrim.onclick = () => setDrawer(false);
+
+/* ---------- resizable split between chat and preview ---------- */
+const splitter = $('splitter'), chatPane = $('chatPane'), mainEl = $('main');
+const SPLIT_KEY = 'ab.split';
+function setSplit(pct) {
+  const p = Math.min(70, Math.max(24, Number(pct) || 46));
+  document.documentElement.style.setProperty('--chat', p + '%');
+  try { localStorage.setItem(SPLIT_KEY, String(p)); } catch { /* ignore */ }
+}
+// Restore the last split only where it is meaningful (desktop widths — the
+// media queries own --chat below that).
+if (splitter) {
+  const saved = Number(localStorage.getItem(SPLIT_KEY));
+  if (Number.isFinite(saved) && saved >= 24 && saved <= 70 && window.innerWidth > 900) setSplit(saved);
+
+  splitter.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const rect = mainEl.getBoundingClientRect();
+    const startX = e.clientX;
+    const startW = chatPane.getBoundingClientRect().width;
+    document.body.classList.add('splitting');
+    try { splitter.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    const onMove = (ev) => {
+      const w = Math.min(rect.width - 320, Math.max(320, startW + (ev.clientX - startX)));
+      setSplit((w / rect.width) * 100);
+    };
+    const onUp = () => {
+      document.body.classList.remove('splitting');
+      try { splitter.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      splitter.removeEventListener('pointermove', onMove);
+      splitter.removeEventListener('pointerup', onUp);
+      splitter.removeEventListener('pointercancel', onUp);
+    };
+    splitter.addEventListener('pointermove', onMove);
+    splitter.addEventListener('pointerup', onUp);
+    splitter.addEventListener('pointercancel', onUp);
+  });
+  splitter.addEventListener('dblclick', () => {
+    document.documentElement.style.removeProperty('--chat');
+    try { localStorage.removeItem(SPLIT_KEY); } catch { /* ignore */ }
+  });
+}
+
+/* ---------- full-width preview ---------- */
+const focusBtn = $('focusBtn');
+function applyFocus(on) {
+  document.body.classList.toggle('focusPreview', Boolean(on));
+  if (focusBtn) {
+    const ms = focusBtn.querySelector('.ms');
+    if (ms) { ms.dataset.ic = on ? 'collapse' : 'expand'; mountIcon(ms); }
+    focusBtn.title = on ? 'Show the chat again (⌘J)' : 'Full-width preview (⌘J)';
+  }
+  if (on) setTimeout(() => refreshPreview(true), 60);
+}
+focusBtn && (focusBtn.onclick = () => applyFocus(!document.body.classList.contains('focusPreview')));
+
+/* ---------- shortcuts for the shell controls ---------- */
+document.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'b') {
+    e.preventDefault();
+    if (narrow()) setDrawer(!sidebar.classList.contains('open'));
+    else applyRail(!document.body.classList.contains('rail'));
+  } else if (k === 'j' && !narrow()) {
+    // Below the mobile breakpoint the shell already shows one pane at a time,
+    // so there is nothing to expand.
+    e.preventDefault();
+    applyFocus(!document.body.classList.contains('focusPreview'));
+  }
+});
 
 let edgeX = null;
 document.addEventListener('touchstart', (e) => {

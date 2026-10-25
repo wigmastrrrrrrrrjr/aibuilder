@@ -43,6 +43,17 @@ the browser no longer has to hide a file's contents as it scrolls past.
 The mode travels in the `POST /api/chat` body as `mode: "build" | "ask" | "explain"`
 and is persisted in `localStorage` under `ab.mode`.
 
+## Shell
+
+The workspace is one 56px bar plus two panes:
+
+| control | does |
+|---|---|
+| ☰ / `⌘B` | collapses the sidebar to an icon rail (a drawer on phones); remembered |
+| drag the gap between panes | resizes chat vs preview; double-click resets |
+| `⌘J` / the expand button | full-width preview, chat hidden |
+| the `model · effort` chip | opens Model / Effort / Temp; hidden when you don't need them |
+
 ## Effort
 
 Effort is how hard (and how long) the model works on one turn. Every step buys

@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#e8501a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="style.css?v=52">
+<link rel="stylesheet" href="style.css?v=53">
 <script>(function(){try{var t=localStorage.getItem('ab.theme')||((window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light');document.documentElement.dataset.theme=t}catch(e){}})();</script>
 </head>
 <body>
@@ -53,6 +53,8 @@
   <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4.5 13.5H11l-1 8.5L18.5 10H12z"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></symbol>
   <symbol id="i-code" viewBox="0 0 24 24"><path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M9 3H3v6M15 3h6v6M21 15v6h-6M3 15v6h6"/></symbol>
+  <symbol id="i-collapse" viewBox="0 0 24 24"><path d="M3 9h6V3M21 9h-6V3M15 21v-6h6M9 21v-6H3"/></symbol>
   <symbol id="i-command" viewBox="0 0 24 24"><path d="M9 9V6.5A2.5 2.5 0 106.5 9H9zm0 0v6m0-6h6m-6 6H6.5A2.5 2.5 0 109 17.5V15zm6-6V6.5A2.5 2.5 0 1117.5 9H15zm0 0v6m0 0h2.5A2.5 2.5 0 1115 17.5V15z"/></symbol>
 </svg>
 
@@ -60,11 +62,23 @@
      Top bar
      ============================================================ -->
 <header class="topbar">
+  <button id="menuBtn" title="Collapse sidebar (⌘B)"><span class="ms" data-ic="menu"></span></button>
   <a class="brand" href="index.html" title="aibuilder">
     <span class="brandMark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><use href="#i-spark"/></svg></span>
     <span class="logo">ai<b>builder</b></span>
-    <span class="brandTag">studio</span>
   </a>
+  <span id="headerTitle">
+    <span id="projName" title="Click to rename">New app</span>
+    <span id="statusDot" class="status" title="Generation status"><i></i><em id="statusTxt">Ready</em></span>
+    <span id="liveBadge" hidden></span>
+    <button id="renameBtn" class="iconBtn" title="Rename project" hidden><span class="ms" data-ic="code"></span></button>
+  </span>
+  <span class="headerBtns" id="projectActions">
+    <button id="saveBtn" class="iconBtn" title="Save project" disabled><span class="ms" data-ic="bookmark"></span><i id="saveLbl" style="font-style:normal">Save</i></button>
+    <button id="planBtn" class="iconBtn" title="Build plan" hidden><span class="ms" data-ic="checklist"></span><em id="planCount"></em></button>
+    <button id="delBtn" class="iconBtn" title="Delete project" hidden><span class="ms" data-ic="trash"></span></button>
+    <button id="publishBtn" title="Publish to the discovery feed" disabled><span class="ms" data-ic="rocket"></span><i id="pubLbl" style="font-style:normal">Publish</i></button>
+  </span>
   <div class="topbarRight" id="topbarRightWrap">
     <button class="cmdK" id="cmdkBtn" title="Command palette"><span class="ms" data-ic="search"></span><span>Jump to…</span><kbd>⌘K</kbd></button>
     <button id="themeBtn" class="iconBtn" title="Toggle dark / light mode"><span class="ms" data-ic="moon"></span></button>
@@ -111,23 +125,6 @@
   <main id="main">
     <section id="chatPane">
       <div id="cursorLayer"></div>
-      <header id="chatHeader">
-        <span class="headerBtns">
-          <button id="menuBtn" title="Show history"><span class="ms" data-ic="menu"></span></button>
-        </span>
-        <span id="headerTitle">
-          <span id="projName" title="Click to rename">New app</span>
-          <span id="statusDot" class="status" title="Generation status"><i></i><em id="statusTxt">Ready</em></span>
-          <span id="liveBadge" hidden></span>
-          <button id="renameBtn" class="iconBtn" title="Rename project" hidden><span class="ms" data-ic="code"></span></button>
-        </span>
-        <span class="headerBtns">
-          <button id="saveBtn" class="iconBtn" title="Save project" disabled><span class="ms" data-ic="bookmark"></span><i id="saveLbl" style="font-style:normal">Save</i></button>
-          <button id="planBtn" class="iconBtn" title="Build plan" hidden><span class="ms" data-ic="checklist"></span><em id="planCount"></em></button>
-          <button id="publishBtn" title="Publish to the discovery feed" disabled><span class="ms" data-ic="rocket"></span><i id="pubLbl" style="font-style:normal">Publish</i></button>
-          <button id="delBtn" class="iconBtn" title="Delete project" hidden><span class="ms" data-ic="trash"></span></button>
-        </span>
-      </header>
       <div id="refactorBar" hidden><span class="ms" data-ic="refresh"></span> Restructuring the code for you…</div>
       <div id="messages">
         <div class="empty">
@@ -150,15 +147,22 @@
       </div>
       <div id="activity" hidden><span id="activityText"></span><div id="activityLog"></div><pre id="rawStream"></pre></div>
       <div id="composer">
-        <div id="templates"></div>
         <div id="composerTop">
           <div class="composerRow">
-            <span class="fieldLabel">Mode</span>
             <div class="effortSel modeSel" id="modeSel" role="group" aria-label="Chat mode">
               <button type="button" data-mode="build" class="on" title="Build — writes the files and builds the app">Build</button>
               <button type="button" data-mode="ask" title="Chat — answers only, no tools and no file changes">Chat</button>
               <button type="button" data-mode="explain" title="Explain — reads your project and explains it, never changes it">Explain</button>
             </div>
+            <button type="button" id="runCfgBtn" class="runCfg" aria-expanded="false" aria-controls="runCfg" title="Model, effort and temperature">
+              <span class="runCfgText"><b id="runCfgModel">Model</b><span class="runCfgSep">·</span><span id="runCfgEffort">Standard</span></span>
+              <span class="ms" data-ic="gear"></span>
+            </button>
+            <span class="promptHint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
+          </div>
+          <div class="composerRow runCfgPanel" id="runCfg" hidden>
+            <span class="fieldLabel">Model</span>
+            <select id="modelSel" title="Model used for generation"></select>
             <span class="fieldLabel">Effort</span>
             <div class="effortSel" id="effortSel" role="group" aria-label="Effort level">
               <button type="button" data-effort="1" title="Fast — quickest, free">Fast</button>
@@ -167,14 +171,9 @@
               <button type="button" data-effort="4" title="Deepest — 4× credits, works hardest">Deepest</button>
               <button type="button" data-effort="5" title="Max — 8× credits, longest run, thinking on">Max</button>
             </div>
-          </div>
-          <div class="composerRow">
-            <span class="fieldLabel">Model</span>
-            <select id="modelSel" title="Model used for generation"></select>
             <span class="fieldLabel">Temp</span>
             <input type="range" id="tempSel" min="1" max="2" step="0.05" value="1" title="Sampling temperature — from 1 (minimum) up to whatever the model supports (2 for OpenAI/OpenRouter, 1 for Ollama)">
             <output id="tempVal" class="tempVal">1.00</output>
-            <span class="promptHint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
           </div>
         </div>
         <div id="composerMain">
@@ -183,6 +182,8 @@
         </div>
       </div>
     </section>
+
+    <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize chat panel" title="Drag to resize · double-click to reset"></div>
 
     <section id="previewPane">
       <header id="previewHeader">
@@ -198,6 +199,7 @@
           <button id="refreshBtn" class="iconBtn" title="Reload preview"><span class="ms" data-ic="refresh"></span></button>
           <button id="dlBtn" class="iconBtn" title="Download all project files"><span class="ms" data-ic="download"></span></button>
           <button id="openBtn" class="iconBtn" title="Open in new tab"><span class="ms" data-ic="external"></span></button>
+          <button id="focusBtn" class="iconBtn" title="Full-width preview (⌘J)"><span class="ms" data-ic="expand"></span></button>
         </div>
       </header>
       <div id="previewStage">
@@ -432,6 +434,6 @@
       window.__SB_URL = 'https://trwxpgmkpaddnyktbleg.supabase.co';
       window.__SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyd3hwZ21rcGFkZG55a3RibGVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MzE3NjIsImV4cCI6MjEwMzIwNzc2Mn0.nJJUwuhMNq_8-3ShvpEUhkVz_DLPVklIid5BVSO8GDE';
     </script>
-    <script src="app.js?v=58"></script>
+    <script src="app.js?v=59"></script>
 </body>
 </html>
