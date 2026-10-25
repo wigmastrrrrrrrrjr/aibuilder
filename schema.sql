@@ -171,6 +171,51 @@ CREATE TABLE IF NOT EXISTS feature_votes (
 );
 CREATE INDEX IF NOT EXISTS idx_feature_votes ON feature_votes (feature_id);
 
+-- ---- community forum (mirrored in aibuilderapi/supabase-v1.sql) ------------
+CREATE TABLE IF NOT EXISTS forum_categories (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  position    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS forum_threads (
+  id         TEXT PRIMARY KEY,
+  category   TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  author     TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_at    INTEGER NOT NULL,
+  pinned     INTEGER NOT NULL DEFAULT 0,
+  closed     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_forum_threads_cat ON forum_threads (category, last_at);
+
+CREATE TABLE IF NOT EXISTS forum_posts (
+  id         TEXT PRIMARY KEY,
+  thread_id  TEXT NOT NULL,
+  author     TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_forum_posts_thread ON forum_posts (thread_id, created_at);
+
+CREATE TABLE IF NOT EXISTS forum_likes (
+  thread_id TEXT NOT NULL,
+  user      TEXT NOT NULL,
+  vote      INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (thread_id, user)
+);
+CREATE INDEX IF NOT EXISTS idx_forum_likes_thread ON forum_likes (thread_id);
+
+INSERT OR IGNORE INTO forum_categories (id, name, description, position) VALUES
+  ('general', 'General',       'Welcome, intros, and anything that does not fit elsewhere.', 1),
+  ('show',    'Show & Tell',   'Publish an app you built and show it off to the community.',  2),
+  ('ideas',   'Ideas',         'Propose something new for aibuilder — features, tools, fixes.', 3),
+  ('help',    'Help & Support','Questions about building, publishing, teams, credits or billing.', 4);
+
 -- Kaggle terminal relay jobs (see aibuilderapi/src/kterm.js + terminald/kaggeld/agent.py).
 CREATE TABLE IF NOT EXISTS kterm_jobs (
   id           TEXT PRIMARY KEY,

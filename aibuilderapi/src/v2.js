@@ -249,6 +249,12 @@ async function withProjectOwner(c, next) {
 }
 
 async function withProject(c, next) {
+  // Every other v2 route answers 501 when Supabase isn't wired up; this
+  // middleware used to reach the storage client first, so an unconfigured
+  // deployment got a 500 "supabaseKey is required." from the GET file route
+  // instead of the documented "v2 storage is not configured".
+  const g = await v2ReadyOrThrow(c);
+  if (g) return g;
   const p = await visibleProject(c);
   if (!p || !p.id) return p;
   c.set('v2project', p);

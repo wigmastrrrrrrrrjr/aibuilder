@@ -19,7 +19,7 @@ import { Hono } from 'hono';
 import { store } from './store.js';
 import { getVar } from './env.js';
 import { sendEmail } from './email.js';
-import { resolveSession, clearSession } from './session-cache.js';
+import { resolveSession, clearSession, clearUser } from './session-cache.js';
 
 const enc = new TextEncoder();
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -202,9 +202,18 @@ async function verifyRecaptcha(secret, token, action) {
 export const auth = new Hono();
 
 // ---- SIGNUP (email verification temporarily disabled — account created immediately) ----
+// NOTE: this used to start a two-step verification flow and return
+// { verifyRequired: true } WITHOUT creating the account or returning a session.
+// Both clients expect a token (the web app reloads straight into the builder and
+// the SDK popup calls setTok(...)), and the web form does not collect an email
+// address at all — so signup silently created nothing and left the browser
+// holding an "undefined" session. Accounts are now created immediately; the
+// verify-email endpoint is kept so any already-pending signup can still finish.
 auth.post('/api/auth/signup', async (c) => {
-  const { username, password, dob } = await c.req.json().catch(() => ({}));
+  const body = await c.req.json().catch(() => ({}));
+  const { username, password, dob } = body;
   const name = String(username || '').trim();
+  const email = String(body.email || '').trim();
 
   if (!NAME_RE.test(name))
     return c.json({ error: 'username must be 3-24 letters, digits, - or _' }, 400);
@@ -235,27 +244,32 @@ auth.post('/api/auth/signup', async (c) => {
     }, 403);
   }
 
-  // Start email verification: create a 6-digit code, store hashed, send email
-  const email = String((await c.req.json().catch(() => ({}))).email || '').trim();
+  // Create the account now (single step). Email is optional and, when given,
+  // only stored as a one-way hash by createUser().
   const phash = await hashPassword(password);
-  const code = generateCode();
-  const codeHash = await hashCode(code);
-  const pending = { phash, ip: tag, email, codeHash, createdAt: Date.now() };
-  await store.metaSet(`signup:${name}`, JSON.stringify(pending));
+  let user;
   try {
-    await sendCodeEmail(email || tag || 'user', code, 'aibuilder');
-  } catch (e) {
-    console.error('[signup] email send failed:', e.message);
+    user = await store.createUser({ name, phash, ip: tag, email });
+  } catch {
+    return c.json({ error: 'username already taken' }, 409);
   }
-  return c.json({ verifyRequired: true, message: 'Check your email for the verification code' }, 201);
+  await store.verifyUser(name);
+  const token = await store.createSession(user.id);
+  return c.json({ token, username: user.name }, 201);
 });
 
 // Permanently delete the signed-in account and all of its data.
 auth.post('/api/auth/delete', async (c) => {
   const u = await getUser(c);
   if (!u) return c.json({ error: 'not signed in' }, 401);
+  const tok = c.req.header('x-ab-sess') || c.req.query('tok') || '';
   await store.deleteUser(u);
-  await store.deleteSession(c.req.header('x-ab-sess') || c.req.query('tok') || '');
+  await store.deleteSession(tok);
+  // The in-memory session cache would otherwise keep authenticating this
+  // account (on every device) for up to its 30s TTL — long enough to keep
+  // reading a supposedly-deleted account's projects.
+  clearSession(tok);
+  clearUser(u.id);
   return c.json({ ok: true });
 });
 

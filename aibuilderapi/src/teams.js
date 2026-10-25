@@ -57,10 +57,13 @@ teams.get('/api/teams/:tid', requireUser, async (c) => {
 
 teams.post('/api/teams/:tid/join', requireUser, async (c) => {
   const tid = c.req.param('tid');
-  const { invite_code } = await c.req.json().catch(() => ({}));
+  const body = await c.req.json().catch(() => ({}));
+  // The docs and the CLI advertise `{ code }`; the web UI sends `invite_code`.
+  // Accept both instead of silently rejecting a documented call.
+  const raw = body.invite_code !== undefined ? body.invite_code : body.code;
   const t = await store.teamInfo(tid);
   if (!t) return c.json({ error: 'team not found' }, 404);
-  const code = String(invite_code || '').trim().toUpperCase();
+  const code = String(raw || '').trim().toUpperCase();
   if (!code || code !== t.invite_code) return c.json({ error: 'invalid invite code' }, 403);
   const me = c.get('user').name;
   if (t.members.includes(me)) return c.json({ error: 'you are already a member' }, 409);
@@ -97,8 +100,15 @@ teams.post('/api/projects/:pid/team', requireUser, async (c) => {
   // write-access escalation.
   const project = await requireWrite(c, pid);
   if (project instanceof Response) return project;
-  const { team_id } = await c.req.json().catch(() => ({}));
-  const tid = String(team_id || '').trim();
+  const body = await c.req.json().catch(() => ({}));
+  // Accept both spellings: the API docs advertised `teamId` while this handler
+  // only read `team_id`, so a documented-compliant call silently DETACHED the
+  // project (empty string) and returned 200. Missing both is an error now.
+  const hasKey = Object.prototype.hasOwnProperty.call(body, 'team_id')
+    || Object.prototype.hasOwnProperty.call(body, 'teamId');
+  if (!hasKey) return c.json({ error: 'team_id required (send an empty string to detach)' }, 400);
+  const rawTeamId = body.team_id !== undefined ? body.team_id : body.teamId;
+  const tid = String(rawTeamId || '').trim();
   if (tid) {
     const t = await store.teamInfo(tid);
     if (!t) return c.json({ error: 'team not found' }, 404);

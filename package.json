@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "npm --prefix aibuilderapi start",
-    "test": "sh aibuilderapi/test/parser.test.sh",
+    "test": "node --test aibuilderapi/test/*.test.mjs test/*.test.mjs",
     "deploy": "npm --prefix aibuilderapi run db:init && npm --prefix aibuilderapi run secret:key && npm --prefix aibuilderapi run deploy",
     "deploy:code": "npm --prefix aibuilderapi run deploy",
     "logs": "npm --prefix aibuilderapi run tail"

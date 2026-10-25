@@ -107,7 +107,73 @@ CREATE TABLE IF NOT EXISTS presence (
   seen_at INTEGER NOT NULL,
   PRIMARY KEY (pid, sid)
 );
+CREATE TABLE IF NOT EXISTS features (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'proposed',
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS feature_votes (
+  feature_id TEXT NOT NULL,
+  user TEXT NOT NULL,
+  vote INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (feature_id, user)
+);
+CREATE INDEX IF NOT EXISTS idx_feature_votes ON feature_votes (feature_id);
+CREATE TABLE IF NOT EXISTS forum_categories (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS forum_threads (
+  id TEXT PRIMARY KEY,
+  category TEXT NOT NULL,
+  title TEXT NOT NULL,
+  author TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_at INTEGER NOT NULL,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  closed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_forum_threads ON forum_threads (category, last_at);
+CREATE TABLE IF NOT EXISTS forum_posts (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL,
+  author TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_forum_posts ON forum_posts (thread_id, created_at);
+CREATE TABLE IF NOT EXISTS forum_likes (
+  thread_id TEXT NOT NULL,
+  user TEXT NOT NULL,
+  vote INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (thread_id, user)
+);
 `);
+
+// The forum reads its category list from the DB (the Postgres deployment seeds
+// the same rows in Supabase). Seed them locally so a fresh checkout has a
+// working forum instead of an empty sidebar.
+// Same ids/labels the Supabase deployment seeds (see supabase-v1.sql) so links
+// and bookmarks behave the same locally and in production.
+const DEFAULT_FORUM_CATEGORIES = [
+  ['general', 'General', 'Welcome, intros, and anything that does not fit elsewhere.', 1],
+  ['show', 'Show & Tell', 'Publish an app you built and show it off to the community.', 2],
+  ['ideas', 'Ideas', 'Propose something new for aibuilder — features, tools, fixes.', 3],
+  ['help', 'Help & Support', 'Questions about building, publishing, teams, credits or billing.', 4],
+];
+for (const [id, name, description, position] of DEFAULT_FORUM_CATEGORIES) {
+  db.prepare(
+    'INSERT OR IGNORE INTO forum_categories (id, name, description, position) VALUES (?, ?, ?, ?)'
+  ).run(id, name, description, position);
+}
 
 function ensureColumn(table, colDef) {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${colDef}`); } catch { /* exists */ }
@@ -143,6 +209,16 @@ useStore({
   // Owner-scoped listing; see the note in store-pg.js about the unscoped one.
   async listProjectsByOwner(owner) {
     return db.prepare('SELECT * FROM projects WHERE owner = ? ORDER BY created_at DESC').all(owner);
+  },
+  // Projects shared with a team (any owner). /api/projects merges these into
+  // the caller's own list so teammates actually see shared projects; without
+  // it the sidebar's team filter could never match anything.
+  async listProjectsByTeams(tids) {
+    const ids = (tids || []).filter(Boolean);
+    if (!ids.length) return [];
+    return db.prepare(
+      `SELECT * FROM projects WHERE team_id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at DESC`
+    ).all(...ids);
   },
   async getProject(pid) {
     return db.prepare('SELECT * FROM projects WHERE id = ?').get(pid) ?? null;
@@ -579,9 +655,46 @@ useStore({
       db.prepare(`INSERT INTO meta (k, v) VALUES (?, ?)
                   ON CONFLICT (k) DO UPDATE SET v = excluded.v`).run(key, String(val));
     },
+    // `ip` is the hashed signup-network tag; /api/auth/reset compares it to
+    // the caller's tag. Dropping it (as this did) made every local password
+    // reset fail with "cannot verify this account for reset".
     async findUserByName(name) {
       const r = db.prepare('SELECT * FROM users WHERE name = ?').get(name);
-      return r ? { id: r.id, name: r.name, phash: r.phash } : null;
+      return r ? { id: r.id, name: r.name, phash: r.phash, ip: r.ip || '', verified: r.verified || 0 } : null;
+    },
+    async findUserById(id) {
+      // Needed by the ai_dev 2FA flow (verify-tfa looks the account up by id).
+      // Without it the route died with "no such store method" in local dev.
+      const r = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+      return r ? { id: r.id, name: r.name, phash: r.phash, ip: r.ip || '', verified: r.verified || 0 } : null;
+    },
+    // Delete an account and everything it owns — mirrors the D1/Supabase
+    // implementations so /api/auth/delete works against the local SQLite store.
+    async deleteUser(user) {
+      const id = user.id, name = user.name;
+      const owned = db.prepare('SELECT id FROM projects WHERE owner = ?').all(name);
+      for (const p of owned) {
+        await this.deleteProject(p.id);
+        db.prepare('DELETE FROM presence WHERE pid = ?').run(p.id);
+        const prefix = `baas_${String(p.id).replace(/[^a-zA-Z0-9]/g, '')}_`;
+        const tables = db.prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?"
+        ).all(`${prefix}%`);
+        for (const t of tables) db.prepare(`DROP TABLE "${t.name}"`).run();
+      }
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+      db.prepare('DELETE FROM team_members WHERE name = ?').run(name);
+      // Teams they owned go away completely (including other members' rows).
+      const ownedTeams = db.prepare('SELECT id FROM teams WHERE owner = ?').all(name);
+      for (const t of ownedTeams) {
+        db.prepare('DELETE FROM team_members WHERE team_id = ?').run(t.id);
+        db.prepare("UPDATE projects SET team_id = '' WHERE team_id = ?").run(t.id);
+      }
+      db.prepare('DELETE FROM teams WHERE owner = ?').run(name);
+      db.prepare('DELETE FROM usage WHERE name LIKE ?').run(`credit:${id}%`);
+      db.prepare('DELETE FROM earnings WHERE name = ?').run(name);
+      db.prepare('DELETE FROM users WHERE id = ?').run(id);
+      return { ok: true };
     },
     async createSession(userId, days = 30) {
       const token = [...crypto.getRandomValues(new Uint8Array(24))]
@@ -626,6 +739,7 @@ useStore({
   },
   async baasGet(pid, coll, rowId) {
     const t = this.baasTable(pid, coll);
+    this._ensure(t);
     const r = db.prepare(`SELECT id, data FROM ${t} WHERE id = ?`).get(rowId);
     return r ? { id: r.id, ...JSON.parse(r.data) } : null;
   },
@@ -641,7 +755,146 @@ useStore({
   },
   async baasRemove(pid, coll, rowId) {
     const t = this.baasTable(pid, coll);
+    this._ensure(t);
     const r = db.prepare(`DELETE FROM ${t} WHERE id = ?`).run(rowId);
     return r.changes > 0;
+  },
+
+  // ---- community feature voting ------------------------------------------
+  // Mirrors the Postgres implementation in store-pg.js: one row per proposed
+  // feature, votes upserted per user, tallies computed on read. These methods
+  // were missing here, so /api/features answered 500 ("no such store method")
+  // against the local backend even though the tables exist in schema.sql.
+  async featureGet(id) {
+    return db.prepare('SELECT id FROM features WHERE id = ?').get(id) || null;
+  },
+  async featuresList(me) {
+    const rows = db.prepare(
+      'SELECT id, title, description, status, created_by, created_at FROM features ORDER BY created_at DESC'
+    ).all();
+    const tally = new Map();
+    const mine = new Map();
+    for (const v of db.prepare('SELECT feature_id, user, vote FROM feature_votes').all()) {
+      const t = tally.get(v.feature_id) || { up: 0, down: 0, score: 0 };
+      if (v.vote === 1) t.up += 1;
+      else if (v.vote === -1) t.down += 1;
+      t.score += v.vote;
+      tally.set(v.feature_id, t);
+      if (me && v.user === me) mine.set(v.feature_id, v.vote);
+    }
+    return rows.map((f) => {
+      const t = tally.get(f.id) || { up: 0, down: 0, score: 0 };
+      return {
+        ...f, up: t.up, down: t.down, score: t.score,
+        my_vote: me ? (mine.get(f.id) ?? 0) : undefined,
+      };
+    }).sort((a, b) => b.score - a.score || b.created_at - a.created_at);
+  },
+  async featureAdd(f) {
+    const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+    db.prepare(
+      'INSERT INTO features (id, title, description, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(id, f.title, f.description || '', f.status || 'proposed', f.created_by || '', Date.now());
+    return id;
+  },
+  async featureVote(featureId, user, vote, updatedAt) {
+    db.prepare(
+      `INSERT INTO feature_votes (feature_id, user, vote, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(feature_id, user) DO UPDATE SET vote = excluded.vote, updated_at = excluded.updated_at`
+    ).run(featureId, user, vote, updatedAt || Date.now());
+  },
+  async featureStatus(id, status) {
+    db.prepare('UPDATE features SET status = ? WHERE id = ?').run(status, id);
+  },
+
+  // ---- community forum ----------------------------------------------------
+  // Same shapes as store-pg.js (categories -> threads -> posts/likes) so the
+  // forum pages work against the local backend too.
+  async forumCategory(catId) {
+    return db.prepare('SELECT * FROM forum_categories WHERE id = ?').get(catId) || null;
+  },
+  async forumCategories() {
+    return db.prepare('SELECT * FROM forum_categories ORDER BY position').all();
+  },
+  async forumThreads(category, me, before, limit) {
+    const lim = Math.min(50, Math.max(1, Number(limit) || 20));
+    const sql =
+      `SELECT t.id, t.category, t.title, t.author, t.created_at, t.last_at, t.pinned, t.closed,
+              (SELECT COUNT(*) FROM forum_posts p WHERE p.thread_id = t.id) AS posts,
+              (SELECT COALESCE(SUM(l.vote), 0) FROM forum_likes l WHERE l.thread_id = t.id) AS score,
+              (SELECT l.vote FROM forum_likes l WHERE l.thread_id = t.id AND l.user = ?) AS mine
+         FROM forum_threads t
+        WHERE t.category = ?${before ? ' AND t.last_at < ?' : ''}
+        ORDER BY t.pinned DESC, t.last_at DESC
+        LIMIT ?`;
+    const binds = before
+      ? [me || '', category, before, lim]
+      : [me || '', category, lim];
+    return db.prepare(sql).all(...binds).map((r) => ({
+      ...r, mine: me ? (r.mine ?? 0) : null,
+    }));
+  },
+  async forumCreateThread({ category, title, author, content }) {
+    const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+    const now = Date.now();
+    db.prepare(
+      'INSERT INTO forum_threads (id, category, title, author, created_at, last_at, pinned, closed) VALUES (?, ?, ?, ?, ?, ?, 0, 0)'
+    ).run(id, category, title, author, now, now);
+    db.prepare(
+      'INSERT INTO forum_posts (id, thread_id, author, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(crypto.randomUUID().replace(/-/g, '').slice(0, 16), id, author, content, now, now);
+    return id;
+  },
+  async forumThread(tid, me) {
+    const t = db.prepare('SELECT * FROM forum_threads WHERE id = ?').get(tid);
+    if (!t) return null;
+    const score = db.prepare(
+      'SELECT COALESCE(SUM(vote), 0) AS s FROM forum_likes WHERE thread_id = ?'
+    ).get(tid).s;
+    const row = me
+      ? db.prepare('SELECT vote FROM forum_likes WHERE thread_id = ? AND user = ?').get(tid, me)
+      : null;
+    return {
+      ...t,
+      score,
+      mine: me ? (row ? row.vote : 0) : null,
+      posts: db.prepare(
+        'SELECT id, author, content, created_at FROM forum_posts WHERE thread_id = ? ORDER BY created_at'
+      ).all(tid),
+    };
+  },
+  async forumReply(tid, author, content) {
+    const t = db.prepare('SELECT id, closed FROM forum_threads WHERE id = ?').get(tid);
+    if (!t) return { error: 'thread not found' };
+    if (t.closed) return { error: 'thread is closed' };
+    const now = Date.now();
+    db.prepare(
+      'INSERT INTO forum_posts (id, thread_id, author, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(crypto.randomUUID().replace(/-/g, '').slice(0, 16), tid, author, content, now, now);
+    db.prepare('UPDATE forum_threads SET last_at = ? WHERE id = ?').run(now, tid);
+    return { ok: true };
+  },
+  async forumVote(threadId, user, vote, updatedAt) {
+    db.prepare(
+      `INSERT INTO forum_likes (thread_id, user, vote, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(thread_id, user) DO UPDATE SET vote = excluded.vote, updated_at = excluded.updated_at`
+    ).run(threadId, user, vote, updatedAt || Date.now());
+  },
+  async forumMod(tid, patch) {
+    if (patch.delete) {
+      db.prepare('DELETE FROM forum_posts WHERE thread_id = ?').run(tid);
+      db.prepare('DELETE FROM forum_likes WHERE thread_id = ?').run(tid);
+      db.prepare('DELETE FROM forum_threads WHERE id = ?').run(tid);
+      return { ok: true, deleted: true };
+    }
+    const fields = {};
+    if (patch.pinned !== undefined) fields.pinned = patch.pinned ? 1 : 0;
+    if (patch.closed !== undefined) fields.closed = patch.closed ? 1 : 0;
+    if (Object.keys(fields).length) {
+      db.prepare(
+        `UPDATE forum_threads SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`
+      ).run(...Object.values(fields), tid);
+    }
+    return { ok: true, ...fields };
   },
 });
