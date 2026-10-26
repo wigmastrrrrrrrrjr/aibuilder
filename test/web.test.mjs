@@ -227,5 +227,37 @@ test('index.html loads the current app.js build', () => {
   assert.ok(Number.isFinite(appV) && appV > 0, 'index.html must cache-bust app.js');
   assert.ok(Number.isFinite(cssV) && cssV > 0, 'index.html must cache-bust style.css');
   // A stale ?v= serves the previous bundle from the CDN cache after a deploy.
-  assert.ok(appV >= 59, `app.js?v= must be bumped after changing the SPA (saw v=${appV})`);
+  assert.ok(appV >= 60, `app.js?v= must be bumped after changing the SPA (saw v=${appV})`);
+});
+
+test('edits stay in the browser until Save', () => {
+  // The old Save button only refreshed the preview and flashed "Saved" — every
+  // tool call had already written to the server. The browser now owns the
+  // project, the turn works on a draft, and Save is the only write path.
+  assert.ok(/let draft = new Map\(\)/.test(APP_JS), 'app.js must own a local draft');
+  assert.ok(/function applyDraftEvent\(/.test(APP_JS), 'stream events must land in the draft');
+  assert.ok(/applyDraftEvent\(ev\)/.test(APP_JS), 'the stream handler must apply every event');
+  assert.ok(/draft: true,\s*\n\s*files: draftPayload\(\)/.test(APP_JS),
+    'the turn must send the draft up so the AI sees what the user sees');
+  assert.ok(/\/save-draft`/.test(APP_JS), 'Save must call the save-draft route');
+  assert.ok(/saveDraft\(\)/.test(APP_JS), 'the Save button must trigger the upload');
+  assert.ok(!/autosaved server-side; this resyncs/.test(APP_JS), 'the placebo save comment must be gone');
+  assert.ok(/beforeunload/.test(APP_JS) && /draftDirty/.test(APP_JS),
+    'closing the tab must warn about unsaved work');
+  assert.ok(/classList\.toggle\('dirty', draftDirty\)/.test(APP_JS), 'the Save button must show a dirty state');
+});
+
+test('the preview renders unsaved work, not the last saved state', () => {
+  assert.ok(/function renderDraftPreview\(/.test(APP_JS), 'a draft preview renderer must exist');
+  assert.ok(/if \(draftDirty\) \{ renderDraftPreview\(\); return; \}/.test(APP_JS),
+    'refreshPreview must prefer the draft while it is dirty');
+  assert.ok(/frame\.srcdoc = out/.test(APP_JS), 'the draft must be rendered in the frame');
+  assert.ok(/frame\.removeAttribute\('srcdoc'\)/.test(APP_JS),
+    'the server preview must take over again once saved');
+  // The generated page must keep its own API base, or every fetch 404s against
+  // the builder's origin.
+  assert.ok(/__baas\.js/.test(APP_JS) && /__CREAT_PROJECT__/.test(APP_JS),
+    'the draft preview must inject the same SDK the server does');
+  assert.ok(/#saveBtn\.dirty/.test(fs.readFileSync(path.join(WEB, 'style.css'), 'utf8')),
+    'the dirty state needs a visible style');
 });

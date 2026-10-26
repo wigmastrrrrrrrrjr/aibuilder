@@ -649,6 +649,22 @@ body.focusPreview #chatPane, body.focusPreview #splitter { display: none; }
 #publishBtn:disabled, .iconBtn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 #delBtn .ms { color: var(--bad); }
 #delBtn:hover { border-color: var(--bad); color: var(--bad); }
+/* Unsaved work lives in this browser only — the Save button says so before it
+   is pressed, not after something is lost. */
+#saveBtn.dirty {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+}
+#saveBtn.dirty .ms { color: var(--accent); }
+#saveBtn.dirty::after {
+  content: '';
+  width: 6px; height: 6px;
+  margin-left: 1px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
 /* the ☰ toggles the sidebar: collapse-to-rail on desktop, drawer on mobile */
 #menuBtn { flex: none; }
 

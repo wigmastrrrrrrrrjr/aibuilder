@@ -254,6 +254,248 @@ const SID = (() => {
 let displayText = '';
 let canEdit = false; // may the signed-in user modify the open project?
 
+/* ---------- the local draft ------------------------------------------------
+   The browser owns the project while you work. Every turn sends this draft to
+   the AI, which edits that copy; nothing is written to the server until you
+   press Save. `draft` is therefore the source of truth on screen — chips, the
+   preview and Save all read it. */
+let draft = new Map();          // path -> { content, encoding }
+let draftDirty = false;         // changed since the last save
+let draftPreviewTimer = null;
+let draftObjectUrls = [];
+
+function draftSet(path, content, encoding) {
+  if (!path) return false;
+  const next = {
+    content: String(content ?? ''),
+    encoding: encoding === 'base64' ? 'base64' : 'utf8',
+  };
+  const prev = draft.get(path);
+  if (prev && prev.content === next.content && prev.encoding === next.encoding) return false;
+  draft.set(path, next);
+  return true;
+}
+function draftPayload() {
+  return [...draft.entries()].map(([path, f]) => ({ path, content: f.content, encoding: f.encoding }));
+}
+function setDirty(on) {
+  draftDirty = Boolean(on);
+  document.body.classList.toggle('draftDirty', draftDirty);
+  if (saveBtn) {
+    saveBtn.classList.toggle('dirty', draftDirty);
+    saveBtn.disabled = !projectId || busy;
+  }
+  if (saveLbl) saveLbl.textContent = draftDirty ? 'Save changes' : 'Save';
+}
+function clearDraft() {
+  draft = new Map();
+  setDirty(false);
+  revokeDraftUrls();
+  if (frame) {
+    frame.removeAttribute('srcdoc');
+  }
+}
+async function loadDraft(pid) {
+  draft = new Map();
+  setDirty(false);
+  try {
+    const r = await fetch(`${API}/api/projects/${pid}/export`, { headers: authHeaders() });
+    if (!r.ok) return;
+    const j = await r.json();
+    for (const f of (j.files || [])) draftSet(f.path, f.content, f.encoding);
+  } catch { /* start from empty — the AI will create everything */ }
+}
+
+/* Every event that changes a file is applied here, before the UI reacts, so
+   the screen and the next request are always built from the same state. */
+function applyDraftEvent(ev) {
+  if (!ev || !ev.type) return;
+  let changed = false;
+  if (ev.type === 'file' || ev.type === 'edit') {
+    if (typeof ev.content === 'string') changed = draftSet(ev.path, ev.content, ev.encoding);
+  } else if (ev.type === 'asset') {
+    if (typeof ev.data === 'string') changed = draftSet(ev.path, ev.data, ev.encoding || 'base64');
+  } else if (ev.type === 'delete') {
+    changed = draft.delete(ev.path);
+  } else if (ev.type === 'rename') {
+    const f = draft.get(ev.from);
+    if (f) { draft.delete(ev.from); draft.set(ev.to, f); changed = true; }
+  } else if (ev.type === 'draft') {
+    // the server's authoritative diff for this round (rename rewrites, tools
+    // that saved without emitting a file event)
+    for (const f of (ev.files || [])) changed = draftSet(f.path, f.content, f.encoding) || changed;
+    for (const p of (ev.removed || [])) changed = draft.delete(p) || changed;
+  }
+  if (!changed) return;
+  setDirty(true);
+  scheduleDraftPreview();
+}
+
+/* ---- rendering the draft -------------------------------------------------
+   The preview iframe normally loads /preview/<pid>/ from the server. Unsaved
+   work does not exist there yet, so while the draft is dirty the page is
+   assembled in the browser: local stylesheets and scripts are inlined, other
+   assets become blob URLs, and the BaaS SDK is injected exactly as the server
+   would. */
+const MIME = {
+  html: 'text/html', htm: 'text/html', css: 'text/css', js: 'text/javascript',
+  mjs: 'text/javascript', json: 'application/json', svg: 'image/svg+xml',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', avif: 'image/avif', ico: 'image/x-icon', bmp: 'image/bmp',
+  woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
+  mp3: 'audio/mpeg', mp4: 'video/mp4', webm: 'video/webm', ogg: 'audio/ogg',
+  wav: 'audio/wav', pdf: 'application/pdf', txt: 'text/plain', wasm: 'application/wasm',
+};
+function mimeOf(path) {
+  const m = /\.([a-z0-9]+)$/i.exec(String(path || ''));
+  return (m && MIME[m[1].toLowerCase()]) || 'application/octet-stream';
+}
+function revokeDraftUrls() {
+  for (const u of draftObjectUrls) { try { URL.revokeObjectURL(u); } catch { /* ignore */ } }
+  draftObjectUrls = [];
+}
+function draftBlobUrl(path) {
+  const f = draft.get(path);
+  if (!f) return null;
+  try {
+    let blob;
+    if (f.encoding === 'base64') {
+      const bin = atob(f.content);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      blob = new Blob([bytes], { type: mimeOf(path) });
+    } else {
+      blob = new Blob([f.content], { type: mimeOf(path) });
+    }
+    const url = URL.createObjectURL(blob);
+    draftObjectUrls.push(url);
+    return url;
+  } catch { return null; }
+}
+// Resolve a reference the way the preview server does: relative to the page,
+// root-relative to the project root, `..` collapsed, external URLs ignored.
+function resolveDraftPath(ref, basePath) {
+  const raw = String(ref || '').trim();
+  if (!raw || /^(?:[a-z]+:|\/\/|#)/i.test(raw)) return null;
+  const clean = raw.split('#')[0].split('?')[0];
+  if (!clean) return null;
+  const segs = clean.startsWith('/') ? [] : basePath.split('/').slice(0, -1);
+  for (const seg of clean.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') segs.pop();
+    else segs.push(seg);
+  }
+  const out = segs.join('/');
+  return draft.has(out) ? out : null;
+}
+async function renderDraftPreview() {
+  if (!frame || !projectId) return;
+  const entry = draft.has('index.html') ? 'index.html' : [...draft.keys()].find((p) => /\.html?$/i.test(p));
+  if (!entry) return;
+  // Anything the page asks for that is not in the draft still has to resolve;
+  // it goes to the saved preview, which needs the same token the iframe gets.
+  if (!previewTok) await getPreviewToken();
+  revokeDraftUrls();
+  const html = draft.get(entry).content;
+  let out = html;
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('link[rel~="stylesheet"][href]').forEach((el) => {
+      const p = resolveDraftPath(el.getAttribute('href'), entry);
+      const f = p && draft.get(p);
+      if (!f || f.encoding === 'base64') return;
+      const st = doc.createElement('style');
+      if (el.getAttribute('media')) st.setAttribute('media', el.getAttribute('media'));
+      st.textContent = f.content;
+      el.replaceWith(st);
+    });
+    doc.querySelectorAll('script[src]').forEach((el) => {
+      const p = resolveDraftPath(el.getAttribute('src'), entry);
+      const f = p && draft.get(p);
+      if (!f || f.encoding === 'base64') return;
+      const sc = doc.createElement('script');
+      if (el.getAttribute('type')) sc.setAttribute('type', el.getAttribute('type'));
+      // An inline script runs where it sits; `defer` would have waited for the
+      // document to parse. Keep the ordering the page asked for.
+      const deferred = el.hasAttribute('defer') && !el.getAttribute('type');
+      sc.textContent = deferred
+        ? `document.addEventListener('DOMContentLoaded',function(){${f.content}\n});`
+        : f.content;
+      el.replaceWith(sc);
+    });
+    for (const [tag, attr] of [['img', 'src'], ['source', 'src'], ['video', 'poster'], ['video', 'src'], ['audio', 'src']]) {
+      doc.querySelectorAll(`${tag}[${attr}]`).forEach((el) => {
+        const p = resolveDraftPath(el.getAttribute(attr), entry);
+        if (!p) return;
+        const url = draftBlobUrl(p);
+        if (url) el.setAttribute(attr, url);
+      });
+    }
+    doc.querySelectorAll('link[rel~="icon"][href]').forEach((el) => {
+      const p = resolveDraftPath(el.getAttribute('href'), entry);
+      const url = p && draftBlobUrl(p);
+      if (url) el.setAttribute('href', url);
+    });
+    // The same boot sequence the preview server injects, in the same order:
+    // the SDK captures window.__CREAT_PROJECT__ when it loads, so the id has to
+    // be a separate script before it. Anything still relative (fetch, links,
+    // srcset) resolves against the saved preview through <base>, never against
+    // the builder's own URL.
+    const baseHref = `${API}/preview/${projectId}/`
+      + (previewTok ? `?pt=${encodeURIComponent(previewTok)}` : '');
+    const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    doc.head.insertAdjacentHTML('afterbegin', [
+      `<base href="${esc(baseHref)}">`,
+      `<script>window.__CREAT_PROJECT__=${JSON.stringify(projectId)};</script>`,
+      `<script src="${esc(API)}/__baas.js"></script>`,
+      '<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>',
+      // Errors surface in the builder the same way they do for a saved preview.
+      '<script>(function(){function r(m){try{parent.postMessage({__ab:"error",message:String(m).slice(0,300)},"*")}catch(e){}}'
+        + 'window.addEventListener("error",function(e){r(e.message||"script error")});'
+        + 'window.addEventListener("unhandledrejection",function(e){var x=e.reason;r("Unhandled promise rejection: "+(x&&x.message||x))});})();</script>',
+    ].join(''));
+    out = '<!doctype html>' + doc.documentElement.outerHTML;
+  } catch { /* fall back to the raw file */ }
+  frame.removeAttribute('src');
+  frame.srcdoc = out;
+}
+function scheduleDraftPreview() {
+  if (!draftDirty) return;
+  clearTimeout(draftPreviewTimer);
+  draftPreviewTimer = setTimeout(renderDraftPreview, 320);
+}
+
+/* ---- saving ---------------------------------------------------------------
+   The only path from the browser to the server for generated code. */
+async function saveDraft() {
+  if (!projectId || busy) return false;
+  if (!draftDirty) return false;
+  if (!canEdit) { notify('Save', 'This project belongs to someone else — you can build on a remix of it instead.'); return false; }
+  try {
+    const r = await fetch(`${API}/api/projects/${projectId}/save-draft`, {
+      method: 'POST',
+      headers: authHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ files: draftPayload(), label: 'Saved from the browser' }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { notify('Save failed', j.error || `HTTP ${r.status}`); return false; }
+    setDirty(false);
+    setChips([...draft.keys()]);
+    await refreshPreview(true);   // the server has it now — serve the real preview
+    return true;
+  } catch (e) {
+    notify('Save failed', String(e.message || e));
+    return false;
+  }
+}
+
+// Reloading or closing with unsaved work is the one way to lose it silently.
+window.addEventListener('beforeunload', (e) => {
+  if (!draftDirty) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
+
 /* ---------- strip generator blocks (FILE/EDIT/DELETE/PLAN) from output ---------- */
 function BlockFilter() {
   let buf = '';
@@ -408,9 +650,21 @@ function previewUrl(extra) {
   return `${API}/preview/${projectId}/` + (s ? `?${s}` : '');
 }
 
+// A new tab always renders the server's copy, so it cannot carry unsaved work.
+// Say so rather than let someone believe their edits are gone (or live).
+function openServerPreview() {
+  if (!projectId) return;
+  if (draftDirty) notify('Opening the saved version', 'Unsaved changes live only in this tab — save to include them in the new tab.');
+  getPreviewToken().then(() => window.open(previewUrl(), '_blank'));
+}
+
 async function refreshPreview(bust) {
   if (!projectId) return;
   if (previewQuarantined) return; // disabled until the freeze is fixed
+  // Unsaved edits only exist in this browser, so the server preview would show
+  // the last saved state. Render the draft instead until Save.
+  if (draftDirty) { renderDraftPreview(); return; }
+  frame.removeAttribute('srcdoc');
   await getPreviewToken();
   frame.src = previewUrl(bust ? { t: String(Date.now()) } : null);
 }
@@ -1131,7 +1385,12 @@ async function loadProjects(selectPid) {
 }
 
 async function selectProject(pid) {
+  if (draftDirty && projectId && pid !== projectId) {
+    const go = confirm('You have unsaved changes in “' + (projName.textContent || 'this project') + '”.\n\nOpen the other project and discard them?');
+    if (!go) return;
+  }
   projectId = pid;
+  await loadDraft(pid);
   const r = await fetch(`${API}/api/projects/${pid}`, { headers: authHeaders() });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data.project) {
@@ -1167,7 +1426,7 @@ async function selectProject(pid) {
   let plan = [];
   try { plan = typeof data.project.plan === 'string' ? JSON.parse(data.project.plan) : (data.project.plan || []); } catch { plan = []; }
   renderPlan(plan);
-  setChips(data.files);
+  setChips(draft.size ? [...draft.keys()] : data.files);
   clearPreviewQuarantine();
   refreshPreview(false);
   loadProjects();
@@ -1179,6 +1438,7 @@ async function selectProject(pid) {
 function resetToNew() {
   projectId = null;
   canEdit = false;
+  clearDraft();
   hideBuildSplash(true);
   snapModal.hidden = true;
   fpPane.hidden = true;
@@ -1587,7 +1847,7 @@ async function send() {
   const turnMode = chatMode; // pinned for this turn
   const turnMeta = MODES[turnMode] || MODES.build;
   setStatus(turnMeta.status);
-  if (!projectId && turnMode === 'build') showBuildSplash();
+  if (!projectId && turnMode === 'build') { clearDraft(); showBuildSplash(); }
 
   const emptyHero = messagesEl.querySelector('.empty');
   if (emptyHero) emptyHero.remove();
@@ -1650,6 +1910,10 @@ async function send() {
         temperature: temp,
         runId,
         mode: turnMode,
+        // the browser owns the project: this is what the AI works on, and
+        // nothing is persisted server-side until Save
+        draft: true,
+        files: draftPayload(),
       }),
     });
     if (!res.ok) {
@@ -1689,6 +1953,7 @@ async function send() {
         let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
 
         if (typeof ev.seq === 'number' && ev.seq > lastSeq) lastSeq = ev.seq;
+        applyDraftEvent(ev);   // keep the local copy in step with the stream
         if (ev.type === 'run') {
           if (ev.resumable && ev.runId) activeRun = ev.runId;
           else { try { localStorage.removeItem('ab.run.last'); } catch {} }
@@ -1967,6 +2232,7 @@ async function send() {
     loadProjects();
     setStatus('Ready');
     if (saveBtn && projectId) saveBtn.disabled = false;
+    setDirty(draftDirty);   // the turn may have left unsaved work behind
   }
 }
 
@@ -2010,22 +2276,33 @@ async function doRename() {
 $('renameBtn').addEventListener('click', doRename);
 projName.addEventListener('click', () => { if (!$('renameBtn').hidden) doRename(); });
 
-/* ---------- save (everything is autosaved server-side; this resyncs & confirms) ---------- */
-if (saveBtn) saveBtn.addEventListener('click', () => {
+/* ---------- save (the only thing that writes generated code to the server) ---- */
+if (saveBtn) saveBtn.addEventListener('click', async () => {
   if (busy) return;
   if (!projectId) {
     notify('Save', 'Nothing to save yet — describe an app to start building.');
     return;
   }
-  refreshPreview(false);
-  setStatus('Saved');
-  if (saveLbl) saveLbl.textContent = 'Saved';
+  if (!draftDirty) {
+    notify('Save', 'Everything is saved.');
+    refreshPreview(false);
+    return;
+  }
+  setStatus('Saving…');
   saveBtn.disabled = true;
-  setTimeout(() => {
-    if (saveLbl) saveLbl.textContent = 'Save';
-    saveBtn.disabled = false;
+  const ok = await saveDraft();
+  saveBtn.disabled = !projectId || busy;
+  if (ok) {
+    setStatus('Saved');
+    if (saveLbl) saveLbl.textContent = 'Saved';
+    setTimeout(() => {
+      if (saveLbl && !draftDirty) saveLbl.textContent = 'Save';
+      setStatus('Ready');
+    }, 1400);
+  } else {
     setStatus('Ready');
-  }, 1600);
+    setDirty(draftDirty);
+  }
 });
 
 /* ---------- publish / upload / delete ---------- */
@@ -2224,11 +2501,27 @@ async function openFilePane(path) {
   showFpEmpty('Loading…');
   try {
     const list = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(path)}`, { headers: authHeaders() })).json();
-    if (!Array.isArray(list) || !list.length) { showFpEmpty('No version history for this file yet.'); return; }
+    // A file that only exists in the draft has no history yet — show it anyway,
+    // marked for what it is, instead of an empty pane.
+    const draftCopy = draftDirty ? draft.get(path) : null;
+    if (!Array.isArray(list) || !list.length) {
+      if (draftCopy && draftCopy.encoding === 'utf8') {
+        fpTitle.textContent = path + ' · unsaved';
+        showFpRaw(draftCopy.content);
+        return;
+      }
+      showFpEmpty('No version history for this file yet.'); return;
+    }
     fpVersionsList = list;
     fpCurrentSeq = list[0].seq;
     const cur = await (await fetch(`${API}/api/projects/${projectId}/versions?path=${encodeURIComponent(path)}&seq=${fpCurrentSeq}`, { headers: authHeaders() })).json();
     fpCurrent = versionText(cur);
+    // "current" means what is on screen, not what was last saved — otherwise a
+    // diff against the draft would silently compare against an older file.
+    if (draftCopy && draftCopy.encoding === 'utf8') {
+      fpCurrent = draftCopy.content;
+      fpTitle.textContent = path + ' · unsaved';
+    }
     renderVersionList();
     renderRaw();
   } catch (e) {
@@ -2422,7 +2715,7 @@ $('openBtn').onclick = () => {
     notify('Preview disabled', 'The page is quarantined (freeze risk) and can\'t be opened yet — ask the AI to fix it first.');
     return;
   }
-  getPreviewToken().then(() => window.open(previewUrl(), '_blank'));
+  openServerPreview();
 };
 
 /* ---------- device preview switcher ---------- */
@@ -2474,7 +2767,7 @@ function cmdkCommands() {
     { label: document.body.classList.contains('focusPreview') ? 'Show the chat' : 'Full-width preview', hint: '⌘J', icon: 'expand', run: () => applyFocus(!document.body.classList.contains('focusPreview')) },
     { label: 'Model, effort & temperature', hint: 'Run settings', icon: 'gear', run: () => { setRunCfg(true); } },
     { label: 'Refresh preview', hint: 'Reload the app on the right', icon: 'refresh', run: () => refreshPreview(true) },
-    { label: 'Open preview in a new tab', hint: 'Full screen', icon: 'external', run: () => { if (projectId) getPreviewToken().then(() => window.open(previewUrl(), '_blank')); } },
+    { label: 'Open preview in a new tab', hint: 'Full screen', icon: 'external', run: () => { openServerPreview(); } },
     { label: 'Download project files', hint: 'Export everything', icon: 'download', run: () => { if (projectId) $('dlBtn').onclick(); } },
     { label: 'Snapshots', hint: 'Roll back in time', icon: 'clock', run: () => $('snapBtn').click() },
     { label: 'Cloud terminal', hint: 'Run commands', icon: 'terminal', run: () => $('termBtn').click() },
