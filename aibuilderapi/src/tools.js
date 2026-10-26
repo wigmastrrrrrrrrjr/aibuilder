@@ -239,7 +239,11 @@ define({
       if (ctx.quarantine) await ctx.quarantine(freezeFiles);
     }
     const event = { type: 'file', path };
-    if (ctx.emitContent) event.content = a.content;
+    // `emitContent` is the workspace/TUI flag (reads included). Draft mode
+    // only needs the content of things that CHANGED, so it has its own flag —
+    // otherwise every read would ship the file it just read back to the client.
+    if (ctx.emitContent || ctx.emitWriteContent) event.content = a.content;
+    if (a.encoding && a.encoding !== 'utf8') event.encoding = a.encoding;
     return { ok: true, path, content: a.content, bytes: a.content.length, freezeFiles, event, stat: { list: 'written', value: path }, op: true };
   },
 });
@@ -264,7 +268,7 @@ define({
       if (ctx.quarantine) await ctx.quarantine(freezeFiles);
     }
     const event = { type: 'edit', path };
-    if (ctx.emitContent) event.content = res.content;
+    if (ctx.emitContent || ctx.emitWriteContent) event.content = res.content;
     return { ok: true, path, content: res.content, freezeFiles, event, stat: { list: 'edited', value: path }, op: true };
   },
 });
@@ -711,7 +715,8 @@ define({
       if (ctx.quarantine) await ctx.quarantine(freezeFiles);
     }
     const event = { type: 'asset', path, encoding };
-    if (ctx.emitContent) event.data = data;
+    // Draft mode needs the bytes to keep a local copy of the asset.
+    if (ctx.emitContent || ctx.emitWriteContent) event.data = data;
     return { ok: true, path, data, encoding, freezeFiles, event, stat: { list: 'assets', value: path }, op: true };
   },
 });

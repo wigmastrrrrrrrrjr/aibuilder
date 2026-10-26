@@ -43,6 +43,43 @@ the browser no longer has to hide a file's contents as it scrolls past.
 The mode travels in the `POST /api/chat` body as `mode: "build" | "ask" | "explain"`
 and is persisted in `localStorage` under `ab.mode`.
 
+## Drafts: nothing is saved until you say so
+
+The browser owns the project while you work. A turn does not write files — it
+edits the copy in your tab, and **Save** is the only thing that puts that copy on
+the server.
+
+```
+one turn
+  browser ──POST /api/chat {draft:true, files:[…]}──▶ API
+          ◀── file / edit / draft events (paths + new content) ──
+          ── applies them to the local draft, re-renders the preview ──
+
+Save
+  browser ──POST /api/projects/:pid/save-draft {files:[…]}──▶ API
+          ◀── {ok, files, removed, snapshot} ──
+```
+
+What that means in practice:
+
+- **The preview shows the draft.** Unsaved files are inlined into the frame, so
+  an edit is visible the moment the model writes it — no round trip, no stale
+  "last saved" build.
+- **The AI sees the draft.** Every turn sends the whole file list up with the
+  request, so the model works on exactly what is on screen instead of whatever
+  was last saved.
+- **The file list is authoritative.** Save writes what you have and deletes what
+  you no longer do — renames and deletions survive instead of leaving orphans.
+- **Save is a rollback point.** It takes a snapshot before returning, so any save
+  can be undone from the versions pane.
+- **Unsaved work is visible.** The Save button carries a dot and the label reads
+  "Save changes"; closing or reloading the tab with a dirty draft warns first.
+
+Still saved immediately, because it is not generated code: the chat transcript,
+the project's name/model/plan, and its BaaS rows. Drafts live in the tab (with
+the file list re-requested from `/api/projects/:pid/export` on open), so reloading
+without saving returns to the last saved state — hence the warning.
+
 ## Shell
 
 The workspace is one 56px bar plus two panes:
@@ -154,6 +191,7 @@ aibuilderapi/  the API — deployable standalone to Cloudflare Workers (wrangler
   src/app.js       all routes: chat, projects, models, publish, discover, remix, upload
   src/chat.js      SSE chat proxy with Ollama/Mistral failover (per-project model selection)
   src/parser.js    streaming >>>tool call parser (legacy blocks normalized)
+  src/draft-store.js  in-memory file surface a draft turn writes through
   src/tools.js     tool registry: names, argument validation, execution, results
   src/prompt.js    system prompts: build, chat (ask) and explain modes
   src/modes.js     the mode vocabulary + which tools each mode may run

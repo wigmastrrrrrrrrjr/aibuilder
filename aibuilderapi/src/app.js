@@ -9,6 +9,7 @@ import { models, FREE_DAILY_CREDITS, creditsToUnits, unitsToCredits } from './mo
 import { getVar } from './env.js';
 import { builtinKey } from './keys.js';
 import { toBase64, fromBase64 } from './base64.js';
+import { cleanPath } from './tools.js';
 import { live } from './live.js';
 import { terminal, serverApi } from './terminal.js';
 import { kterm } from './kterm.js';
@@ -157,7 +158,7 @@ app.get('/api/docs', (c) => {
       storage: 'Supabase (schema: supabase-v2.sql) — the v1 API persists in Cloudflare D1; v2 lives in Postgres with Realtime.',
     },
     streams: [
-      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'workspace' (optional)", sid: 'string', effort: 'number', temperature: 'number', runId: 'string' } },
+      { method: 'POST', path: '/api/chat', auth: 'user', format: 'text/event-stream (SSE)', body: { message: 'string (required)', projectId: 'string', model: 'string', apiKey: 'string', mode: "'workspace' (optional)", sid: 'string', effort: 'number', temperature: 'number', runId: 'string', draft: 'boolean (work on the client copy, write nothing)', files: '[{path, content, encoding}] — the client copy (with draft:true)' } },
     ],
     endpoints: [
       { method: 'GET', path: '/api/docs', auth: 'none', description: 'This documentation' },
@@ -179,6 +180,7 @@ app.get('/api/docs', (c) => {
       { method: 'GET', path: '/api/projects/:pid/snapshots/:sid', auth: 'owner', description: 'Snapshot + its files' },
       { method: 'POST', path: '/api/projects/:pid/snapshots/:sid/restore', auth: 'owner', description: 'Roll the whole project back' },
       { method: 'POST', path: '/api/projects/:pid/upload', auth: 'owner', body: 'multipart "files" (repeatable)', description: 'Upload existing files (max 300, 2MB each)' },
+      { method: 'POST', path: '/api/projects/:pid/save-draft', auth: 'owner', body: { files: 'array', snapshot: 'boolean', label: 'string' }, description: 'Commit the browser-held draft: write these files, delete the rest, snapshot' },
       { method: 'POST', path: '/api/projects/:pid/presence', auth: 'user', body: { sid: 'string' }, description: 'Join presence (10-person cap)' },
       { method: 'POST', path: '/api/projects/:pid/preview-token', auth: 'owner', description: 'Mint a ~15min read-only token so a PRIVATE project can be previewed in an iframe/new tab, which cannot send the x-ab-sess header.' },
       { method: 'POST', path: '/api/projects/:pid/presence/leave', auth: 'user', body: { sid: 'string' }, description: 'Leave presence' },
@@ -496,6 +498,54 @@ app.get('/api/projects/:pid/export', async (c) => {
     c.header('Content-Type', 'application/octet-stream');
   }
   return c.json(payload);
+});
+
+// ---- drafts -----------------------------------------------------------------
+// The browser owns the project while you work: each turn sends the draft up,
+// the AI edits that copy, and nothing is persisted. This endpoint is the only
+// thing that writes it back — an explicit Save (or a Save on the way out).
+//
+// The whole file list is authoritative: files missing from it are deleted, so
+// renames and deletions survive the round trip instead of leaving orphans.
+app.post('/api/projects/:pid/save-draft', requireUser, async (c) => {
+  const pid = c.req.param('pid');
+  const project = await requireWrite(c, pid);
+  if (project instanceof Response) return project;
+
+  const body = await c.req.json().catch(() => ({}));
+  const incoming = Array.isArray(body.files) ? body.files.slice(0, 400) : null;
+  if (!incoming) return c.json({ error: 'files array required' }, 400);
+
+  const clean = [];
+  const seen = new Set();
+  for (const f of incoming) {
+    const path = cleanPath(f && f.path);
+    if (!path || seen.has(path)) continue;
+    const content = typeof f.content === 'string' ? f.content : '';
+    const encoding = f.encoding === 'base64' ? 'base64' : 'utf8';
+    // Same ceiling as an upload; a draft is just a queued upload.
+    if (content.length > 4 * 1024 * 1024) return c.json({ error: `file too large: ${path}` }, 413);
+    seen.add(path);
+    clean.push({ path, content, encoding });
+  }
+  if (!clean.length) return c.json({ error: 'a project needs at least one file (index.html)' }, 400);
+
+  for (const f of clean) await store.saveFile(pid, f.path, f.content, f.encoding);
+
+  // Anything the draft no longer contains is gone from the project.
+  let removed = [];
+  try {
+    const have = await store.listFiles(pid);
+    removed = have.map((f) => f.path).filter((p) => !seen.has(p));
+    for (const p of removed) await store.deleteFile(pid, p);
+  } catch { removed = []; }
+
+  let snapshot = null;
+  if (body.snapshot !== false) {
+    try { snapshot = await store.takeSnapshot(pid, String(body.label || 'Saved draft').slice(0, 60)); } catch { snapshot = null; }
+  }
+
+  return c.json({ ok: true, files: clean.map((f) => f.path), removed, snapshot });
 });
 
 app.delete('/api/projects/:pid', requireUser, async (c) => {

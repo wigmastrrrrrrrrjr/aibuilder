@@ -4,6 +4,7 @@ import { FileStreamer } from './parser.js';
 import { systemPrompt, workspaceSystemPrompt, askSystemPrompt, explainSystemPrompt } from './prompt.js';
 import { VisibleStream } from './stream-filter.js';
 import { chatMode, modeAllowsTool, MODE_LABEL } from './modes.js';
+import { createDraftStore } from './draft-store.js';
 import { verifyProject, verifyDiag, verifySignature, verifyEvent, maxPageTests } from './verify.js';
 import { extractKey, builtinKey, localOllamaUrl, openrouterKey } from './keys.js';
 import { getVar } from './env.js';
@@ -11,7 +12,7 @@ import { getUser, canWrite } from './auth.js';
 import { createClient } from '@supabase/supabase-js';
 import { effortLevel, EFFORT, modelCost, creditsToUnits, unitsToCredits, temperatureMax } from './models.js';
 import { personalBalance } from './credits.js';
-import { executeTool, createMemoryStore } from './tools.js';
+import { executeTool, createMemoryStore, cleanPath } from './tools.js';
 import { terminalEnabled, mirrorToTerminal, readTerminalFiles, diffTerminal } from './terminal.js';
 
 const OLLAMA_URL = 'https://ollama.com/api/chat';
@@ -144,6 +145,11 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
   }
 
   const mode = chatMode(body?.mode);
+  // Draft mode: the browser owns the project. The client sends its current
+  // files with the turn and the AI works on that copy — no write reaches the
+  // store until the user presses Save.
+  const draft = body?.draft === true;
+  const draftFiles = draft ? sanitizeDraftFiles(body?.files) : null;
 
   let pid = body.projectId;
   let project = null;
@@ -198,11 +204,40 @@ export async function prepareChat({ user, body, message, apiKey, sid, key: force
 
   // Chat mode talks about the project but does not read the code into the
   // prompt: a file index (paths only) is enough context there, and it keeps the
-  // conversation cheap. Build and Explain need the actual contents.
-  const fileCtx = mode === 'ask' ? await buildFileIndex(pid) : await buildFileContext(pid);
+  // conversation cheap. Build and Explain need the actual contents — from the
+  // client's draft when it sent one, otherwise from the store.
+  const fileCtx = mode === 'ask'
+    ? await buildFileIndex(pid)
+    : draftFiles
+      ? draftFileContext(draftFiles)
+      : await buildFileContext(pid);
   await store.addMessage(pid, 'user', message, user.name);
 
-  return { pid, model, effort, mode, temperature: clampedTemp(body?.temperature, model), fileCtx, key, ownKey, isLocalModel, project };
+  return {
+    pid, model, effort, mode, draft, draftFiles,
+    temperature: clampedTemp(body?.temperature, model),
+    fileCtx, key, ownKey, isLocalModel, project,
+  };
+}
+
+// The browser's copy of the project, normalised before it reaches a prompt:
+// real paths only, no duplicates, and the same ceilings Save enforces so a
+// malformed draft cannot quietly blow up the context window.
+const DRAFT_MAX_FILES = 400;
+const DRAFT_MAX_BYTES = 4 * 1024 * 1024;
+function sanitizeDraftFiles(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const f of input.slice(0, DRAFT_MAX_FILES)) {
+    const path = cleanPath(f && f.path);
+    if (!path || seen.has(path)) continue;
+    const content = typeof f.content === 'string' ? f.content : '';
+    if (!content || content.length > DRAFT_MAX_BYTES) continue;
+    seen.add(path);
+    out.push({ path, content, encoding: f.encoding === 'base64' ? 'base64' : 'utf8' });
+  }
+  return out;
 }
 
 // Run one generation turn: emits `meta`, streams tokens and tool events, and
@@ -221,7 +256,14 @@ export async function runChat(ctx) {
   // keeps them identical.
   if (mode === 'ask') return runAnswer({ ...ctx, mode });
 
-  send({ type: 'meta', projectId: pid, model, effort: EFFORT[effort].label, mode, modeLabel: MODE_LABEL[mode] });
+  const draftMode = ctx.draft === true;
+  // Draft mode swaps ONLY the file surface: every other call (history,
+  // messages, plans, baas rows, project metadata) still goes to the real
+  // store through the proxy.
+  const fileStore = draftMode ? createDraftStore(store, ctx.draftFiles || []) : store;
+  let draftBase = draftMode ? fileStore.snapshot() : null;
+
+  send({ type: 'meta', projectId: pid, model, effort: EFFORT[effort].label, mode, modeLabel: MODE_LABEL[mode], draft: draftMode });
   const orKey = openrouterKey();
 
   let provider = 'ollama';
@@ -273,10 +315,11 @@ export async function runChat(ctx) {
           return true;
         }
         const res = await executeTool(name, args, {
-          store,
+          store: fileStore,
           pid,
           diag,
           emitContent: false,
+          emitWriteContent: draftMode,
           checkFreeze: true,
           cmdDiag: true,
           quarantine: (files) => quarantineSync(files, send),
@@ -484,7 +527,9 @@ const buildGenMessages = () => [{ role: 'system', content: basePrompt + fileCtx 
         subAgentTasks.length = 0;
         cmdLog.length = 0;
         let termSnap = null;
-        termSnap = await termMirror(store, pid);
+        // The AI's shell writes to the server filesystem, which draft mode
+        // deliberately does not own; skipping the mirror keeps the draft honest.
+        if (!draftMode) termSnap = await termMirror(store, pid);
         const parser = new FileStreamer();
 
         let upstream;
@@ -616,7 +661,7 @@ const buildGenMessages = () => [{ role: 'system', content: basePrompt + fileCtx 
           // build ends valid instead of ending "done" and broken.
           if (MAX_VERIFY > 0 && verifyRuns < MAX_VERIFY && !signal.aborted && ops > opsAtStart) {
             verifyRuns++;
-            const report = await verifyProject(store, pid);
+            const report = await verifyProject(fileStore, pid);
             if (report) {
               lastVerify = report;
               send(verifyEvent(report));
@@ -627,6 +672,15 @@ const buildGenMessages = () => [{ role: 'system', content: basePrompt + fileCtx 
                 if (entry) diag.push(entry);
               }
             }
+          }
+          // Draft mode: the client mirrors this copy, so anything that changed
+          // by means other than a file/edit event (rename rewrote references,
+          // a tool that saved without emitting) is sent once per round as the
+          // authoritative diff. Without this the two copies silently diverge.
+          if (draftMode) {
+            const { files: changed, removed } = fileStore.delta(draftBase);
+            draftBase = fileStore.snapshot();
+            if (changed.length || removed.length) send({ type: 'draft', files: changed, removed });
           }
           // Record the round WITH every new error so it reaches the AI before
           // the stream stops.
@@ -687,6 +741,7 @@ const buildGenMessages = () => [{ role: 'system', content: basePrompt + fileCtx 
         }
       }
   send({ type: 'done', projectId: pid, files: written, edited, deleted, renamed, assets, seeds, model,
+    draft: draftMode,
     verify: lastVerify ? { ok: Boolean(lastVerify.ok), errors: (lastVerify.errors || []).length } : null });
   // co-build: tell everyone else watching this project that it changed
   try {
@@ -829,7 +884,9 @@ chat.post('/', async (c) => {
     return workspaceChat(c, body, message, user);
   }
 
-  const off = await offloadChat(c, { user, body, message });
+  // A draft turn must run here. The daemon owns its own filesystem and would
+  // write the very files this mode promises to leave alone until Save.
+  const off = body?.draft === true ? null : await offloadChat(c, { user, body, message });
   if (off) return off;
   return localChat(c, { user, body, message });
 });
@@ -1458,6 +1515,16 @@ async function buildFileContext(pid) {
   // One query instead of listFiles + one getFile per file (N+1).
   let files = [];
   try { files = await store.listFilesWithContent(pid); } catch { return ''; }
+  return formatFileContext(files);
+}
+
+// The draft equivalent: the files the browser just sent, formatted exactly the
+// same way so the model cannot tell which mode it is in.
+function draftFileContext(files) {
+  return formatFileContext(Array.isArray(files) ? files : []);
+}
+
+function formatFileContext(files) {
   if (!files || !files.length) return '';
   const names = files.map((f) => f.path).join(', ');
   const parts = [
