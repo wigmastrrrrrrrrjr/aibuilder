@@ -218,6 +218,8 @@ test('the empty state has exactly one home — index.html', () => {
   assert.equal(quickStarts, 4, 'the HTML empty state carries the quick starts');
   assert.ok(/messagesEl\.querySelectorAll\('\.emptyQuick \.qt'\)/.test(APP_JS),
     'quick-start clicks must still be bound after a reset');
+  // The hero must not promise autosave: edits stay in the tab until Save.
+  assert.ok(!/saved as you go/.test(INDEX_HTML), 'the hero must not claim autosave any more');
 });
 
 test('index.html loads the current app.js build', () => {
