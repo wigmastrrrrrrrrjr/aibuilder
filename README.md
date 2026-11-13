@@ -3,6 +3,23 @@
 Base44-style AI app builder: describe an app in chat, an LLM generates a complete
 HTML/CSS/JS app with a built-in backend (`creat.db`), live-previewed instantly.
 
+> ## Status: shut down
+>
+> The site is off. Every public entrypoint answers **410 Gone** with the single
+> line *“sorry this website is unavailable. Shut down.”* — the Workers app, the
+> API, generated-app previews, and the GitHub Pages mirror.
+>
+> The source is all still here; nothing was deleted. To bring it back:
+>
+> 1. `SHUTDOWN = false` in `aibuilderapi/src/shutdown.js`
+> 2. delete `run_worker_first` from `[assets]` in `aibuilderapi/wrangler.toml`
+> 3. delete the “Stage the shutdown page” step from `.github/workflows/pages.yml`
+>
+> Then push to `main` and both deploy targets rebuild from the untouched
+> sources. Also delete `aibuilderapi/test/shutdown.test.mjs` — it asserts the
+> closed state at every entrypoint, so it fails loudly the moment the site is
+> meant to be alive again. That is the point: nobody reopens this by accident.
+
 ```
 ┌──────────────┐     ┌──────────────────────────────────────┐
 │  Chat UI     │────▶│ POST /api/chat (SSE)                  │

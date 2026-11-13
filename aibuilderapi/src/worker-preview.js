@@ -10,6 +10,7 @@ import { preview, BAAS_SDK_JS } from './preview.js';
 import { bootWorker, workerSafeFetch } from './cf-boot.js';
 import { CORS_OPTIONS, blockForeignOrigins } from './web-origin.js';
 import { appLimitCheck, projectIdOfPath } from './app-limit.js';
+import { SHUTDOWN, shutdownResponse } from './shutdown.js';
 
 const wPrev = new Hono();
 wPrev.use('*', blockForeignOrigins);
@@ -41,6 +42,9 @@ wPrev.get('/__baas.js', (c) =>
 
 export default {
   async fetch(req, env, ctx) {
+    // Generated apps stop being served too — this worker answers on its own
+    // hostname and would otherwise keep every published app online.
+    if (SHUTDOWN) return shutdownResponse(new URL(req.url).pathname, req.headers.get('accept') || '');
     const fatal = await bootWorker(env);
     if (fatal) return fatal;
     return workerSafeFetch(wPrev.fetch, req, env, ctx);

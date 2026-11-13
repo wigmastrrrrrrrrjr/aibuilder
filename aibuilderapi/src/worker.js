@@ -12,6 +12,7 @@
 import { app } from './app.js';
 import { bootWorker, workerSafeFetch } from './cf-boot.js';
 import { MAINTENANCE_MODE, maintenanceResponse } from './maintenance.js';
+import { SHUTDOWN, shutdownResponse } from './shutdown.js';
 
 // Builder-heavy subtrees offloaded to the chat worker — enough coverage that a
 // generation burst (chat streaming, BaaS auto-save, AI terminal exec, project
@@ -34,6 +35,10 @@ const backendUrl = (base, url) => (base.endsWith('/') ? base.slice(0, -1) : base
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
+
+    // The site is off. This is checked before the maintenance lock and before
+    // any routing, so the service bindings never see the request either.
+    if (SHUTDOWN) return shutdownResponse(url.pathname, req.headers.get('accept') || '');
 
     if (MAINTENANCE_MODE) return maintenanceResponse(url.pathname);
 

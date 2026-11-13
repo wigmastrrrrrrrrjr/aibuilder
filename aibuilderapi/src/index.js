@@ -7,6 +7,7 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { app as apiApp } from './app.js';
+import { SHUTDOWN, shutdownResponse } from './shutdown.js';
 import dns from 'node:dns';
 dns.setDefaultResultOrder('ipv4first');
 
@@ -23,6 +24,11 @@ if (fs.existsSync(envPath)) {
 }
 
 const app = new Hono();
+// Local dev mirrors production exactly: while the site is shut down there is
+// no API and no static file to reach, only the shutdown page.
+app.use('*', (c, next) => (
+  SHUTDOWN ? shutdownResponse(c.req.path, c.req.header('accept') || '') : next()
+));
 app.route('/', apiApp);
 
 // static SPA (no build step); resolved from this file so any cwd works
@@ -34,6 +40,7 @@ app.get('/', (c) => c.redirect('/index.html'));
 
 const port = Number(process.env.PORT) || 8787;
 serve({ fetch: app.fetch, port }, () => {
-  console.log(`aibuilder api running  ->  http://localhost:${port}`);
+  if (SHUTDOWN) console.log('SITE IS SHUT DOWN — every request answers with the shutdown page');
+  else console.log(`aibuilder api running  ->  http://localhost:${port}`);
   console.log(`model: ${process.env.OLLAMA_MODEL || 'gpt-oss:120b'}  key: ${process.env.OLLAMA_API_KEY ? 'loaded' : 'MISSING'}`);
 });
