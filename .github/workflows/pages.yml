@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'web/**'
+      - 'aibuilderapi/scripts/shutdown-site.mjs'
+      - 'aibuilderapi/src/shutdown.js'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -28,9 +30,23 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
+      # The site is shut down: publish the shutdown page instead of the app.
+      # Sources under web/ are untouched, so removing this step restores the
+      # mirror exactly as it was.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Stage the shutdown page
+        run: |
+          rm -rf .pages-site
+          mkdir -p .pages-site
+          cp -r web/. .pages-site/
+          node aibuilderapi/scripts/shutdown-site.mjs .pages-site
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: web
+          path: .pages-site
 
       - id: deployment
         uses: actions/deploy-pages@v4

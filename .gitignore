@@ -15,3 +15,4 @@ tui/target/
 tui/build.log
 puter/.built-worker.js
 __pycache__/
+.pages-site/
