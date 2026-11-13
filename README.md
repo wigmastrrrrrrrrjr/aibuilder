@@ -5,9 +5,14 @@ HTML/CSS/JS app with a built-in backend (`creat.db`), live-previewed instantly.
 
 > ## Status: shut down
 >
-> The site is off. Every public entrypoint answers **410 Gone** with the single
-> line *“sorry this website is unavailable. Shut down.”* — the Workers app, the
-> API, generated-app previews, and the GitHub Pages mirror.
+> The site is off. Every public entrypoint answers with the single line
+> *“sorry this website is unavailable. Shut down.”* — the Workers app, the API,
+> generated-app previews, and the GitHub Pages mirror.
+>
+> On Workers that is a real **410 Gone** (API callers get the same sentence as
+> JSON). GitHub Pages is a static host with no server, so it can only serve the
+> message at every URL it publishes; there is nothing left in the artifact for it
+> to serve instead.
 >
 > The source is all still here; nothing was deleted. To bring it back:
 >
